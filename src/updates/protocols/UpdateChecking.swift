@@ -22,4 +22,8 @@ protocol UpdateChecking: ObservableObject {
     /// Checks for updates against the GitHub releases API.
     /// Results are published via `updateAvailable` and `showUpdateAlert`.
     func checkForUpdates()
+
+    /// Force-checks for updates, even if an update was already found.
+    /// Use for manual user-triggered checks from the About page.
+    func forceCheckForUpdates()
 }

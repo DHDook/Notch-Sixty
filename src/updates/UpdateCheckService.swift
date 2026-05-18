@@ -23,6 +23,16 @@ final class UpdateCheckService: ObservableObject, UpdateChecking {
         guard !isChecking else { return }
         guard !updateAvailable else { return }
 
+        performCheck()
+    }
+
+    func forceCheckForUpdates() {
+        guard !isChecking else { return }
+
+        performCheck()
+    }
+
+    private func performCheck() {
         isChecking = true
 
         Task { [weak self] in
