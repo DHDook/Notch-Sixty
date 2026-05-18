@@ -298,13 +298,13 @@ The app uses a **custom biquad DSP engine** instead of `AVAudioUnitEQ`. This pro
 │  EQConfiguration ──▶ EQCoefficientStager                        │
 │                              │                                  │
 │                              ▼                                  │
-│                    BiquadMath.calculateCoefficients()           │
+│                    BiquadMath.calculateSections()               │
 │                              │                                  │
 │                              ▼                                  │
 │                    RenderPipeline.updateBandCoefficients()      │
 │                              │                                  │
 │                              ▼                                  │
-│                    EQChain.stageBandUpdate()                    │
+│                    EQChain.stageBandUpdate(sections:)           │
 │                              │                                  │
 │                    ManagedAtomic<Bool> (hasPendingUpdate)       │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -334,10 +334,11 @@ The app uses a **custom biquad DSP engine** instead of `AVAudioUnitEQ`. This pro
 
 | Component | Responsibility | Thread |
 |-----------|----------------|--------|
-| `BiquadMath` | Calculate biquad coefficients (RBJ Cookbook) | Main thread |
+| `BiquadMath` | Calculate biquad coefficients/sections (RBJ Cookbook + Butterworth) | Main thread |
 | `BiquadCoefficients` | Value type for b0/b1/b2/a1/a2 | Shared (Sendable) |
-| `BiquadFilter` | vDSP wrapper, owns delay elements | Audio thread only |
-| `EQChain` | Per-channel filter chain with lock-free updates | Shared via atomics |
+| `FilterSlope` | Slope enum (6/12/24/48 dB/oct); provides Butterworth Q values for cascades | Main thread |
+| `BiquadFilter` | vDSP wrapper, owns delay elements; supports 1–4 cascaded sections | Audio thread only |
+| `EQChain` | Per-channel filter chain with lock-free updates; per-band section arrays | Shared via atomics |
 | `EQChannelTarget` | Routes updates to left/right/both channels | Main thread |
 
 ### Real-Time Safety
@@ -353,16 +354,16 @@ The app uses a **custom biquad DSP engine** instead of `AVAudioUnitEQ`. This pro
 [UI: Gain Slider Drag]
         │
         ▼
-BiquadMath.calculateCoefficients(type, freq, q, gain)
-        │ Returns Double-precision coefficients
+BiquadMath.calculateSections(type, freq, q, gain, slope)
+        │ Returns [BiquadCoefficients] — 1–4 sections depending on slope
         ▼
 EQCoefficientStager.stageBandCoefficients(index, config)
         │ Determines channel target (.left/.right/.both)
         ▼
-RenderPipeline.updateBandCoefficients(channel, bandIndex, coefficients, bypass)
+RenderPipeline.updateBandCoefficients(channel, bandIndex, sections:, bypass:)
         │
         ▼
-EQChain.stageBandUpdate(index, coefficients, bypass)
+EQChain.stageBandUpdate(index, sections:, bypass:)
         │ Writes to pendingCoefficients[index]
         │ Sets hasPendingUpdate.store(true, .releasing)
         ▼

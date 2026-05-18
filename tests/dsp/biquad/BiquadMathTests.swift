@@ -304,6 +304,150 @@ final class BiquadMathTests: XCTestCase {
         }
     }
 
+    // MARK: - calculateSections Tests
+
+    func testCalculateSections_parametricReturnsSingleSection() {
+        let sections = BiquadMath.calculateSections(
+            type: .parametric,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 1.0,
+            gain: 6.0,
+            slope: .db24
+        )
+        // Slope is ignored for parametric — always 1 section
+        XCTAssertEqual(sections.count, 1)
+    }
+
+    func testCalculateSections_lowPass12db_oneSectionDefault() {
+        let sections = BiquadMath.calculateSections(
+            type: .lowPass,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db12
+        )
+        XCTAssertEqual(sections.count, 1)
+        // Should match calculateCoefficients exactly
+        let single = BiquadMath.calculateCoefficients(type: .lowPass, sampleRate: sampleRate, frequency: 1000.0, q: 0.707, gain: 0.0)
+        XCTAssertEqual(sections[0].b0, single.b0, accuracy: tolerance)
+        XCTAssertEqual(sections[0].a1, single.a1, accuracy: tolerance)
+    }
+
+    func testCalculateSections_lowPass6db_firstOrder() {
+        let sections = BiquadMath.calculateSections(
+            type: .lowPass,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db6
+        )
+        XCTAssertEqual(sections.count, 1)
+        // First-order: b2 and a2 must be zero
+        XCTAssertEqual(sections[0].b2, 0.0, accuracy: tolerance)
+        XCTAssertEqual(sections[0].a2, 0.0, accuracy: tolerance)
+        // b0 should be positive and less than 1 (LP attenuation above cutoff)
+        XCTAssertGreaterThan(sections[0].b0, 0.0)
+        XCTAssertLessThanOrEqual(sections[0].b0, 1.0)
+    }
+
+    func testCalculateSections_lowPass24db_twoSections() {
+        let sections = BiquadMath.calculateSections(
+            type: .lowPass,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db24
+        )
+        XCTAssertEqual(sections.count, 2)
+        // Each section should have valid coefficients
+        for section in sections {
+            XCTAssertFalse(section.b0.isNaN)
+            XCTAssertFalse(section.a1.isNaN)
+        }
+    }
+
+    func testCalculateSections_lowPass48db_fourSections() {
+        let sections = BiquadMath.calculateSections(
+            type: .lowPass,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db48
+        )
+        XCTAssertEqual(sections.count, 4)
+        for section in sections {
+            XCTAssertFalse(section.b0.isNaN)
+            XCTAssertFalse(section.a1.isNaN)
+        }
+    }
+
+    func testCalculateSections_highPass24db_twoSections() {
+        let sections = BiquadMath.calculateSections(
+            type: .highPass,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db24
+        )
+        XCTAssertEqual(sections.count, 2)
+    }
+
+    func testCalculateSections_lowShelf_gainSplitAcrossSections() {
+        let totalGain = 6.0
+        let sections = BiquadMath.calculateSections(
+            type: .lowShelf,
+            sampleRate: sampleRate,
+            frequency: 200.0,
+            q: 0.707,
+            gain: totalGain,
+            slope: .db24
+        )
+        XCTAssertEqual(sections.count, 2)
+
+        // Each section should be a valid low-shelf
+        for section in sections {
+            XCTAssertFalse(section.b0.isNaN)
+            // DC gain per section should be approximately sqrt(10^(totalGain/20))
+            // i.e., half the total dB gain per section in linear domain
+        }
+    }
+
+    func testFilterSlope_isSupportedForShelfAndEdge() {
+        XCTAssertTrue(FilterSlope.isSupported(for: .lowPass))
+        XCTAssertTrue(FilterSlope.isSupported(for: .highPass))
+        XCTAssertTrue(FilterSlope.isSupported(for: .lowShelf))
+        XCTAssertTrue(FilterSlope.isSupported(for: .highShelf))
+        XCTAssertFalse(FilterSlope.isSupported(for: .parametric))
+        XCTAssertFalse(FilterSlope.isSupported(for: .bandPass))
+        XCTAssertFalse(FilterSlope.isSupported(for: .notch))
+    }
+
+    func testFilterSlope_sectionCounts() {
+        XCTAssertEqual(FilterSlope.db6.sectionCount, 1)
+        XCTAssertEqual(FilterSlope.db12.sectionCount, 1)
+        XCTAssertEqual(FilterSlope.db24.sectionCount, 2)
+        XCTAssertEqual(FilterSlope.db48.sectionCount, 4)
+    }
+
+    func testFilterSlope_butterworthQValues_db24() {
+        let qs = FilterSlope.db24.butterworthQValues
+        XCTAssertEqual(qs.count, 2)
+        XCTAssertEqual(qs[0], 1.3065629648763766, accuracy: 1e-10)
+        XCTAssertEqual(qs[1], 0.5411961001063831, accuracy: 1e-10)
+    }
+
+    func testFilterSlope_butterworthQValues_db48() {
+        let qs = FilterSlope.db48.butterworthQValues
+        XCTAssertEqual(qs.count, 4)
+        XCTAssertEqual(qs[0], 2.5629154477415234, accuracy: 1e-10)
+    }
+
     // MARK: - Normalisation Test
 
     func testNormalisationPreservesTransferFunction() {

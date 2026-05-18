@@ -100,7 +100,8 @@ final class PresetCodableTests: XCTestCase {
             q: 1.0,
             gain: -6.0,
             filterType: .highShelf,
-            bypass: true
+            bypass: true,
+            slope: .db24
         )
 
         let data = try encoder.encode(original)
@@ -111,6 +112,40 @@ final class PresetCodableTests: XCTestCase {
         XCTAssertEqual(decoded.gain, original.gain)
         XCTAssertEqual(decoded.filterType, original.filterType)
         XCTAssertEqual(decoded.bypass, original.bypass)
+        XCTAssertEqual(decoded.slope, .db24)
+    }
+
+    func testPresetBand_slopeDefaultsToDb12WhenMissing() throws {
+        // JSON without a slope field — simulates a preset saved before slope was added
+        let json = """
+        {
+            "frequency": 200.0,
+            "q": 0.707,
+            "gain": 6.0,
+            "filterType": "LS",
+            "bypass": false
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try decoder.decode(PresetBand.self, from: json)
+
+        XCTAssertEqual(decoded.slope, .db12, "Missing slope field should default to .db12")
+    }
+
+    func testPresetBand_allSlopesRoundTrip() throws {
+        for slope in FilterSlope.allCases {
+            let original = PresetBand(
+                frequency: 1000.0,
+                q: 0.707,
+                gain: 0.0,
+                filterType: .lowPass,
+                bypass: false,
+                slope: slope
+            )
+            let data = try encoder.encode(original)
+            let decoded = try decoder.decode(PresetBand.self, from: data)
+            XCTAssertEqual(decoded.slope, slope, "Slope \(slope.displayName) failed round-trip")
+        }
     }
 
     func testPresetBand_unknownFilterType() throws {

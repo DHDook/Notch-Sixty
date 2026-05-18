@@ -596,7 +596,7 @@ final class RenderPipeline {
         channel: EQChannelTarget,
         layerIndex: Int,
         bandIndex: Int,
-        coefficients: BiquadCoefficients,
+        sections: [BiquadCoefficients],
         bypass: Bool
     ) {
         guard let context = callbackContext else { return }
@@ -606,20 +606,20 @@ final class RenderPipeline {
         case .left:
             context.leftEQChains[layerIndex].stageBandUpdate(
                 index: bandIndex,
-                coefficients: coefficients,
+                sections: sections,
                 bypass: bypass
             )
         case .right:
             context.rightEQChains[layerIndex].stageBandUpdate(
                 index: bandIndex,
-                coefficients: coefficients,
+                sections: sections,
                 bypass: bypass
             )
         case .both:
             context.leftEQChains[layerIndex].stageBandUpdate(
-                index: bandIndex, coefficients: coefficients, bypass: bypass)
+                index: bandIndex, sections: sections, bypass: bypass)
             context.rightEQChains[layerIndex].stageBandUpdate(
-                index: bandIndex, coefficients: coefficients, bypass: bypass)
+                index: bandIndex, sections: sections, bypass: bypass)
         }
     }
 
@@ -634,7 +634,7 @@ final class RenderPipeline {
     func stageFullEQUpdate(
         channel: EQChannelTarget,
         layerIndex: Int,
-        coefficients: [BiquadCoefficients],
+        sections: [[BiquadCoefficients]],
         bypassFlags: [Bool],
         activeBandCount: Int,
         layerBypass: Bool
@@ -645,27 +645,27 @@ final class RenderPipeline {
         switch channel {
         case .left:
             context.leftEQChains[layerIndex].stageFullUpdate(
-                coefficients: coefficients,
+                sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
                 layerBypass: layerBypass
             )
         case .right:
             context.rightEQChains[layerIndex].stageFullUpdate(
-                coefficients: coefficients,
+                sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
                 layerBypass: layerBypass
             )
         case .both:
             context.leftEQChains[layerIndex].stageFullUpdate(
-                coefficients: coefficients,
+                sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
                 layerBypass: layerBypass
             )
             context.rightEQChains[layerIndex].stageFullUpdate(
-                coefficients: coefficients,
+                sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
                 layerBypass: layerBypass

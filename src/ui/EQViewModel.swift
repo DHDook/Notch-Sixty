@@ -134,7 +134,12 @@ final class EQViewModel {
     func updateBandFilterType(index: Int, filterType: FilterType) {
         store.updateBandFilterType(index: index, filterType: filterType)
     }
-    
+
+    /// Updates filter slope for a specific band.
+    func updateBandSlope(index: Int, slope: FilterSlope) {
+        store.updateBandSlope(index: index, slope: slope)
+    }
+
     /// Updates bypass state for a specific band.
     func updateBandBypass(index: Int, bypass: Bool) {
         store.updateBandBypass(index: index, bypass: bypass)

@@ -68,10 +68,10 @@ DriverCapture.pollIntoBuffers()               // @inline(__always) for performan
 [Main Thread]                              [Audio Thread]
      │                                           │
      ▼                                           │
-BiquadMath.calculateCoefficients()               │
+BiquadMath.calculateSections()                   │
      │                                           │
      ▼                                           │
-EQChain.stageBandUpdate()                        │
+EQChain.stageBandUpdate(sections:)               │
      │                                           │
      │    ┌──────────────────────────────────────┤
      │    │         ManagedAtomic<Bool>          │
@@ -100,6 +100,7 @@ pendingCoefficients[i]     ▼                     ▼
 | `EQChain.swift` | Per-channel-per-layer chain of 64 biquads, lock-free coefficient updates |
 | `EQChannelTarget.swift` | `.left` / `.right` / `.both` for stereo routing |
 | `FilterType.swift` | Filter types (parametric, shelves, band-pass, notch) with legacy migration |
+| `FilterSlope.swift` | Filter slope enum (6/12/24/48 dB/oct) with Butterworth Q values for LP/HP cascades |
 
 ### Real-Time Safety Guarantees
 
@@ -115,16 +116,18 @@ pendingCoefficients[i]     ▼                     ▼
 
 ```swift
 // Main thread (not real-time)
-let coeffs = BiquadMath.calculateCoefficients(
-    type: .parametric,      // FilterType enum
+// Returns [BiquadCoefficients] — 1 section for 12 dB/oct, 2 for 24 dB/oct, 4 for 48 dB/oct
+let sections = BiquadMath.calculateSections(
+    type: .lowPass,         // FilterType enum
     sampleRate: 48000.0,
     frequency: 1000.0,
-    q: 1.41,                // ~1 octave bandwidth
-    gain: 6.0               // dB
+    q: 0.707,               // Butterworth Q
+    gain: 0.0,              // dB
+    slope: .db24            // FilterSlope — 2 Butterworth biquad sections
 )
 
 // Staged to audio thread
-chain.stageBandUpdate(index: 0, coefficients: coeffs, bypass: false)
+chain.stageBandUpdate(index: 0, sections: sections, bypass: false)
 ```
 
 ### Forbidden Operations on Audio Thread

@@ -177,6 +177,7 @@ struct PresetSettings: Codable, Sendable {
 ///
 /// Q (quality factor) is stored natively. Legacy presets with `bandwidth` are
 /// converted to Q on load using `BandwidthConverter.bandwidthToQ()`.
+/// The `slope` field was added after v2 — missing values default to `.db12`.
 struct PresetBand: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case frequency
@@ -185,6 +186,7 @@ struct PresetBand: Codable, Sendable {
         case gain
         case filterType
         case bypass
+        case slope
     }
 
     var frequency: Float
@@ -192,19 +194,22 @@ struct PresetBand: Codable, Sendable {
     var gain: Float
     var filterType: FilterType
     var bypass: Bool
+    var slope: FilterSlope
 
     init(
         frequency: Float,
         q: Float,
         gain: Float,
         filterType: FilterType = .parametric,
-        bypass: Bool = false
+        bypass: Bool = false,
+        slope: FilterSlope = .db12
     ) {
         self.frequency = frequency
         self.q = q
         self.gain = gain
         self.filterType = filterType
         self.bypass = bypass
+        self.slope = slope
     }
 
     /// Creates a PresetBand by decoding from a container with version awareness.
@@ -233,6 +238,14 @@ struct PresetBand: Codable, Sendable {
             let bandwidth = try container.decode(Float.self, forKey: .bandwidth)
             q = BandwidthConverter.bandwidthToQ(bandwidth)
         }
+
+        // Slope added after v2 — missing field defaults to .db12
+        if let slopeRaw = try container.decodeIfPresent(Int.self, forKey: .slope),
+           let decoded = FilterSlope(rawValue: slopeRaw) {
+            slope = decoded
+        } else {
+            slope = .db12
+        }
     }
 
     init(from decoder: Decoder) throws {
@@ -249,6 +262,7 @@ struct PresetBand: Codable, Sendable {
         try container.encode(gain, forKey: .gain)
         try container.encode(filterType.abbreviation, forKey: .filterType)  // v2: String
         try container.encode(bypass, forKey: .bypass)
+        try container.encode(slope.rawValue, forKey: .slope)
     }
 
     /// Converts from EQBandConfiguration.
@@ -258,6 +272,7 @@ struct PresetBand: Codable, Sendable {
         self.gain = eqBand.gain
         self.filterType = eqBand.filterType
         self.bypass = eqBand.bypass
+        self.slope = eqBand.slope
     }
 
     /// Converts to EQBandConfiguration.
@@ -267,7 +282,8 @@ struct PresetBand: Codable, Sendable {
             q: q,
             gain: gain,
             filterType: filterType,
-            bypass: bypass
+            bypass: bypass,
+            slope: slope
         )
     }
 }

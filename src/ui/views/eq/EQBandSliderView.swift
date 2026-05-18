@@ -8,6 +8,7 @@ struct EQBandSliderView: View {
     let frequencyUpdate: (Float) -> Void
     let qUpdate: (Float) -> Void
     let filterTypeUpdate: (FilterType) -> Void
+    let slopeUpdate: (FilterSlope) -> Void
     let bypassUpdate: (Bool) -> Void
     var onNavigateLeft: (() -> Void)? = nil
     var onNavigateRight: (() -> Void)? = nil
@@ -66,6 +67,7 @@ struct EQBandSliderView: View {
                     frequencyUpdate: frequencyUpdate,
                     qUpdate: qUpdate,
                     filterTypeUpdate: filterTypeUpdate,
+                    slopeUpdate: slopeUpdate,
                     bypassUpdate: bypassUpdate,
                     onClose: { isShowingDetail = false }
                 )
@@ -160,6 +162,7 @@ struct EQBandDetailPopover: View {
     let frequencyUpdate: (Float) -> Void
     let qUpdate: (Float) -> Void
     let filterTypeUpdate: (FilterType) -> Void
+    let slopeUpdate: (FilterSlope) -> Void
     let bypassUpdate: (Bool) -> Void
     let onClose: () -> Void
 
@@ -167,6 +170,7 @@ struct EQBandDetailPopover: View {
     @State private var frequency: Float
     @State private var q: Float
     @State private var filterType: FilterType
+    @State private var slope: FilterSlope
     @State private var bypass: Bool
 
     @State private var gainText: String = ""
@@ -183,21 +187,24 @@ struct EQBandDetailPopover: View {
          frequencyUpdate: @escaping (Float) -> Void,
          qUpdate: @escaping (Float) -> Void,
          filterTypeUpdate: @escaping (FilterType) -> Void,
+         slopeUpdate: @escaping (FilterSlope) -> Void,
          bypassUpdate: @escaping (Bool) -> Void,
          onClose: @escaping () -> Void) {
         _gain = State(initialValue: band.gain)
         _frequency = State(initialValue: band.frequency)
         _q = State(initialValue: band.q)
         _filterType = State(initialValue: band.filterType)
+        _slope = State(initialValue: band.slope)
         _bypass = State(initialValue: band.bypass)
         _gainText = State(initialValue: String(format: "%.1f", band.gain))
         _frequencyText = State(initialValue: String(format: "%.0f", band.frequency))
-        // Bandwidth text is initialized in onAppear based on display mode
+        // Bandwidth text is initialised in onAppear based on display mode
         _bandwidthText = State(initialValue: "")
         self.gainUpdate = gainUpdate
         self.frequencyUpdate = frequencyUpdate
         self.qUpdate = qUpdate
         self.filterTypeUpdate = filterTypeUpdate
+        self.slopeUpdate = slopeUpdate
         self.bypassUpdate = bypassUpdate
         self.onClose = onClose
     }
@@ -318,6 +325,19 @@ struct EQBandDetailPopover: View {
             .pickerStyle(.menu)
             .onChange(of: filterType) { _, newValue in
                 filterTypeUpdate(newValue)
+            }
+
+            if FilterSlope.isSupported(for: filterType) {
+                Picker("Slope", selection: $slope) {
+                    ForEach(FilterSlope.allCases, id: \.self) { s in
+                        Text(s.displayName)
+                            .tag(s)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: slope) { _, newValue in
+                    slopeUpdate(newValue)
+                }
             }
 
             Toggle("Bypass Band", isOn: $bypass)

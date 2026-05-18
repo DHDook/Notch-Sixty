@@ -67,6 +67,13 @@ final class EQCoefficientStager {
         stageBandCoefficients(index: index, config: config)
     }
 
+    /// Updates a band's filter slope by recalculating and staging coefficients.
+    func updateBandSlope(index: Int) {
+        guard index >= 0 && index < eqConfiguration.bands.count else { return }
+        let config = eqConfiguration.bands[index]
+        stageBandCoefficients(index: index, config: config)
+    }
+
     /// Updates a band's bypass state.
     func updateBandBypass(index: Int) {
         guard index >= 0 && index < eqConfiguration.bands.count else { return }
@@ -86,17 +93,17 @@ final class EQCoefficientStager {
 
     // MARK: - Private Coefficient Helpers
 
-    /// Stages coefficients for a single band.
+    /// Stages coefficients for a single band (incremental update path).
     private func stageBandCoefficients(index: Int, config: EQBandConfiguration) {
-        let coefficients = BiquadMath.calculateCoefficients(
+        let sections = BiquadMath.calculateSections(
             type: config.filterType,
             sampleRate: currentSampleRate,
             frequency: Double(config.frequency),
             q: Double(config.q),
-            gain: Double(config.gain)
+            gain: Double(config.gain),
+            slope: config.slope
         )
 
-        // Use channel mode and editing channel from configuration
         let target: EQChannelTarget = eqConfiguration.channelMode == .linked ? .both :
             (eqConfiguration.channelFocus == .left ? .left : .right)
 
@@ -104,74 +111,72 @@ final class EQCoefficientStager {
             channel: target,
             layerIndex: EQLayerConstants.userEQLayerIndex,
             bandIndex: index,
-            coefficients: coefficients,
+            sections: sections,
             bypass: config.bypass
         )
     }
 
-    /// Recalculates and stages all coefficients for all active bands.
+    /// Recalculates and stages all coefficients for all active bands (full update path).
     private func reapplyAllCoefficients() {
         let activeCount = eqConfiguration.activeBandCount
 
-        // Get the appropriate bands based on channel mode
         let leftBands = eqConfiguration.leftState.userEQ.bands
         let rightBands = eqConfiguration.rightState.userEQ.bands
 
-        // Stage coefficients for left channel
-        var leftCoefficients: [BiquadCoefficients] = []
+        // Build left-channel sections
+        var leftSections: [[BiquadCoefficients]] = []
         var leftBypassFlags: [Bool] = []
 
         for index in 0..<activeCount {
             guard index < leftBands.count else { break }
             let config = leftBands[index]
-
-            let coeff = BiquadMath.calculateCoefficients(
+            let sections = BiquadMath.calculateSections(
                 type: config.filterType,
                 sampleRate: currentSampleRate,
                 frequency: Double(config.frequency),
                 q: Double(config.q),
-                gain: Double(config.gain)
+                gain: Double(config.gain),
+                slope: config.slope
             )
-            leftCoefficients.append(coeff)
+            leftSections.append(sections)
             leftBypassFlags.append(config.bypass)
         }
 
-        // Determine channel target based on mode
         let leftTarget: EQChannelTarget = eqConfiguration.channelMode == .linked ? .both : .left
 
         renderPipeline?.stageFullEQUpdate(
             channel: leftTarget,
             layerIndex: EQLayerConstants.userEQLayerIndex,
-            coefficients: leftCoefficients,
+            sections: leftSections,
             bypassFlags: leftBypassFlags,
             activeBandCount: activeCount,
             layerBypass: eqConfiguration.globalBypass
         )
 
-        // In stereo mode, also stage right channel coefficients
+        // In stereo mode, also stage right-channel coefficients
         if eqConfiguration.channelMode == .stereo {
-            var rightCoefficients: [BiquadCoefficients] = []
+            var rightSections: [[BiquadCoefficients]] = []
             var rightBypassFlags: [Bool] = []
 
             for index in 0..<activeCount {
                 guard index < rightBands.count else { break }
                 let config = rightBands[index]
-
-                let coeff = BiquadMath.calculateCoefficients(
+                let sections = BiquadMath.calculateSections(
                     type: config.filterType,
                     sampleRate: currentSampleRate,
                     frequency: Double(config.frequency),
                     q: Double(config.q),
-                    gain: Double(config.gain)
+                    gain: Double(config.gain),
+                    slope: config.slope
                 )
-                rightCoefficients.append(coeff)
+                rightSections.append(sections)
                 rightBypassFlags.append(config.bypass)
             }
 
             renderPipeline?.stageFullEQUpdate(
                 channel: .right,
                 layerIndex: EQLayerConstants.userEQLayerIndex,
-                coefficients: rightCoefficients,
+                sections: rightSections,
                 bypassFlags: rightBypassFlags,
                 activeBandCount: activeCount,
                 layerBypass: eqConfiguration.globalBypass

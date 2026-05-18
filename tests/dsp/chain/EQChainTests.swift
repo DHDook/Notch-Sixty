@@ -8,27 +8,27 @@ final class EQChainTests: XCTestCase {
     let frameCount: UInt32 = 512
     let maxFrameCount: UInt32 = 4096
 
+    // MARK: - Helpers
+
+    /// Wraps a flat array of `BiquadCoefficients` into single-section arrays,
+    /// matching the `sections: [[BiquadCoefficients]]` parameter expected by `stageFullUpdate`.
+    private func wrap(_ flat: [BiquadCoefficients]) -> [[BiquadCoefficients]] {
+        flat.map { [$0] }
+    }
+
     // MARK: - Initialization Tests
 
     func testInitialization() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Chain should start with 0 active bands
-        // We can't directly check activeBandCount (private), but we can verify passthrough behavior
-        var input: [Float] = [Float](repeating: 0.5, count: Int(frameCount))
-        var output: [Float] = [Float](repeating: 0, count: Int(frameCount))
+        var buffer: [Float] = [Float](repeating: 0.5, count: Int(frameCount))
 
-        input.withUnsafeBufferPointer { inputPtr in
-            output.withUnsafeMutableBufferPointer { outputPtr in
-                chain.applyPendingUpdates()
-                chain.process(buffer: outputPtr.baseAddress!, frameCount: frameCount)
-            }
+        buffer.withUnsafeMutableBufferPointer { bufPtr in
+            chain.applyPendingUpdates()
+            chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
         }
 
-        // With no active bands, output should be passthrough
-        // Actually, with no active bands, the chain doesn't process anything
-        // so the output should remain as the input (since no processing occurred)
-        // The buffer is passed to process but not modified if activeBandCount is 0
+        // With no active bands, the chain doesn't process anything — output is unchanged
     }
 
     // MARK: - Band Update Tests
@@ -36,7 +36,6 @@ final class EQChainTests: XCTestCase {
     func testSingleBandUpdate() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Create coefficients for a peaking filter
         let coeffs = BiquadMath.calculateCoefficients(
             type: .parametric,
             sampleRate: sampleRate,
@@ -45,39 +44,32 @@ final class EQChainTests: XCTestCase {
             gain: 6.0
         )
 
-        // Set up with the actual coefficients (not identity)
         var allCoeffs = [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount)
         allCoeffs[0] = coeffs
-        var bypassFlags = [Bool](repeating: false, count: EQChain.maxBandCount)
+        let bypassFlags = [Bool](repeating: false, count: EQChain.maxBandCount)
 
-        // Stage full update with active band
         chain.stageFullUpdate(
-            coefficients: allCoeffs,
+            sections: wrap(allCoeffs),
             bypassFlags: bypassFlags,
             activeBandCount: 1,
             layerBypass: false
         )
 
-        // Apply updates
         chain.applyPendingUpdates()
 
-        // Process impulse
         var buffer: [Float] = [Float](repeating: 0, count: Int(frameCount))
-        buffer[0] = 1.0 // Impulse
+        buffer[0] = 1.0
 
         buffer.withUnsafeMutableBufferPointer { bufPtr in
             chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
         }
 
-        // Output should be different from identity (filter processed the impulse)
-        // With a peaking filter, b0 ≠ 1, so output[0] ≠ 1.0
         XCTAssertGreaterThan(abs(buffer[0] - 1.0), 0.001, "Filter should have processed the impulse")
     }
 
     func testFullUpdate() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Create coefficients for 3 active bands
         var coeffs: [BiquadCoefficients] = []
         var bypassFlags: [Bool] = []
 
@@ -93,14 +85,13 @@ final class EQChainTests: XCTestCase {
             bypassFlags.append(false)
         }
 
-        // Pad to maxBandCount
         while coeffs.count < EQChain.maxBandCount {
             coeffs.append(.identity)
             bypassFlags.append(false)
         }
 
         chain.stageFullUpdate(
-            coefficients: coeffs,
+            sections: wrap(coeffs),
             bypassFlags: bypassFlags,
             activeBandCount: 3,
             layerBypass: false
@@ -108,7 +99,6 @@ final class EQChainTests: XCTestCase {
 
         chain.applyPendingUpdates()
 
-        // Process should work
         var buffer: [Float] = [Float](repeating: 0, count: Int(frameCount))
         buffer[0] = 1.0
 
@@ -116,14 +106,12 @@ final class EQChainTests: XCTestCase {
             chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
         }
 
-        // Just verify it doesn't crash and produces some output
         XCTAssertFalse(buffer.allSatisfy { $0 == 0 })
     }
 
     func testBandBypass() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Stage a band with bypass=true
         let coeffs = BiquadMath.calculateCoefficients(
             type: .parametric,
             sampleRate: sampleRate,
@@ -131,18 +119,21 @@ final class EQChainTests: XCTestCase {
             q: 1.0,
             gain: 6.0
         )
-        chain.stageBandUpdate(index: 0, coefficients: coeffs, bypass: true)
+
+        chain.stageBandUpdate(index: 0, sections: [coeffs], bypass: true)
+
+        let allCoeffs = [coeffs] + [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount - 1)
+        let bypassFlags = [true] + [Bool](repeating: false, count: EQChain.maxBandCount - 1)
 
         chain.stageFullUpdate(
-            coefficients: [coeffs] + [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount - 1),
-            bypassFlags: [true] + [Bool](repeating: false, count: EQChain.maxBandCount - 1),
+            sections: wrap(allCoeffs),
+            bypassFlags: bypassFlags,
             activeBandCount: 1,
             layerBypass: false
         )
 
         chain.applyPendingUpdates()
 
-        // With bypass, impulse should pass through unchanged
         var buffer: [Float] = [Float](repeating: 0, count: Int(frameCount))
         buffer[0] = 1.0
 
@@ -150,14 +141,12 @@ final class EQChainTests: XCTestCase {
             chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
         }
 
-        // Bypassed band = passthrough
         XCTAssertEqual(buffer[0], 1.0, accuracy: 1e-6)
     }
 
     func testLayerBypass() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Stage full update with layer bypass
         let coeffs = BiquadMath.calculateCoefficients(
             type: .parametric,
             sampleRate: sampleRate,
@@ -166,16 +155,18 @@ final class EQChainTests: XCTestCase {
             gain: 6.0
         )
 
+        let allCoeffs = [coeffs] + [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount - 1)
+        let bypassFlags = [Bool](repeating: false, count: EQChain.maxBandCount)
+
         chain.stageFullUpdate(
-            coefficients: [coeffs] + [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount - 1),
-            bypassFlags: [Bool](repeating: false, count: EQChain.maxBandCount),
+            sections: wrap(allCoeffs),
+            bypassFlags: bypassFlags,
             activeBandCount: 1,
             layerBypass: true
         )
 
         chain.applyPendingUpdates()
 
-        // With layer bypass, signal should pass through unchanged
         var buffer: [Float] = [Float](repeating: 0, count: Int(frameCount))
         buffer[0] = 1.0
 
@@ -183,7 +174,6 @@ final class EQChainTests: XCTestCase {
             chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
         }
 
-        // Layer bypass = passthrough
         XCTAssertEqual(buffer[0], 1.0, accuracy: 1e-6)
     }
 
@@ -192,7 +182,6 @@ final class EQChainTests: XCTestCase {
     func testMultipleBandsInSeries() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Create 3 bands
         var coeffs: [BiquadCoefficients] = []
         var bypassFlags: [Bool] = []
 
@@ -208,14 +197,13 @@ final class EQChainTests: XCTestCase {
             bypassFlags.append(false)
         }
 
-        // Pad to maxBandCount
         while coeffs.count < EQChain.maxBandCount {
             coeffs.append(.identity)
             bypassFlags.append(false)
         }
 
         chain.stageFullUpdate(
-            coefficients: coeffs,
+            sections: wrap(coeffs),
             bypassFlags: bypassFlags,
             activeBandCount: 3,
             layerBypass: false
@@ -223,7 +211,6 @@ final class EQChainTests: XCTestCase {
 
         chain.applyPendingUpdates()
 
-        // Process impulse
         var buffer: [Float] = [Float](repeating: 0, count: Int(frameCount))
         buffer[0] = 1.0
 
@@ -231,9 +218,85 @@ final class EQChainTests: XCTestCase {
             chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
         }
 
-        // With 3 bands in series, output should be different from single band
-        // Just verify it doesn't crash
         XCTAssertFalse(buffer.allSatisfy { $0 == 0 })
+    }
+
+    // MARK: - Multi-Section Band Tests
+
+    func testSteepLowPassTwoSections() {
+        let chain = EQChain(maxFrameCount: maxFrameCount)
+
+        // 24 dB/oct LP = 2 Butterworth biquad sections
+        let sections = BiquadMath.calculateSections(
+            type: .lowPass,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db24
+        )
+        XCTAssertEqual(sections.count, 2, "24 dB/oct LP should produce 2 sections")
+
+        var allSections: [[BiquadCoefficients]] = [sections]
+        var bypassFlags: [Bool] = [false]
+        while allSections.count < EQChain.maxBandCount {
+            allSections.append([.identity])
+            bypassFlags.append(false)
+        }
+
+        chain.stageFullUpdate(sections: allSections, bypassFlags: bypassFlags, activeBandCount: 1, layerBypass: false)
+        chain.applyPendingUpdates()
+
+        // Apply to a high-frequency sine wave — should be strongly attenuated
+        let highFreq: Float = 10000.0
+        var buffer: [Float] = (0..<Int(frameCount)).map {
+            sin(2.0 * .pi * highFreq * Float($0) / Float(sampleRate))
+        }
+
+        buffer.withUnsafeMutableBufferPointer { bufPtr in
+            chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
+        }
+
+        let rms = sqrt(buffer.reduce(0) { $0 + $1 * $1 } / Float(frameCount))
+        XCTAssertLessThan(rms, 0.05, "Steep LP at 1 kHz should strongly attenuate 10 kHz")
+    }
+
+    func testSteepHighPassFourSections() {
+        let chain = EQChain(maxFrameCount: maxFrameCount)
+
+        // 48 dB/oct HP = 4 Butterworth biquad sections
+        let sections = BiquadMath.calculateSections(
+            type: .highPass,
+            sampleRate: sampleRate,
+            frequency: 5000.0,
+            q: 0.707,
+            gain: 0.0,
+            slope: .db48
+        )
+        XCTAssertEqual(sections.count, 4, "48 dB/oct HP should produce 4 sections")
+
+        var allSections: [[BiquadCoefficients]] = [sections]
+        var bypassFlags: [Bool] = [false]
+        while allSections.count < EQChain.maxBandCount {
+            allSections.append([.identity])
+            bypassFlags.append(false)
+        }
+
+        chain.stageFullUpdate(sections: allSections, bypassFlags: bypassFlags, activeBandCount: 1, layerBypass: false)
+        chain.applyPendingUpdates()
+
+        // Apply to a low-frequency sine wave — should be strongly attenuated
+        let lowFreq: Float = 100.0
+        var buffer: [Float] = (0..<Int(frameCount)).map {
+            sin(2.0 * .pi * lowFreq * Float($0) / Float(sampleRate))
+        }
+
+        buffer.withUnsafeMutableBufferPointer { bufPtr in
+            chain.process(buffer: bufPtr.baseAddress!, frameCount: frameCount)
+        }
+
+        let rms = sqrt(buffer.reduce(0) { $0 + $1 * $1 } / Float(frameCount))
+        XCTAssertLessThan(rms, 0.05, "Steep HP at 5 kHz should strongly attenuate 100 Hz")
     }
 
     // MARK: - Real-Time Safety Tests
@@ -241,7 +304,6 @@ final class EQChainTests: XCTestCase {
     func testNoAllocationDuringProcess() {
         let chain = EQChain(maxFrameCount: maxFrameCount)
 
-        // Set up bands
         let coeffs = BiquadMath.calculateCoefficients(
             type: .parametric,
             sampleRate: sampleRate,
@@ -250,16 +312,18 @@ final class EQChainTests: XCTestCase {
             gain: 6.0
         )
 
+        let allCoeffs = [coeffs] + [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount - 1)
+        let bypassFlags = [Bool](repeating: false, count: EQChain.maxBandCount)
+
         chain.stageFullUpdate(
-            coefficients: [coeffs] + [BiquadCoefficients](repeating: .identity, count: EQChain.maxBandCount - 1),
-            bypassFlags: [Bool](repeating: false, count: EQChain.maxBandCount),
+            sections: wrap(allCoeffs),
+            bypassFlags: bypassFlags,
             activeBandCount: 1,
             layerBypass: false
         )
 
         chain.applyPendingUpdates()
 
-        // Process multiple times to ensure no allocation leaks
         var buffer: [Float] = [Float](repeating: 0.5, count: Int(frameCount))
 
         for _ in 0..<100 {
@@ -269,7 +333,6 @@ final class EQChainTests: XCTestCase {
             }
         }
 
-        // If we get here without crash, allocations are pre-allocated
         XCTAssertTrue(true)
     }
 }

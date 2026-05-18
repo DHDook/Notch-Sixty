@@ -13,7 +13,7 @@ import Foundation
 ///
 /// Reference: https://webaudio.github.io/Audio-EQ-Cookbook/Audio-EQ-Cookbook.txt
 enum BiquadMath {
-    // MARK: - Main Entry Point
+    // MARK: - Main Entry Point (single section)
 
     /// Calculates biquad coefficients for the given filter parameters.
     ///
@@ -33,51 +33,225 @@ enum BiquadMath {
     ) -> BiquadCoefficients {
         switch type {
         case .parametric:
-            return peakingEQ(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                q: q,
-                gain: gain
-            )
+            return peakingEQ(sampleRate: sampleRate, frequency: frequency, q: q, gain: gain)
         case .lowPass:
-            return lowPass(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                q: q
-            )
+            return lowPass(sampleRate: sampleRate, frequency: frequency, q: q)
         case .highPass:
-            return highPass(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                q: q
-            )
+            return highPass(sampleRate: sampleRate, frequency: frequency, q: q)
         case .lowShelf:
-            return lowShelf(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                gain: gain,
-                q: q
-            )
+            return lowShelf(sampleRate: sampleRate, frequency: frequency, gain: gain, q: q)
         case .highShelf:
-            return highShelf(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                gain: gain,
-                q: q
-            )
+            return highShelf(sampleRate: sampleRate, frequency: frequency, gain: gain, q: q)
         case .bandPass:
-            return bandPass(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                q: q
-            )
+            return bandPass(sampleRate: sampleRate, frequency: frequency, q: q)
         case .notch:
-            return notch(
-                sampleRate: sampleRate,
-                frequency: frequency,
-                q: q
-            )
+            return notch(sampleRate: sampleRate, frequency: frequency, q: q)
         }
+    }
+
+    // MARK: - Multi-Section Entry Point (slope-aware)
+
+    /// Calculates one or more biquad sections for the given filter parameters and slope.
+    ///
+    /// For LP / HP filters:
+    ///   - 6 dB/oct  → 1st-order bilinear (degenerate biquad, b2=a2=0)
+    ///   - 12 dB/oct → 1 section using the supplied Q
+    ///   - 24 dB/oct → 2 Butterworth sections
+    ///   - 48 dB/oct → 4 Butterworth sections
+    ///
+    /// For LS / HS filters the gain is distributed equally across sections and
+    /// each section uses Q = 0.7071 (Butterworth). The 6 dB/oct case uses a
+    /// 1st-order shelf bilinear section (b2=a2=0).
+    ///
+    /// For all other filter types slope is ignored and a single section is returned.
+    ///
+    /// - Parameters:
+    ///   - type: The filter type
+    ///   - sampleRate: Sample rate in Hz
+    ///   - frequency: Centre/cutoff frequency in Hz
+    ///   - q: Q factor (used for 12 dB/oct LP/HP; ignored for higher-order slopes)
+    ///   - gain: Gain in dB (parametric and shelf types)
+    ///   - slope: Desired filter slope
+    /// - Returns: Array of normalised biquad coefficients (one entry per section)
+    static func calculateSections(
+        type: FilterType,
+        sampleRate: Double,
+        frequency: Double,
+        q: Double,
+        gain: Double,
+        slope: FilterSlope
+    ) -> [BiquadCoefficients] {
+        switch type {
+        case .lowPass:
+            return lowPassSections(sampleRate: sampleRate, frequency: frequency, q: q, slope: slope)
+        case .highPass:
+            return highPassSections(sampleRate: sampleRate, frequency: frequency, q: q, slope: slope)
+        case .lowShelf:
+            return lowShelfSections(sampleRate: sampleRate, frequency: frequency, gain: gain, slope: slope)
+        case .highShelf:
+            return highShelfSections(sampleRate: sampleRate, frequency: frequency, gain: gain, slope: slope)
+        default:
+            // Slope is not applicable — return a single section
+            return [calculateCoefficients(type: type, sampleRate: sampleRate, frequency: frequency, q: q, gain: gain)]
+        }
+    }
+
+    // MARK: - Multi-Section LP
+
+    private static func lowPassSections(
+        sampleRate: Double,
+        frequency: Double,
+        q: Double,
+        slope: FilterSlope
+    ) -> [BiquadCoefficients] {
+        switch slope {
+        case .db6:
+            return [firstOrderLowPass(sampleRate: sampleRate, frequency: frequency)]
+        case .db12:
+            return [lowPass(sampleRate: sampleRate, frequency: frequency, q: q)]
+        case .db24, .db48:
+            return slope.butterworthQValues.map { sectionQ in
+                lowPass(sampleRate: sampleRate, frequency: frequency, q: sectionQ)
+            }
+        }
+    }
+
+    // MARK: - Multi-Section HP
+
+    private static func highPassSections(
+        sampleRate: Double,
+        frequency: Double,
+        q: Double,
+        slope: FilterSlope
+    ) -> [BiquadCoefficients] {
+        switch slope {
+        case .db6:
+            return [firstOrderHighPass(sampleRate: sampleRate, frequency: frequency)]
+        case .db12:
+            return [highPass(sampleRate: sampleRate, frequency: frequency, q: q)]
+        case .db24, .db48:
+            return slope.butterworthQValues.map { sectionQ in
+                highPass(sampleRate: sampleRate, frequency: frequency, q: sectionQ)
+            }
+        }
+    }
+
+    // MARK: - Multi-Section LS
+
+    private static func lowShelfSections(
+        sampleRate: Double,
+        frequency: Double,
+        gain: Double,
+        slope: FilterSlope
+    ) -> [BiquadCoefficients] {
+        switch slope {
+        case .db6:
+            return [firstOrderLowShelf(sampleRate: sampleRate, frequency: frequency, gain: gain)]
+        case .db12:
+            return [lowShelf(sampleRate: sampleRate, frequency: frequency, gain: gain, q: 0.7071067811865476)]
+        case .db24, .db48:
+            let perSectionGain = gain / Double(slope.sectionCount)
+            return (0..<slope.sectionCount).map { _ in
+                lowShelf(sampleRate: sampleRate, frequency: frequency, gain: perSectionGain, q: 0.7071067811865476)
+            }
+        }
+    }
+
+    // MARK: - Multi-Section HS
+
+    private static func highShelfSections(
+        sampleRate: Double,
+        frequency: Double,
+        gain: Double,
+        slope: FilterSlope
+    ) -> [BiquadCoefficients] {
+        switch slope {
+        case .db6:
+            return [firstOrderHighShelf(sampleRate: sampleRate, frequency: frequency, gain: gain)]
+        case .db12:
+            return [highShelf(sampleRate: sampleRate, frequency: frequency, gain: gain, q: 0.7071067811865476)]
+        case .db24, .db48:
+            let perSectionGain = gain / Double(slope.sectionCount)
+            return (0..<slope.sectionCount).map { _ in
+                highShelf(sampleRate: sampleRate, frequency: frequency, gain: perSectionGain, q: 0.7071067811865476)
+            }
+        }
+    }
+
+    // MARK: - First-Order Sections (6 dB/oct)
+
+    /// First-order low-pass using bilinear transform.
+    ///
+    /// H(z) = Wc*(1 + z⁻¹) / ((1+Wc) + (Wc−1)*z⁻¹)
+    /// where Wc = tan(π * f / fs).
+    ///
+    /// Stored as a degenerate biquad with b2 = a2 = 0.
+    static func firstOrderLowPass(sampleRate: Double, frequency: Double) -> BiquadCoefficients {
+        let wc = tan(.pi * frequency / sampleRate)
+        let norm = 1.0 / (1.0 + wc)
+        return BiquadCoefficients(
+            b0: wc * norm,
+            b1: wc * norm,
+            b2: 0.0,
+            a1: (wc - 1.0) * norm,
+            a2: 0.0
+        )
+    }
+
+    /// First-order high-pass using bilinear transform.
+    ///
+    /// H(z) = (1 − z⁻¹) / ((1+Wc) + (Wc−1)*z⁻¹)
+    /// where Wc = tan(π * f / fs).
+    ///
+    /// Stored as a degenerate biquad with b2 = a2 = 0.
+    static func firstOrderHighPass(sampleRate: Double, frequency: Double) -> BiquadCoefficients {
+        let wc = tan(.pi * frequency / sampleRate)
+        let norm = 1.0 / (1.0 + wc)
+        return BiquadCoefficients(
+            b0: norm,
+            b1: -norm,
+            b2: 0.0,
+            a1: (wc - 1.0) * norm,
+            a2: 0.0
+        )
+    }
+
+    /// First-order low shelf using bilinear transform.
+    ///
+    /// H(s) = (s + A*wc) / (s + wc) for boost (A>1), cut (A<1).
+    /// After bilinear with Wc = tan(π*f/fs):
+    ///   b0 = (1 + A*Wc) / (1+Wc),  b1 = (A*Wc − 1) / (1+Wc)
+    ///   a1 = (Wc − 1) / (1+Wc)
+    static func firstOrderLowShelf(sampleRate: Double, frequency: Double, gain: Double) -> BiquadCoefficients {
+        let A = pow(10.0, gain / 20.0)
+        let wc = tan(.pi * frequency / sampleRate)
+        let norm = 1.0 / (1.0 + wc)
+        return BiquadCoefficients(
+            b0: (1.0 + A * wc) * norm,
+            b1: (A * wc - 1.0) * norm,
+            b2: 0.0,
+            a1: (wc - 1.0) * norm,
+            a2: 0.0
+        )
+    }
+
+    /// First-order high shelf using bilinear transform.
+    ///
+    /// H(s) = (A*s + wc) / (s + wc) for boost (A>1), cut (A<1).
+    /// After bilinear with Wc = tan(π*f/fs):
+    ///   b0 = (A + Wc) / (1+Wc),  b1 = (Wc − A) / (1+Wc)
+    ///   a1 = (Wc − 1) / (1+Wc)
+    static func firstOrderHighShelf(sampleRate: Double, frequency: Double, gain: Double) -> BiquadCoefficients {
+        let A = pow(10.0, gain / 20.0)
+        let wc = tan(.pi * frequency / sampleRate)
+        let norm = 1.0 / (1.0 + wc)
+        return BiquadCoefficients(
+            b0: (A + wc) * norm,
+            b1: (wc - A) * norm,
+            b2: 0.0,
+            a1: (wc - 1.0) * norm,
+            a2: 0.0
+        )
     }
 
     // MARK: - Peaking EQ (Parametric)
@@ -96,7 +270,7 @@ enum BiquadMath {
         q: Double,
         gain: Double
     ) -> BiquadCoefficients {
-        let A = pow(10.0, gain / 40.0) // Gain as amplitude ratio (squared)
+        let A = pow(10.0, gain / 40.0)
         let omega = 2.0 * .pi * frequency / sampleRate
         let sinOmega = sin(omega)
         let cosOmega = cos(omega)
@@ -189,11 +363,10 @@ enum BiquadMath {
         gain: Double,
         q: Double
     ) -> BiquadCoefficients {
-        let A = pow(10.0, gain / 40.0) // Gain as amplitude ratio (squared)
+        let A = pow(10.0, gain / 40.0)
         let omega = 2.0 * .pi * frequency / sampleRate
         let sinOmega = sin(omega)
         let cosOmega = cos(omega)
-        // RBJ cookbook: alpha = sin(w0)/(2*Q), 2*sqrt(A)*alpha = sqrt(A)*sin(w0)/Q
         let alpha = sinOmega / (2.0 * q)
         let twoSqrtA_alpha = 2.0 * sqrt(A) * alpha
 
@@ -226,11 +399,10 @@ enum BiquadMath {
         gain: Double,
         q: Double
     ) -> BiquadCoefficients {
-        let A = pow(10.0, gain / 40.0) // Gain as amplitude ratio (squared)
+        let A = pow(10.0, gain / 40.0)
         let omega = 2.0 * .pi * frequency / sampleRate
         let sinOmega = sin(omega)
         let cosOmega = cos(omega)
-        // RBJ cookbook: alpha = sin(w0)/(2*Q), 2*sqrt(A)*alpha = sqrt(A)*sin(w0)/Q
         let alpha = sinOmega / (2.0 * q)
         let twoSqrtA_alpha = 2.0 * sqrt(A) * alpha
 

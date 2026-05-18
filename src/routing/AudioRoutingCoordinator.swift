@@ -717,6 +717,11 @@ final class AudioRoutingCoordinator: ObservableObject {
         eqStager.updateBandFilterType(index: index)
     }
 
+    /// Updates a band's filter slope by recalculating and staging coefficients.
+    func updateBandSlope(index: Int) {
+        eqStager.updateBandSlope(index: index)
+    }
+
     /// Updates a band's bypass state.
     func updateBandBypass(index: Int) {
         eqStager.updateBandBypass(index: index)

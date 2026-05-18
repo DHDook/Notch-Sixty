@@ -23,14 +23,16 @@ struct EQBandConfiguration: Codable, Sendable {
         case gain
         case filterType
         case bypass
+        case slope
     }
 
-    init(frequency: Float, q: Float, gain: Float, filterType: FilterType, bypass: Bool) {
+    init(frequency: Float, q: Float, gain: Float, filterType: FilterType, bypass: Bool, slope: FilterSlope = .db12) {
         self.frequency = frequency
         self.q = q
         self.gain = gain
         self.filterType = filterType
         self.bypass = bypass
+        self.slope = slope
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +53,14 @@ struct EQBandConfiguration: Codable, Sendable {
         } else {
             self.q = EQConfiguration.defaultQ
         }
+
+        // Slope field added in a later version — default to .db12 for older state files
+        if let slopeRaw = try container.decodeIfPresent(Int.self, forKey: .slope),
+           let decoded = FilterSlope(rawValue: slopeRaw) {
+            slope = decoded
+        } else {
+            slope = .db12
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -60,6 +70,7 @@ struct EQBandConfiguration: Codable, Sendable {
         try container.encode(gain, forKey: .gain)
         try container.encode(filterType.rawValue, forKey: .filterType)
         try container.encode(bypass, forKey: .bypass)
+        try container.encode(slope.rawValue, forKey: .slope)
     }
 
     var frequency: Float
@@ -67,6 +78,7 @@ struct EQBandConfiguration: Codable, Sendable {
     var gain: Float
     var filterType: FilterType
     var bypass: Bool
+    var slope: FilterSlope
 
     /// Default parametric band configuration.
     static func parametric(frequency: Float, q: Float = EQConfiguration.defaultQ) -> EQBandConfiguration {
@@ -75,7 +87,8 @@ struct EQBandConfiguration: Codable, Sendable {
             q: q,
             gain: 0,
             filterType: .parametric,
-            bypass: false
+            bypass: false,
+            slope: .db12
         )
     }
 }
@@ -599,6 +612,38 @@ final class EQConfiguration: ObservableObject {
         }
         if targetChannel == .both || targetChannel == .right {
             rightState.userEQ.bands[index].filterType = filterType
+        }
+        objectWillChange.send()
+    }
+
+    /// Updates the filter slope for a specific band.
+    func updateBandSlope(index: Int, slope: FilterSlope) {
+        guard isValidIndex(index) else { return }
+
+        if channelMode == .linked {
+            leftState.userEQ.bands[index].slope = slope
+            rightState.userEQ.bands[index].slope = slope
+        } else {
+            if channelFocus == .left {
+                leftState.userEQ.bands[index].slope = slope
+            } else {
+                rightState.userEQ.bands[index].slope = slope
+            }
+        }
+        objectWillChange.send()
+    }
+
+    /// Updates the filter slope for a specific band on a specific channel.
+    func updateBandSlope(index: Int, slope: FilterSlope, channel: EQChannelTarget) {
+        guard isValidIndex(index) else { return }
+
+        let targetChannel = channelMode == .linked ? .both : channel
+
+        if targetChannel == .both || targetChannel == .left {
+            leftState.userEQ.bands[index].slope = slope
+        }
+        if targetChannel == .both || targetChannel == .right {
+            rightState.userEQ.bands[index].slope = slope
         }
         objectWillChange.send()
     }

@@ -25,6 +25,7 @@ struct EQBandGridView: View {
                                 store.updateBandQ(index: index, q: clamped)
                             },
                             filterTypeUpdate: { store.updateBandFilterType(index: index, filterType: $0) },
+                            slopeUpdate: { store.updateBandSlope(index: index, slope: $0) },
                             bypassUpdate: { store.updateBandBypass(index: index, bypass: $0) },
                             onNavigateLeft: {
                                 navigateToBand(index - 1)

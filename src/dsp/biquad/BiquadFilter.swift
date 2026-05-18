@@ -1,12 +1,17 @@
 import Accelerate
 
-/// Single biquad filter section using vDSP.
+/// Single biquad filter section — or a cascade of N sections — using vDSP.
 ///
 /// Owns a `vDSP_biquad_Setup` and pre-allocated delay elements.
 /// NOT Sendable — must be owned exclusively by one thread (the audio thread via EQChain).
 ///
-/// This class processes audio through a single second-order IIR filter section.
-/// The transfer function is:
+/// Supports variable section counts to implement higher-order filters:
+///   - 1 section  → 2nd-order  (12 dB/oct LP/HP, standard parametric, etc.)
+///   - 2 sections → 4th-order  (24 dB/oct LP/HP)
+///   - 4 sections → 8th-order  (48 dB/oct LP/HP)
+///   - 1 degenerate section (b2=a2=0) → 1st-order (6 dB/oct LP/HP/shelf)
+///
+/// The transfer function for each section is:
 ///
 ///   H(z) = (b0 + b1*z^-1 + b2*z^-2) / (1 + a1*z^-1 + a2*z^-2)
 ///
@@ -18,12 +23,12 @@ final class BiquadFilter {
     /// Created on init, recreated on coefficient change.
     private var setup: vDSP_biquad_Setup?
 
-    /// Delay elements for the filter state (2 * (sections + 1) = 4 for single section).
-    /// Pre-allocated to avoid runtime allocation.
+    /// Delay elements for the filter state.
+    /// Size = 2 * (sections + 1) as required by vDSP.
     private var delay: [Float]
 
-    /// Current coefficients stored as [b0, b1, b2, a1, a2] in Float for vDSP.
-    private var coefficients: [Float]
+    /// Number of sections currently configured.
+    private var sectionCount: Int = 1
 
     /// Whether the setup is valid (coefficients have been set).
     private var isValid: Bool = false
@@ -31,15 +36,13 @@ final class BiquadFilter {
     // MARK: - Initialization
 
     init() {
-        // Pre-allocate delay elements: 2 * (sections + 1) = 4 for a single biquad section
-        // vDSP requires this exact size
-        delay = [Float](repeating: 0, count: 4)
-
-        // Pre-allocate coefficient storage: 5 coefficients (b0, b1, b2, a1, a2)
-        coefficients = [Float](repeating: 0, count: 5)
+        // Pre-allocate for maximum supported sections (4) to avoid runtime reallocation.
+        // vDSP requires delay = 2 * (sections + 1) → 2*(4+1) = 10 for 4 sections.
+        let maxSections = 4
+        delay = [Float](repeating: 0, count: 2 * (maxSections + 1))
 
         // Start with identity (passthrough), resetting delay state on init
-        setCoefficients(BiquadCoefficients.identity, resetState: true)
+        setCoefficients([BiquadCoefficients.identity], resetState: true)
     }
 
     deinit {
@@ -50,52 +53,58 @@ final class BiquadFilter {
 
     // MARK: - Coefficient Update
 
-    /// Updates the filter with new coefficients.
+    /// Updates the filter with new coefficients for one or more sections.
+    ///
     /// Must be called from the audio thread or during setup (not from main thread during audio).
     /// - Parameters:
-    ///   - newCoefficients: The new biquad coefficients.
+    ///   - sections: Array of biquad coefficients, one entry per filter section.
+    ///     Pass a single `.identity` to create a passthrough filter.
     ///   - resetState: Whether to zero the delay elements (filter state).
     ///     Pass `true` for preset loads and initialisation — produces a clean start at the cost
     ///     of a brief transient if audio is playing.
     ///     Pass `false` for incremental changes (slider drags) — preserves continuity and
     ///     avoids the audible click caused by resetting filter state mid-stream.
-    func setCoefficients(_ newCoefficients: BiquadCoefficients, resetState: Bool) {
-        // Store coefficients as Float for vDSP (for use in process)
-        coefficients[0] = Float(newCoefficients.b0)
-        coefficients[1] = Float(newCoefficients.b1)
-        coefficients[2] = Float(newCoefficients.b2)
-        coefficients[3] = Float(newCoefficients.a1)
-        coefficients[4] = Float(newCoefficients.a2)
+    func setCoefficients(_ sections: [BiquadCoefficients], resetState: Bool) {
+        let count = max(1, sections.count)
+        sectionCount = count
+
+        // Build the flat coefficient array for vDSP: [b0, b1, b2, a1, a2] × sections
+        var coeffsD = [Double](repeating: 0, count: 5 * count)
+        for (i, section) in sections.enumerated() {
+            coeffsD[5 * i + 0] = section.b0
+            coeffsD[5 * i + 1] = section.b1
+            coeffsD[5 * i + 2] = section.b2
+            coeffsD[5 * i + 3] = section.a1
+            coeffsD[5 * i + 4] = section.a2
+        }
 
         // Destroy old setup if exists
         if let s = setup {
             vDSP_biquad_DestroySetup(s)
         }
 
-        // Create new setup with the coefficients
-        // vDSP_biquad_CreateSetup takes Double coefficients but creates a Float processing setup
-        var coeffsD: [Double] = [
-            newCoefficients.b0,
-            newCoefficients.b1,
-            newCoefficients.b2,
-            newCoefficients.a1,
-            newCoefficients.a2
-        ]
-        setup = vDSP_biquad_CreateSetup(&coeffsD, 1)
+        setup = vDSP_biquad_CreateSetup(&coeffsD, vDSP_Length(count))
 
         // Only reset delay elements when explicitly requested.
         // For incremental coefficient changes (slider drags), preserving delay state
         // avoids a discontinuity that produces an audible click.
         if resetState {
-            for i in 0..<4 { delay[i] = 0 }
+            let delaySize = 2 * (count + 1)
+            for i in 0..<delaySize { delay[i] = 0 }
         }
 
         isValid = true
     }
 
+    /// Convenience overload for single-section filters.
+    /// Equivalent to `setCoefficients([section], resetState: resetState)`.
+    func setCoefficients(_ section: BiquadCoefficients, resetState: Bool) {
+        setCoefficients([section], resetState: resetState)
+    }
+
     // MARK: - Audio Processing
 
-    /// Processes audio through this biquad filter.
+    /// Processes audio through this biquad filter (or cascade of sections).
     /// Input and output may alias (in-place processing supported).
     /// - Parameters:
     ///   - input: Pointer to input samples.
@@ -108,15 +117,12 @@ final class BiquadFilter {
         frameCount: UInt32
     ) {
         guard isValid, let s = setup else {
-            // If not set up, copy input to output (passthrough)
             if input != output {
                 memcpy(output, input, Int(frameCount) * MemoryLayout<Float>.size)
             }
             return
         }
 
-        // Process through vDSP biquad
-        // Use withUnsafeMutableBufferPointer to avoid Swift's dynamic exclusivity checking
         delay.withUnsafeMutableBufferPointer { delayPtr in
             vDSP_biquad(s, delayPtr.baseAddress!, input, 1, output, 1, vDSP_Length(frameCount))
         }

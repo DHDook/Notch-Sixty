@@ -11,7 +11,9 @@ import Foundation
 /// - `activeCoefficients` is read by the audio thread
 /// - `hasPendingUpdate` is an atomic flag that signals when updates are available
 ///
-/// Only filters whose coefficients actually changed are rebuilt in `applyPendingUpdates()`.
+/// Each band stores an array of sections (`[BiquadCoefficients]`) to support
+/// higher-order filters (24 dB/oct = 2 sections, 48 dB/oct = 4 sections).
+/// Only filters whose sections actually changed are rebuilt in `applyPendingUpdates()`.
 /// A single-band slider drag rebuilds exactly 1 filter; a full preset load rebuilds all of them.
 final class EQChain {
     // MARK: - Constants
@@ -36,10 +38,11 @@ final class EQChain {
     // MARK: - Double-Buffered Coefficients
 
     /// Coefficients currently in use by the audio thread.
-    private var activeCoefficients: [BiquadCoefficients]
+    /// Each element is an array of sections for that band.
+    private var activeCoefficients: [[BiquadCoefficients]]
 
     /// Coefficients staged for next update (written by main thread).
-    private var pendingCoefficients: [BiquadCoefficients]
+    private var pendingCoefficients: [[BiquadCoefficients]]
 
     /// Staged active band count (written by main thread).
     private var pendingActiveBandCount: Int = 0
@@ -64,20 +67,15 @@ final class EQChain {
     /// Creates a new EQ chain with pre-allocated resources.
     /// - Parameter maxFrameCount: Maximum frames per render call (unused, kept for API compatibility).
     init(maxFrameCount: UInt32) {
-        // Pre-allocate filters (always maxBandCount)
         filters = (0..<Self.maxBandCount).map { _ in BiquadFilter() }
 
-        // Pre-allocate coefficient arrays
         activeCoefficients = [BiquadCoefficients](repeating: .identity, count: Self.maxBandCount)
+            .map { [$0] }
         pendingCoefficients = [BiquadCoefficients](repeating: .identity, count: Self.maxBandCount)
+            .map { [$0] }
 
-        // Pre-allocate bypass flags
         bypassFlags = [Bool](repeating: false, count: Self.maxBandCount)
         pendingBypassFlags = [Bool](repeating: false, count: Self.maxBandCount)
-    }
-
-    deinit {
-        // No resources to deallocate - filters are value types with managed setups
     }
 
     // MARK: - Main Thread API
@@ -89,11 +87,11 @@ final class EQChain {
     /// state on all unchanged bands, preventing audible clicks.
     /// - Parameters:
     ///   - index: Band index within this chain.
-    ///   - coefficients: New biquad coefficients.
+    ///   - sections: Array of biquad sections (1 section = 12 dB/oct, 2 = 24 dB/oct, etc.)
     ///   - bypass: Whether this band is bypassed.
-    func stageBandUpdate(index: Int, coefficients: BiquadCoefficients, bypass: Bool) {
+    func stageBandUpdate(index: Int, sections: [BiquadCoefficients], bypass: Bool) {
         guard index >= 0 && index < Self.maxBandCount else { return }
-        pendingCoefficients[index] = coefficients
+        pendingCoefficients[index] = sections
         pendingBypassFlags[index] = bypass
         hasPendingUpdate.store(true, ordering: .releasing)
     }
@@ -103,35 +101,27 @@ final class EQChain {
     /// Used for preset load, band count change, or sample rate change. Sets `pendingFullReset`
     /// so that `applyPendingUpdates()` resets all filter delay state — producing a clean start.
     /// - Parameters:
-    ///   - coefficients: All band coefficients.
+    ///   - sections: Per-band arrays of biquad sections.
     ///   - bypassFlags: Per-band bypass flags.
     ///   - activeBandCount: Number of active bands.
     ///   - layerBypass: Whether the entire layer is bypassed.
     func stageFullUpdate(
-        coefficients: [BiquadCoefficients],
+        sections: [[BiquadCoefficients]],
         bypassFlags: [Bool],
         activeBandCount: Int,
         layerBypass: Bool
     ) {
-        // Copy coefficients (pad with identity if needed)
         for i in 0..<Self.maxBandCount {
-            pendingCoefficients[i] = i < coefficients.count ? coefficients[i] : .identity
+            pendingCoefficients[i] = i < sections.count ? sections[i] : [.identity]
             pendingBypassFlags[i] = i < bypassFlags.count ? bypassFlags[i] : false
         }
         pendingActiveBandCount = min(activeBandCount, Self.maxBandCount)
         pendingLayerBypass = layerBypass
-        // Full update resets delay state to give the new configuration a clean start
         pendingFullReset = true
         hasPendingUpdate.store(true, ordering: .releasing)
     }
 
     /// Sets the layer bypass state (called from main thread).
-    ///
-    /// Note: This is a standalone toggle for bypass state. When toggling bypass off,
-    /// you should ensure `stageFullUpdate()` has been called previously (or will be called)
-    /// to set the active band count correctly. If only bypass is toggled without prior
-    /// full staging, `pendingActiveBandCount` remains at its initialised value (0).
-    /// - Parameter bypass: Whether the entire layer is bypassed.
     func stageLayerBypass(_ bypass: Bool) {
         pendingLayerBypass = bypass
         hasPendingUpdate.store(true, ordering: .releasing)
@@ -142,41 +132,27 @@ final class EQChain {
     /// Applies any pending coefficient updates.
     /// Call once per render cycle before processing.
     ///
-    /// Only rebuilds vDSP setups for bands whose coefficients actually changed.
-    /// - For incremental updates (`stageBandUpdate`): rebuilds exactly the 1 changed filter,
-    ///   preserving delay state (no clicks). The other 63 filters are not touched.
-    /// - For full updates (`stageFullUpdate`): rebuilds all filters and resets delay state
-    ///   (clean start for preset loads and sample rate changes).
+    /// Only rebuilds vDSP setups for bands whose sections actually changed.
     @inline(__always)
     func applyPendingUpdates() {
         guard hasPendingUpdate.exchange(false, ordering: .acquiringAndReleasing) else { return }
 
-        // Capture and clear the full-reset flag
         let fullReset = pendingFullReset
         pendingFullReset = false
 
-        // Update active band count and layer bypass
         activeBandCount = pendingActiveBandCount
         layerBypass = pendingLayerBypass
 
-        // Update each band — only rebuild filters whose coefficients changed.
-        // For a single-band slider drag, this loop touches exactly 1 filter out of 64.
         for i in 0..<Self.maxBandCount {
             bypassFlags[i] = pendingBypassFlags[i]
 
             let pending = pendingCoefficients[i]
             if pending != activeCoefficients[i] {
-                // Coefficients changed: rebuild this filter's vDSP setup.
-                // Use resetState only on full updates (preset loads) to avoid mid-stream clicks.
                 activeCoefficients[i] = pending
                 filters[i].setCoefficients(pending, resetState: fullReset)
             } else if fullReset {
-                // Coefficients unchanged but a full reset was requested (e.g. the band was
-                // already at identity before a preset load). Reset delay state so that any
-                // residual ringing from a previous preset is cleared.
                 filters[i].setCoefficients(pending, resetState: true)
             }
-            // Otherwise: no coefficient change, no full reset — skip entirely.
         }
     }
 
@@ -187,30 +163,12 @@ final class EQChain {
     ///   - frameCount: Number of frames to process.
     @inline(__always)
     func process(buffer: UnsafeMutablePointer<Float>, frameCount: UInt32) {
-        // Layer bypass: skip all processing
-        if layerBypass {
-            return
-        }
+        if layerBypass { return }
+        if activeBandCount == 0 { return }
 
-        // No active bands: passthrough
-        if activeBandCount == 0 {
-            return
-        }
-
-        // Process each active band in-place
-        // BiquadFilter supports in-place processing (input == output)
         for i in 0..<activeBandCount {
-            // Skip bypassed bands
-            if bypassFlags[i] {
-                continue
-            }
-
-            // Process through this band's biquad filter in-place
-            filters[i].process(
-                input: buffer,
-                output: buffer,
-                frameCount: frameCount
-            )
+            if bypassFlags[i] { continue }
+            filters[i].process(input: buffer, output: buffer, frameCount: frameCount)
         }
     }
 }

@@ -483,7 +483,14 @@ final class EqualiserStore: ObservableObject {
         routingCoordinator.updateBandFilterType(index: index)
         presetManager.markAsModified()
     }
-    
+
+    /// Updates the filter slope for a specific EQ band.
+    func updateBandSlope(index: Int, slope: FilterSlope) {
+        eqConfiguration.updateBandSlope(index: index, slope: slope)
+        routingCoordinator.updateBandSlope(index: index)
+        presetManager.markAsModified()
+    }
+
     /// Updates the bypass state for a specific EQ band.
     func updateBandBypass(index: Int, bypass: Bool) {
         eqConfiguration.updateBandBypass(index: index, bypass: bypass)
