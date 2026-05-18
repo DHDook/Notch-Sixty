@@ -490,9 +490,6 @@ struct DriverSettingsTab: View {
 
 struct AboutTab: View {
     @EnvironmentObject var store: EqualiserStore
-    @StateObject private var driverManager = DriverManager.shared
-    @State private var showingUpToDate = false
-    @State private var upToDateTask: Task<Void, Never>?
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -502,46 +499,22 @@ struct AboutTab: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
     }
 
-    private var driverVersion: String? {
-        switch driverManager.status {
-        case .installed(let version): version
-        case .needsUpdate(let current, _): current
-        default: nil
-        }
-    }
-
     var body: some View {
         Form {
             Section {
-                HStack(spacing: 12) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .frame(width: 64, height: 64)
+                HStack {
+                    Image(systemName: "slider.vertical.3")
+                        .font(.title)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("v\(appVersion) (\(buildVersion))")
+                        Text("Equaliser")
                             .font(.headline)
-                        if let version = driverVersion {
-                            Text("Driver v\(version)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("v\(appVersion) (\(buildVersion))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
                 }
 
-                HStack(spacing: 16) {
-                    Spacer()
-                    Link("Website", destination: URL(string: UPDATE_DOWNLOAD_URL)!)
-                    Link("Documentation", destination: URL(string: DOCS_URL)!)
-                    Link("GitHub", destination: URL(string: GITHUB_REPO_URL)!)
-                    Spacer()
-                }
-                .font(.callout)
-            } header: {
-                Text("Equaliser")
-            }
-
-            Section {
                 if store.updateService.updateAvailable {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.up.circle.fill")
@@ -561,60 +534,12 @@ struct AboutTab: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                } else if showingUpToDate {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("You're up to date")
-                            .font(.callout)
-                        Spacer()
-                    }
-                } else {
-                    HStack {
-                        Spacer()
-                        if store.updateService.isChecking {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Checking...")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Button("Check for Updates") {
-                                showingUpToDate = false
-                                upToDateTask?.cancel()
-                                store.updateService.forceCheckForUpdates()
-                            }
-                            .disabled(store.updateService.isChecking)
-                        }
-                        Spacer()
-                    }
                 }
             } header: {
-                Text("Updates")
+                Text("Version")
             }
-
         }
         .formStyle(.grouped)
-        .safeAreaInset(edge: .bottom) {
-            Text("© Christophe Knage")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 8)
-        }
         .padding()
-        .onChange(of: store.updateService.isChecking) { _, isChecking in
-            guard !isChecking else { return }
-            // Check just finished — show "up to date" if no update found
-            if !store.updateService.updateAvailable {
-                showingUpToDate = true
-                upToDateTask?.cancel()
-                upToDateTask = Task {
-                    try? await Task.sleep(for: .seconds(3))
-                    guard !Task.isCancelled else { return }
-                    showingUpToDate = false
-                }
-            }
-        }
     }
 }
