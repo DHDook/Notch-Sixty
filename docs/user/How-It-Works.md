@@ -343,12 +343,12 @@ Equaliser uses a prioritised selection algorithm:
 
 | Not Done | Meaning |
 |----------|---------|
-| ❌ Record audio | No audio is ever saved or stored |
-| ❌ Transmit audio | No network activity of any kind |
+| ❌ Record audio | No audio is ever recorded |
+| ❌ Store audio | No audio is ever saved or stored |
+| ❌ Transmit audio | No audio is ever transmitted anywhere |
 | ❌ Collect analytics | No usage tracking |
-| ❌ Phone home | No background network requests |
 
-All audio processing happens **locally on your Mac**. Equaliser has no network capability.
+All audio processing happens **locally on your Mac**. Equaliser only uses the network to check the latest version released on GitHub.
 
 ### Microphone Permission
 
