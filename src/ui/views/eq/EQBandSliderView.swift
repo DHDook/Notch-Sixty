@@ -327,17 +327,16 @@ struct EQBandDetailPopover: View {
                 filterTypeUpdate(newValue)
             }
 
-            if FilterSlope.isSupported(for: filterType) {
-                Picker("Slope", selection: $slope) {
-                    ForEach(FilterSlope.allCases, id: \.self) { s in
-                        Text(s.displayName)
-                            .tag(s)
-                    }
+            Picker("Slope", selection: $slope) {
+                ForEach(FilterSlope.allCases, id: \.self) { s in
+                    Text(s.displayName)
+                        .tag(s)
                 }
-                .pickerStyle(.menu)
-                .onChange(of: slope) { _, newValue in
-                    slopeUpdate(newValue)
-                }
+            }
+            .pickerStyle(.menu)
+            .disabled(!FilterSlope.isSupported(for: filterType))
+            .onChange(of: slope) { _, newValue in
+                slopeUpdate(newValue)
             }
 
             Toggle("Bypass Band", isOn: $bypass)

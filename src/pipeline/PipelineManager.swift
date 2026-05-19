@@ -154,4 +154,9 @@ final class PipelineManager {
     func updateBoostGain(linear: Float) {
         renderPipeline?.updateBoostGain(linear: linear)
     }
+
+    /// Updates the dynamics configuration (soft clipper + brickwall limiter) on the render pipeline.
+    func updateDynamicsConfig(_ config: DynamicsConfig) {
+        renderPipeline?.updateDynamicsConfig(config)
+    }
 }

@@ -695,6 +695,11 @@ final class AudioRoutingCoordinator: ObservableObject {
         pipelineManager.updateOutputGain(linear: linear)
     }
 
+    /// Updates dynamics configuration on the render pipeline.
+    func updateDynamicsConfig(_ config: DynamicsConfig) {
+        pipelineManager.updateDynamicsConfig(config)
+    }
+
     // MARK: - EQ Coefficient Staging (delegated to EQCoefficientStager)
 
     /// Updates a band's gain by recalculating and staging coefficients.

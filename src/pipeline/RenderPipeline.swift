@@ -295,7 +295,9 @@ final class RenderPipeline {
             inputHALUnit: inputHALUnit,
             channelCount: streamFormat.mChannelsPerFrame,
             maxFrameCount: maxFrameCount,
-            ringBufferCapacity: ringBufferCapacity
+            ringBufferCapacity: ringBufferCapacity,
+            sampleRate: currentSampleRate,
+            dynamicsConfig: eqConfiguration.dynamicsConfig
         )
 
         // Apply initial gains from EQConfiguration (atomically)
@@ -531,6 +533,19 @@ final class RenderPipeline {
     /// Updates the output gain applied after EQ processing.
     func updateOutputGain(linear: Float) {
         callbackContext?.setTargetOutputGain(linear)
+    }
+
+    /// Updates the dynamics processing configuration (soft clipper + brickwall limiter).
+    /// Thread-safe: parameters are propagated atomically to the audio thread.
+    func updateDynamicsConfig(_ config: DynamicsConfig) {
+        callbackContext?.updateDynamicsConfig(config, sampleRate: currentSampleRate)
+    }
+
+    /// Gain reduction in dB currently applied by the brickwall limiter.
+    /// Returns 0.0 when no reduction is active or the pipeline is not running.
+    /// Thread-safe: reads the latest atomic value written by the audio thread.
+    var limiterGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.gainReductionDB ?? 0.0
     }
 
     /// Updates the boost gain applied before input gain.
@@ -875,6 +890,12 @@ final class RenderPipeline {
                 currentGain: &context.outputGainLinear,
                 targetGain: targetOutputGain
             )
+        }
+
+        // 4.5. Apply dynamics processing (soft clipper → brickwall limiter) after output gain.
+        // Only active in normal processing modes (not full system bypass).
+        if context.processingMode != 0 {
+            context.processDynamics(bufferList: ioData, frameCount: frameCount)
         }
 
         // 5. Update output meters with rendered audio

@@ -228,6 +228,13 @@ final class RenderCallbackContext: @unchecked Sendable {
     private var gainBuffers: [UnsafeMutablePointer<Float>] = []
     private var meterChannelPointers: [UnsafePointer<Float>] = []
 
+    // MARK: - Dynamics Processing
+
+    /// Dual-stage dynamics processor: soft clipper → brickwall limiter.
+    /// Allocated once at pipeline start and accessed exclusively from the audio thread,
+    /// except for atomic parameter updates issued by the main thread.
+    let dynamicsProcessor: DynamicsProcessor
+
     /// Pre-computed output buffer pointers (immutable, avoids array allocation on every callback).
     private let outputBufferPointersPrecomputed: [UnsafePointer<Float>]
 
@@ -270,13 +277,21 @@ final class RenderCallbackContext: @unchecked Sendable {
         inputHALUnit: AudioComponentInstance?,
         channelCount: UInt32,
         maxFrameCount: UInt32,
-        ringBufferCapacity: Int = AudioConstants.ringBufferCapacity
+        ringBufferCapacity: Int = AudioConstants.ringBufferCapacity,
+        sampleRate: Double = 48000.0,
+        dynamicsConfig: DynamicsConfig = .default
     ) {
         self.inputHALUnit = inputHALUnit
         self.channelCount = channelCount
         self.maxFrameCount = maxFrameCount
         self.framesPerBuffer = Int(maxFrameCount)
         self.meterChannelCount = min(Int(channelCount), Self.maxMeterChannels)
+
+        // Create the dynamics processor with the current sample rate and initial config.
+        // applyConfig() is called immediately so the processor starts in the correct state.
+        let dp = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate)
+        dp.applyConfig(dynamicsConfig, sampleRate: sampleRate)
+        self.dynamicsProcessor = dp
 
         // Create EQ chains (one per layer per channel)
         let layerCount = EQLayerConstants.maxLayerCount
@@ -539,6 +554,23 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// - Returns: Pre-computed array of immutable pointers to the active processing buffers.
     var outputBufferPointers: [UnsafePointer<Float>] {
         processingBufferPointers
+    }
+
+    // MARK: - Dynamics Processing API
+
+    /// Processes audio in-place through the soft clipper and brickwall limiter.
+    /// Must be called from the audio render thread only.
+    @inline(__always)
+    func processDynamics(bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: UInt32) {
+        dynamicsProcessor.process(bufferList: bufferList, frameCount: frameCount)
+    }
+
+    /// Updates dynamics parameters from the main thread.
+    /// - Parameters:
+    ///   - config: New dynamics configuration to apply atomically.
+    ///   - sampleRate: Current pipeline sample rate (needed for time-constant recalculation).
+    func updateDynamicsConfig(_ config: DynamicsConfig, sampleRate: Double) {
+        dynamicsProcessor.applyConfig(config, sampleRate: sampleRate)
     }
 
     /// Processes all EQ layers on processing buffers in-place.

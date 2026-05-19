@@ -30,6 +30,10 @@ struct AppStateSnapshot: Sendable {
     var manualModeEnabled: Bool
     var captureMode: Int  // CaptureMode.rawValue
 
+    // MARK: - Dynamics State
+
+    var dynamicsConfig: DynamicsConfig
+
     // MARK: - Meter State
 
     var metersEnabled: Bool
@@ -50,6 +54,7 @@ struct AppStateSnapshot: Sendable {
             bandwidthDisplayMode: BandwidthDisplayMode.qFactor.rawValue,
             manualModeEnabled: false,
             captureMode: CaptureMode.sharedMemory.rawValue,
+            dynamicsConfig: .default,
             metersEnabled: true
         )
     }
@@ -71,6 +76,7 @@ extension AppStateSnapshot: Codable {
         case bandwidthDisplayMode
         case manualModeEnabled
         case captureMode
+        case dynamicsConfig
         case metersEnabled
     }
 
@@ -95,6 +101,7 @@ extension AppStateSnapshot: Codable {
         captureMode = try container.decodeIfPresent(Int.self, forKey: .captureMode)
             ?? CaptureMode.sharedMemory.rawValue
         metersEnabled = try container.decodeIfPresent(Bool.self, forKey: .metersEnabled) ?? true
+        dynamicsConfig = try container.decodeIfPresent(DynamicsConfig.self, forKey: .dynamicsConfig) ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -115,6 +122,7 @@ extension AppStateSnapshot: Codable {
         try container.encode(bandwidthDisplayMode, forKey: .bandwidthDisplayMode)
         try container.encode(manualModeEnabled, forKey: .manualModeEnabled)
         try container.encode(captureMode, forKey: .captureMode)
+        try container.encode(dynamicsConfig, forKey: .dynamicsConfig)
         try container.encode(metersEnabled, forKey: .metersEnabled)
     }
 }

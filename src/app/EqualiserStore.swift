@@ -225,8 +225,45 @@ final class EqualiserStore: ObservableObject {
             bandwidthDisplayMode: bandwidthDisplayMode.rawValue,
             manualModeEnabled: manualModeEnabled,
             captureMode: routingCoordinator.captureMode.rawValue,
+            dynamicsConfig: eqConfiguration.dynamicsConfig,
             metersEnabled: meterStore.metersEnabled
         )
+    }
+
+    // MARK: - Dynamics Configuration
+
+    /// Current dynamics configuration (soft clipper + brickwall limiter).
+    var dynamicsConfig: DynamicsConfig {
+        get { eqConfiguration.dynamicsConfig }
+        set {
+            eqConfiguration.dynamicsConfig = newValue
+            routingCoordinator.updateDynamicsConfig(newValue)
+        }
+    }
+
+    /// Updates the full dynamics configuration and propagates it to the audio pipeline.
+    func updateDynamicsConfig(_ config: DynamicsConfig) {
+        dynamicsConfig = config
+    }
+
+    /// Updates soft clipper parameters individually.
+    func updateSoftClipper(_ softClipper: SoftClipperConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.softClipper = softClipper
+        dynamicsConfig = config
+    }
+
+    /// Updates brickwall limiter parameters individually.
+    func updateLimiter(_ limiter: BrickwallLimiterConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.limiter = limiter
+        dynamicsConfig = config
+    }
+
+    /// Gain reduction in dB reported by the brickwall limiter (0 dB = no reduction).
+    /// Reads the latest value atomically from the audio thread.
+    var limiterGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.limiterGainReductionDB ?? 0.0
     }
     
     // MARK: - Initialization

@@ -121,6 +121,10 @@ final class EQConfiguration: ObservableObject {
     /// - stereo: Independent L and R EQ settings
     @Published var channelMode: ChannelMode = .linked
 
+    /// Dynamics processing configuration (soft clipper + brickwall limiter).
+    /// Applied at the absolute end of the signal chain, after all EQ and gain stages.
+    @Published var dynamicsConfig: DynamicsConfig = .default
+
     /// Which channel is currently being edited in stereo mode.
     /// In linked mode, this is ignored.
     @Published var channelFocus: ChannelFocus = .left
@@ -189,6 +193,9 @@ final class EQConfiguration: ObservableObject {
 
         // Ensure active band count matches left channel
         activeBandCount = bandCount
+
+        // Restore dynamics configuration
+        dynamicsConfig = snapshot.dynamicsConfig
     }
 
     // MARK: - Band Count Management
