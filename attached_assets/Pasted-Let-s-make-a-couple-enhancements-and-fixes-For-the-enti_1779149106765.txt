@@ -1,0 +1,96 @@
+Let’s make a couple enhancements and fixes:
+
+For the entirety of this project, please assume You are an expert audio DSP engineer coding an equalizer app for mqcOS on apple silicon.
+
+First the enhancements. We need to implement a new dual-stage dynamics processing module consisting of a Soft Clipper followed immediately by a Brickwall Limiter.
+
+These modules must be placed at the absolute end of the application's audio processing pipeline (directly after the EQ biquad matrices and Preamp Output gain stages) to act as a system-wide clipping safeguard.
+
+Please write the code to modify the C/Objective-C DSP signal chain, add the real-time floating-point buffer loop math, execute dynamic look-ahead memory management for sample rates up to 384 kHz, and create the thread-safe Gain Reduction track variables.
+
+---
+
+### 🔗 1. SIGNAL CHAIN ARCHITECTURE (C/Objective-C Core)
+Ensure the core audio thread processes float data (-1.0 to 1.0 representing 0 dBFS) sequentially in this precise order:
+1. System Audio Input Buffer
+2. Preamp Input Gain (Multiplier stage)
+3. Parametric EQ Matrix (IIR Biquad filter bands)
+4. Preamp Output Gain (Multiplier stage)
+5. Soft Clipper Module (New Wave-Shaper Stage)
+6. Brickwall Limiter Module (New Look-Ahead Stage)
+7. System Audio Output Buffer
+
+---
+
+### 🎛️ 2. DETAILED FUNCTIONAL PARAMETERS
+
+#### Feature A: Soft Clipper with Variable Knee
+- Description: A sample-by-sample wave-shaper that rounds off extreme peaks instantly. It features a configurable knee smoothness control that dynamically alters the slope from a crisp inflection point to a broad, warm tube-like saturation curve. It has no time constants (no attack/release).
+- Required Backend Parameters:
+* IsEnabled (Boolean: Default OFF)
+* Drive / Input Gain (Float/dB: -6.0 dB to +18.0 dB, Default: 0.0 dB)
+* Threshold (Float/dB: -12.0 dB to 0.0 dB, Default: -1.5 dB)
+* Knee Smoothness (Float: 0.001 to 1.0, Default: 0.5)
+
+#### Feature B: Brickwall Limiter with Dynamic Sample Rate Adjustments
+- Description: An infinite-ratio (\infty:1) peak limiter serving as the absolute final safeguard. It uses a look-ahead ring buffer to smoothly attenuate volume spikes without creating crackles, completely blocking any signal from passing the designated output ceiling.
+- Required Backend Parameters:
+* IsEnabled (Boolean: Default ON)
+* Output Ceiling (Float/dB: -6.0 dB to 0.0 dB, Default: -0.2 dB)
+* Release Time (Float/ms: 5 ms to 250 ms, Default: 20 ms)
+* Look-Ahead Time (Internal Float: Fixed at 2.0 ms for safety)
+
+---
+
+### 🎚️ 3. DYNAMIC SAMPLE RATE COMPATIBILITY (Up to 384 kHz)
+The application must dynamically adapt its memory allocations and time constants whenever the user changes the macOS system sample rate (supporting 44.1 kHz, 48 kHz, 96 kHz, 192 kHz, and 384 kHz). Implement the following structural safeguards:
+
+1. Dynamic Look-Ahead Ring Buffer Initialization:
+ Calculate the necessary buffer array length dynamically during device initialization or `sampleRateChanged` callback loops.
+ - Size your circular ring buffer array up to a fixed safe ceiling of 2048 float samples per channel to safely accommodate 384,000 Hz (where 384k * 0.002s = 768 samples per channel).
+ - Ensure that when the sample rate changes, the look-ahead ring buffer is zeroed out (cleared to 0.0 floats) before processing restarts to prevent audio thread memory corruption bursts.
+
+2. Sample-Rate Dependent Release Alpha Tracking:
+ The `alpha_release` time coefficient equation MUST be recomputed inside the initialization/callback block whenever `currentSampleRate` changes to ensure release times remain uniform in real-world time.
+
+---
+
+### 🧮 4. MATHEMATICAL DSP EQUATIONS TO IMPLEMENT
+
+Convert all internal user-facing dB configuration variables to linear float values inside your logic processing loop via:
+x_linear = 10^(dB / 20)
+
+#### ✂️ Soft Clipper Algorithm
+Let x be the driven input sample (x_in * Drive_linear), t be the linear threshold amplitude, and k be the Knee Smoothness value.
+1. Calculate the boundary limits of the knee region:
+ x_lower = t - (k / 2)
+ x_upper = t + (k / 2)
+2. Apply conditional processing sample-by-sample:
+ - If |x| <= x_lower:
+   f(x) = x
+ - If |x| > x_upper:
+   f(x) = sign(x) * t
+ - If x_lower < |x| <= x_upper:
+   f(x) = sign(x) * (x_lower + ((|x| - x_lower) - (|x| - x_lower)^2) / (2 * k))
+
+#### 🛡️ Brickwall Limiter Algorithm
+1. Peak Detection: Scan the look-ahead history buffer to find the absolute maximum peak sample value: p = max(|x_look_ahead|).
+2. Target Gain Calculation: If p exceeds the linear Output Ceiling (c), target gain factor is: g_t = c / p. (If p does not exceed c, g_t = 1.0).
+3. Envelope Smoothing: Compute the time constant coefficient alpha using the user's Release Time (tau in seconds) and the active system sample rate (currentSampleRate):
+ alpha_release = exp(-1.0 / (tau * currentSampleRate))
+4. In the processing loop, smooth the current gain coefficient (g_c) sample-by-sample:
+ - If g_t < g_c: g_c = g_t (Instant Attack)
+ - If g_t >= g_c: g_c = g_c * alpha_release + g_t * (1.0 - alpha_release)
+5. Apply Gain: Multiply the delayed sample exiting the look-ahead buffer by the smoothed gain coefficient: y = x_delayed * g_c.
+
+#### 📊 Gain Reduction Tracking
+At the end of each buffer frame, compute the Gain Reduction decibel output and store it in a thread-safe variable accessible by the main thread:
+Gain_Reduction_dB = 20 * log10(g_c)
+
+---
+
+Please analyze the processing structure of the 'Equaliser' repository's audio core component, integrate these parameter variables into the core engine state, and inject the drop-in replacement C/Objective-C block into the main buffer processing loop.
+
+Now let’s talk about a couple fixes. Firstly, it appears that the configurable slope menu is only appearing on the first and last bands. Please review this functionality to ensure the menu item appears in all EQ bands, no matter how many are present from 1 up to 64. Then, it appears that an about page was added to the overall settings menu. Please remove it entirely. Then lastly, it looks like the UI is slightly changed from the original codebase, could you check this to ensure we are using the latest version of swift to code it?
+
+That’s it!
