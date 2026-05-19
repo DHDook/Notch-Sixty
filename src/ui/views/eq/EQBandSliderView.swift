@@ -342,8 +342,6 @@ struct EQBandDetailPopover: View {
                 .onChange(of: bypass) { _, newValue in
                     bypassUpdate(newValue)
                 }
-
-            Spacer(minLength: 0)
         }
         .padding(16)
         .onKeyPress(.escape) {
