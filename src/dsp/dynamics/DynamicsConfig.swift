@@ -33,15 +33,34 @@ struct BrickwallLimiterConfig: Codable, Equatable, Sendable {
     /// Range: -6.0 dB to 0.0 dB. Default: -0.2 dB.
     var ceilingDB: Float = -0.2
 
+    /// Gain reduction attack time, in milliseconds.
+    /// Range: 0.0 ms to 10.0 ms. Default: 0.1 ms.
+    var attackMs: Float = 0.1
+
     /// Gain reduction release time, in milliseconds.
     /// Range: 5.0 ms to 250.0 ms. Default: 20.0 ms.
     var releaseMs: Float = 20.0
 
-    /// Internal fixed look-ahead time in milliseconds (not user-configurable).
-    /// The ring buffer is sized to accommodate this at sample rates up to 384 kHz.
-    static let lookAheadMs: Double = 2.0
+    /// Look-ahead anticipation window, in milliseconds.
+    /// Range: 0.5 ms to 10.0 ms. Default: 2.0 ms.
+    var lookAheadMs: Float = 2.0
 
     static let `default` = BrickwallLimiterConfig()
+
+    // MARK: - Codable (forward-compatible)
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, ceilingDB, attackMs, releaseMs, lookAheadMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled  = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)   ?? true
+        ceilingDB  = try c.decodeIfPresent(Float.self, forKey: .ceilingDB)   ?? -0.2
+        attackMs   = try c.decodeIfPresent(Float.self, forKey: .attackMs)    ?? 0.1
+        releaseMs  = try c.decodeIfPresent(Float.self, forKey: .releaseMs)   ?? 20.0
+        lookAheadMs = try c.decodeIfPresent(Float.self, forKey: .lookAheadMs) ?? 2.0
+    }
 }
 
 // MARK: - Combined Dynamics Configuration

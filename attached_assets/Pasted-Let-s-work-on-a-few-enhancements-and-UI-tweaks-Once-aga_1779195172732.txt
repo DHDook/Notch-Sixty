@@ -1,0 +1,42 @@
+Let’s work on a few enhancements and UI tweaks. Once again for this assume you are an expert audio DSP engineer coding an EQ app for MacOS on Apple silicon.
+
+Functionality enhancements:
+
+Add specific user-adjustable parameters for the 'Brickwall Limiter' module. 
+Modify the previously discussed Limiter implementation to include 'Attack Time' and 'Look-ahead' as UI-controllable sliders. 
+
+### 🛡️ Updated Limiter Parameter Specifications
+1. **Attack Time (Slider)**
+   - Range: 0.0 ms to 10.0 ms
+   - Default: 0.1 ms (Safe default for near-instant protection)
+   - Description: Controls the speed at which the limiter reduces gain once a peak is detected. 
+
+2. **Look-ahead (Slider)**
+   - Range: 0.5 ms to 10.0 ms
+   - Default: 2.0 ms
+   - Description: The size of the pre-analysis buffer. Larger values prevent distortion on deep bass but introduce a small amount of latency.
+
+### 🧮 Updated Mathematical Logic
+You must now integrate the 'Attack' time constant into the gain smoothing logic. Previously, we used 'Instant Attack'; now, the gain coefficient (gc) must transition to the target gain (gt) over the specified attack duration.
+
+1. **Calculate Attack Coefficient (α_attack):**
+   - α_attack = exp(-1.0 / (τ_attack * fs))
+   - *Where τ_attack is user input in seconds and fs is sample rate.*
+
+2. **Update Smoothing Loop:**
+   If gt < gc (Limiter is engaging):
+     gc = gc * α_attack + gt * (1 - α_attack)
+   If gt >= gc (Limiter is releasing):
+     gc = gc * α_release + gt * (1 - α_release)
+
+3. **Dynamic Buffer Management:**
+   - The Look-ahead slider must dynamically resize the ring buffer (or adjust the read/write pointers) in real-time. 
+   - Ensure the Look-ahead time is always greater than or equal to the Attack time to maintain 'Brickwall' status. If the user sets an Attack time longer than the Look-ahead, the limiter may allow momentary 'overshoots' beyond the ceiling.
+
+UI tweaks:
+
+In dynamics menu, all of the sliders appear to have a scale bar below them, but that visually clutters the menu. Please remove those.
+
+Additionally, again on the dynamics menu, there is a legend for the Clipper Knee showing “Soft” and “Hard” - these legends are both on the left side of the Clipper Knee slider. Please move the Hard label to the right side of the slider zone.
+
+Lastly, again in the dynamics menu, please make the value field for each slider a text field that the user can directly input a value if desired.

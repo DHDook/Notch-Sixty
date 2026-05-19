@@ -70,8 +70,8 @@ struct DynamicsView: View {
                 range: 0.001...1.0,
                 step: 0.001,
                 formatValue: { String(format: "%.3f", $0) },
-                leftEndLabel: "Hard",
-                rightEndLabel: "Soft",
+                leftEndLabel: "Soft",
+                rightEndLabel: "Hard",
                 isDisabled: !store.dynamicsConfig.softClipper.isEnabled
             )
 
@@ -101,11 +101,29 @@ struct DynamicsView: View {
             )
 
             DynamicsSliderRow(
+                label: "Attack",
+                value: limiterAttack,
+                range: 0.0...10.0,
+                step: 0.1,
+                formatValue: { String(format: "%.1f ms", $0) },
+                isDisabled: !store.dynamicsConfig.limiter.isEnabled
+            )
+
+            DynamicsSliderRow(
                 label: "Release",
                 value: limiterRelease,
                 range: 5.0...250.0,
                 step: 1.0,
                 formatValue: { String(format: "%.0f ms", $0) },
+                isDisabled: !store.dynamicsConfig.limiter.isEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "Look-ahead",
+                value: limiterLookAhead,
+                range: 0.5...10.0,
+                step: 0.5,
+                formatValue: { String(format: "%.1f ms", $0) },
                 isDisabled: !store.dynamicsConfig.limiter.isEnabled
             )
 
@@ -115,7 +133,7 @@ struct DynamicsView: View {
         } header: {
             Text("Brickwall Limiter")
         } footer: {
-            Text("Look-ahead true peak limiter with a 2 ms anticipation window. Guarantees the output cannot exceed the ceiling. Enabled by default as a clipping safeguard.")
+            Text("Look-ahead true peak limiter. Attack and look-ahead control how quickly the limiter responds to peaks. Guarantees the output cannot exceed the ceiling. Enabled by default as a clipping safeguard.")
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -188,6 +206,17 @@ struct DynamicsView: View {
         )
     }
 
+    private var limiterAttack: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.limiter.attackMs) },
+            set: { val in
+                var lim = store.dynamicsConfig.limiter
+                lim.attackMs = Float(val)
+                store.updateLimiter(lim)
+            }
+        )
+    }
+
     private var limiterRelease: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.limiter.releaseMs) },
@@ -198,12 +227,23 @@ struct DynamicsView: View {
             }
         )
     }
+
+    private var limiterLookAhead: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.limiter.lookAheadMs) },
+            set: { val in
+                var lim = store.dynamicsConfig.limiter
+                lim.lookAheadMs = Float(val)
+                store.updateLimiter(lim)
+            }
+        )
+    }
 }
 
 // MARK: - Slider Row
 
-/// A labelled slider row with a formatted value display on the right.
-/// Optional endpoint labels appear below the slider track (e.g. "Hard" / "Soft").
+/// A labelled slider row with an inline editable value field on the right.
+/// Optional endpoint labels appear inline on either side of the slider track.
 private struct DynamicsSliderRow: View {
     let label: String
     @Binding var value: Double
@@ -214,41 +254,71 @@ private struct DynamicsSliderRow: View {
     var rightEndLabel: String? = nil
     var isDisabled: Bool = false
 
+    @State private var textValue: String = ""
+    @FocusState private var isFieldFocused: Bool
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 64, alignment: .leading)
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 64, alignment: .leading)
 
-                Slider(value: $value, in: range, step: step)
-                    .controlSize(.small)
-
-                Text(formatValue(value))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.primary)
-                    .frame(minWidth: 68, alignment: .trailing)
+            if let left = leftEndLabel {
+                Text(left)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
-            if leftEndLabel != nil || rightEndLabel != nil {
-                HStack {
-                    // Align with the slider track (offset for label column)
-                    Spacer().frame(minWidth: 64 + 8)
-                    Text(leftEndLabel ?? "")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Text(rightEndLabel ?? "")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer().frame(minWidth: 68 + 8)
+            Slider(value: $value, in: range, step: step)
+                .controlSize(.small)
+
+            if let right = rightEndLabel {
+                Text(right)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            TextField("", text: $textValue)
+                .font(.caption.monospacedDigit())
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 68, maxWidth: 68)
+                .focused($isFieldFocused)
+                .onSubmit { commitText() }
+                .onChange(of: value) { _, _ in
+                    if !isFieldFocused {
+                        textValue = formatValue(value)
+                    }
                 }
-            }
+                .onChange(of: isFieldFocused) { _, focused in
+                    if !focused { commitText() }
+                }
+                .onAppear {
+                    textValue = formatValue(value)
+                }
         }
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1.0)
         .animation(.easeInOut(duration: 0.15), value: isDisabled)
+    }
+
+    private func commitText() {
+        if let parsed = parseValue(textValue) {
+            let clamped = max(range.lowerBound, min(range.upperBound, parsed))
+            value = clamped
+        }
+        textValue = formatValue(value)
+    }
+
+    private func parseValue(_ text: String) -> Double? {
+        let normalised = text
+            .replacingOccurrences(of: "\u{2212}", with: "-")
+            .replacingOccurrences(of: "dB", with: "")
+            .replacingOccurrences(of: "ms", with: "")
+            .replacingOccurrences(of: "+", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return Double(normalised)
     }
 }
 
@@ -311,26 +381,6 @@ private struct GainReductionMeterRow: View {
                 }
             }
             .frame(height: 6)
-
-            // dB scale labels
-            HStack {
-                Spacer().frame(minWidth: 64 + 8)
-                Text("0")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text("−3")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text("−6")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text("−12 dB")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
         }
     }
 }

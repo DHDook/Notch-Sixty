@@ -17,8 +17,8 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // MARK: - Constants
 
-    /// Safe ring-buffer ceiling: 384 kHz × 0.002 s = 768 samples; round up to a power-of-two-adjacent safe value.
-    static let maxLookAheadSamples: Int = 2048
+    /// Safe ring-buffer ceiling: 384 kHz × 0.010 s = 3840 samples; round up to a safe power-of-two-adjacent value.
+    static let maxLookAheadSamples: Int = 4096
 
     // MARK: - Audio-Thread State
 
@@ -27,7 +27,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Pre-allocated look-ahead ring buffers, one per channel.
     private let lookAheadBufs: [UnsafeMutablePointer<Float>]
 
-    /// Current number of look-ahead samples (function of sample rate, capped to maxLookAheadSamples).
+    /// Current number of look-ahead samples (function of sample rate and user look-ahead time).
+    /// Written by the main thread only when the pipeline is quiescent or via atomic swap pattern.
     nonisolated(unsafe) var lookAheadSize: Int
 
     /// Ring-buffer write position (audio thread only).
@@ -45,7 +46,8 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     private let _limiterEnabled: ManagedAtomic<Int32>
     private let _limiterCeiling: ManagedAtomic<Int32>         // linear amplitude, as Float bits
-    private let _limiterAlphaRelease: ManagedAtomic<Int32>    // exp(-1/(tau*sr)), as Float bits
+    private let _limiterAlphaAttack: ManagedAtomic<Int32>     // exp(-1/(tau_attack*sr)), as Float bits
+    private let _limiterAlphaRelease: ManagedAtomic<Int32>    // exp(-1/(tau_release*sr)), as Float bits
 
     // MARK: - Gain Reduction Reporting (audio thread → main thread)
 
@@ -70,15 +72,17 @@ final class DynamicsProcessor: @unchecked Sendable {
             bufs.append(p)
         }
         self.lookAheadBufs = bufs
-        self.lookAheadSize = Self.computeLookAheadSamples(sampleRate: sampleRate)
+        self.lookAheadSize = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: 2.0)
 
         // Default parameter values
-        let defaultDrive      = Self.dbToLinear(0.0)
-        let defaultThreshold  = Self.dbToLinear(-1.5)
-        let defaultKnee       = Float(0.5)
-        let defaultCeiling    = Self.dbToLinear(-0.2)
-        let defaultReleaseTau = Float(0.020)    // 20 ms in seconds
-        let defaultAlpha      = Self.computeAlpha(tauSeconds: defaultReleaseTau, sampleRate: sampleRate)
+        let defaultDrive        = Self.dbToLinear(0.0)
+        let defaultThreshold    = Self.dbToLinear(-1.5)
+        let defaultKnee         = Float(0.5)
+        let defaultCeiling      = Self.dbToLinear(-0.2)
+        let defaultAttackTau    = Float(0.0001)    // 0.1 ms in seconds
+        let defaultReleaseTau   = Float(0.020)     // 20 ms in seconds
+        let defaultAlphaAttack  = Self.computeAlpha(tauSeconds: defaultAttackTau, sampleRate: sampleRate)
+        let defaultAlphaRelease = Self.computeAlpha(tauSeconds: defaultReleaseTau, sampleRate: sampleRate)
 
         _softClipperEnabled  = ManagedAtomic(0)
         _softClipperDrive    = ManagedAtomic(floatBits(defaultDrive))
@@ -87,7 +91,8 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         _limiterEnabled      = ManagedAtomic(1)
         _limiterCeiling      = ManagedAtomic(floatBits(defaultCeiling))
-        _limiterAlphaRelease = ManagedAtomic(floatBits(defaultAlpha))
+        _limiterAlphaAttack  = ManagedAtomic(floatBits(defaultAlphaAttack))
+        _limiterAlphaRelease = ManagedAtomic(floatBits(defaultAlphaRelease))
 
         _gainReductionBits   = ManagedAtomic(floatBits(0.0))
     }
@@ -126,10 +131,37 @@ final class DynamicsProcessor: @unchecked Sendable {
         _limiterCeiling.store(floatBits(Self.dbToLinear(db)), ordering: .relaxed)
     }
 
+    func setLimiterAttackMs(_ ms: Float, sampleRate: Double) {
+        let tau = max(ms, 0.0) / 1000.0
+        let alpha: Float
+        if tau < 1e-7 {
+            alpha = 0.0   // effectively instant attack
+        } else {
+            alpha = Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)
+        }
+        _limiterAlphaAttack.store(floatBits(alpha), ordering: .relaxed)
+    }
+
     func setLimiterReleaseMs(_ ms: Float, sampleRate: Double) {
         let tau = ms / 1000.0
         let alpha = Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)
         _limiterAlphaRelease.store(floatBits(alpha), ordering: .relaxed)
+    }
+
+    /// Updates the look-ahead window size.
+    /// Zeros ring buffers and resets the write index only when the computed sample count
+    /// changes, avoiding unnecessary audio glitches when other parameters are adjusted.
+    /// Must be called from the main thread only, following the same relaxed-store pattern
+    /// used by `updateSampleRate`.
+    func setLimiterLookAheadMs(_ ms: Float, sampleRate: Double) {
+        let newSize = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: ms)
+        guard newSize != lookAheadSize else { return }
+        for p in lookAheadBufs {
+            p.initialize(repeating: 0, count: Self.maxLookAheadSamples)
+        }
+        lookAheadWriteIndex = 0
+        limiterGainCurrent = 1.0
+        lookAheadSize = newSize
     }
 
     /// Applies the full config snapshot atomically (main thread).
@@ -140,25 +172,24 @@ final class DynamicsProcessor: @unchecked Sendable {
         setSoftClipperKnee(config.softClipper.kneeSmooth)
         setLimiterEnabled(config.limiter.isEnabled)
         setLimiterCeilingDB(config.limiter.ceilingDB)
+        setLimiterAttackMs(config.limiter.attackMs, sampleRate: sampleRate)
         setLimiterReleaseMs(config.limiter.releaseMs, sampleRate: sampleRate)
+        setLimiterLookAheadMs(config.limiter.lookAheadMs, sampleRate: sampleRate)
     }
 
     /// Called when the pipeline sample rate changes.
     /// Zeros look-ahead buffers to prevent memory-corruption artefacts, resets envelope state,
     /// and recomputes sample-rate-dependent time constants.
-    func updateSampleRate(_ sampleRate: Double, releaseMs: Float) {
-        // Zero out look-ahead buffers before any new audio arrives
+    func updateSampleRate(_ sampleRate: Double, attackMs: Float, releaseMs: Float, lookAheadMs: Float) {
         for p in lookAheadBufs {
             p.initialize(repeating: 0, count: Self.maxLookAheadSamples)
         }
         lookAheadWriteIndex = 0
-        lookAheadSize = Self.computeLookAheadSamples(sampleRate: sampleRate)
+        lookAheadSize = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: lookAheadMs)
         limiterGainCurrent = 1.0
 
-        // Recompute alpha from the stored release time
-        let tau = releaseMs / 1000.0
-        let alpha = Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)
-        _limiterAlphaRelease.store(floatBits(alpha), ordering: .relaxed)
+        setLimiterAttackMs(attackMs, sampleRate: sampleRate)
+        setLimiterReleaseMs(releaseMs, sampleRate: sampleRate)
     }
 
     // MARK: - DSP Processing (audio thread)
@@ -193,6 +224,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let threshold    = bitsToFloat(_softClipperThreshold.load(ordering: .relaxed))
         let knee         = bitsToFloat(_softClipperKnee.load(ordering: .relaxed))
         let ceiling      = bitsToFloat(_limiterCeiling.load(ordering: .relaxed))
+        let alphaAttack  = bitsToFloat(_limiterAlphaAttack.load(ordering: .relaxed))
         let alphaRelease = bitsToFloat(_limiterAlphaRelease.load(ordering: .relaxed))
 
         // Pre-compute soft-clipper knee region boundaries
@@ -244,11 +276,17 @@ final class DynamicsProcessor: @unchecked Sendable {
                     gTarget = 1.0
                 }
 
-                // 4. Envelope smoothing — instant attack, smooth release
+                // 4. Envelope smoothing — smooth attack and smooth release
                 if gTarget < gC {
-                    gC = gTarget                            // instant attack
+                    // Attack: gain must decrease (more limiting) — use attack alpha
+                    if alphaAttack < 1e-6 {
+                        gC = gTarget                                              // effectively instant
+                    } else {
+                        gC = gC * alphaAttack + gTarget * (1.0 - alphaAttack)
+                    }
                 } else {
-                    gC = gC * alphaRelease + gTarget * (1.0 - alphaRelease)  // smooth release
+                    // Release: gain returning toward unity — use release alpha
+                    gC = gC * alphaRelease + gTarget * (1.0 - alphaRelease)
                 }
 
                 // 5. Read the delayed sample (L frames old) and apply smoothed gain
@@ -258,7 +296,7 @@ final class DynamicsProcessor: @unchecked Sendable {
                     buf[frame] = lookAheadBufs[ch][readIdx] * gC
                 }
 
-                lastGC  = gC
+                lastGC   = gC
                 writeIdx = (writeIdx + 1) % la
             }
         }
@@ -321,13 +359,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         pow(10.0, db / 20.0)
     }
 
-    /// Number of look-ahead samples for the fixed 2 ms window at a given sample rate.
-    static func computeLookAheadSamples(sampleRate: Double) -> Int {
-        let samples = Int((sampleRate * BrickwallLimiterConfig.lookAheadMs / 1000.0).rounded(.up))
+    /// Number of look-ahead samples for a given window (ms) at a given sample rate.
+    static func computeLookAheadSamples(sampleRate: Double, lookAheadMs: Float) -> Int {
+        let samples = Int((sampleRate * Double(lookAheadMs) / 1000.0).rounded(.up))
         return min(max(1, samples), maxLookAheadSamples)
     }
 
-    /// Release-time alpha coefficient: alpha = exp(−1 / (tau × sampleRate)).
+    /// Release/attack-time alpha coefficient: alpha = exp(−1 / (tau × sampleRate)).
     static func computeAlpha(tauSeconds: Float, sampleRate: Double) -> Float {
         Float(exp(-1.0 / (Double(tauSeconds) * sampleRate)))
     }
