@@ -243,7 +243,8 @@ struct DynamicsView: View {
 // MARK: - Slider Row
 
 /// A labelled slider row with an inline editable value field on the right.
-/// Optional endpoint labels appear inline on either side of the slider track.
+/// Optional endpoint labels are rendered as Slider minimum/maximum value labels,
+/// which places them flush with the track endpoints and avoids tick marks.
 private struct DynamicsSliderRow: View {
     let label: String
     @Binding var value: Double
@@ -257,6 +258,18 @@ private struct DynamicsSliderRow: View {
     @State private var textValue: String = ""
     @FocusState private var isFieldFocused: Bool
 
+    /// Binding that snaps the slider value to the nearest step without passing
+    /// `step:` to Slider itself, which would cause macOS to draw tick marks.
+    private var snappedBinding: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { newVal in
+                let rounded = (newVal / step).rounded() * step
+                value = max(range.lowerBound, min(range.upperBound, rounded))
+            }
+        )
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             Text(label)
@@ -264,19 +277,22 @@ private struct DynamicsSliderRow: View {
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 64, alignment: .leading)
 
-            if let left = leftEndLabel {
-                Text(left)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Slider(value: $value, in: range, step: step)
+            if leftEndLabel != nil || rightEndLabel != nil {
+                Slider(value: snappedBinding, in: range) {
+                    EmptyView()
+                } minimumValueLabel: {
+                    Text(leftEndLabel ?? "")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } maximumValueLabel: {
+                    Text(rightEndLabel ?? "")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 .controlSize(.small)
-
-            if let right = rightEndLabel {
-                Text(right)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            } else {
+                Slider(value: snappedBinding, in: range)
+                    .controlSize(.small)
             }
 
             TextField("", text: $textValue)
@@ -286,9 +302,9 @@ private struct DynamicsSliderRow: View {
                 .frame(minWidth: 68, maxWidth: 68)
                 .focused($isFieldFocused)
                 .onSubmit { commitText() }
-                .onChange(of: value) { _, _ in
+                .onChange(of: value) { _, newValue in
                     if !isFieldFocused {
-                        textValue = formatValue(value)
+                        textValue = formatValue(newValue)
                     }
                 }
                 .onChange(of: isFieldFocused) { _, focused in
@@ -388,11 +404,14 @@ private struct GainReductionMeterRow: View {
 // MARK: - Inline Header Widget
 
 /// Compact dynamics widget shown inline in the main window header, to the right of Gain Out.
-/// Shows enable toggles for the soft clipper and brickwall limiter, plus a live
-/// gain-reduction readout that polls the audio engine at 30 fps.
+/// Shows indicator dots and enable toggles for the soft clipper and brickwall limiter.
+/// Dot colours: grey = disabled, green = enabled & idle, orange = enabled & active.
+/// A waveform button below the Limiter toggle opens the full Dynamics panel.
 struct DynamicsInlineView: View {
     @EnvironmentObject var store: EqualiserStore
-    @State private var gainReductionDB: Float = 0.0
+    @State private var clipperEngaged: Bool = false
+    @State private var limiterEngaged: Bool = false
+    @State private var showDynamicsPanel = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -403,26 +422,63 @@ struct DynamicsInlineView: View {
                 .fixedSize(horizontal: true, vertical: false)
 
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Clipper", isOn: clipperEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .fixedSize()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(clipperDotColor)
+                        .frame(width: 6, height: 6)
+                    Toggle("Clipper", isOn: clipperEnabled)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .fixedSize()
+                }
 
-                Toggle("Limiter", isOn: limiterEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .fixedSize()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(limiterDotColor)
+                        .frame(width: 6, height: 6)
+                    Toggle("Limiter", isOn: limiterEnabled)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .fixedSize()
+                }
 
-                InlineGainReductionBar(gainReductionDB: gainReductionDB)
-                    .frame(width: 96)
-                    .opacity(store.dynamicsConfig.limiter.isEnabled ? 1 : 0.3)
+                Button {
+                    showDynamicsPanel.toggle()
+                } label: {
+                    Image(systemName: "waveform.path")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Dynamics settings")
+                .popover(isPresented: $showDynamicsPanel, arrowEdge: .trailing) {
+                    DynamicsView()
+                        .environmentObject(store)
+                }
             }
         }
         .onReceive(
             Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
         ) { _ in
-            gainReductionDB = store.limiterGainReductionDB
+            clipperEngaged = store.clipperEngaged
+            limiterEngaged = store.limiterGainReductionDB < -0.5
         }
+    }
+
+    // MARK: - Dot Colours
+
+    private var clipperDotColor: Color {
+        guard store.dynamicsConfig.softClipper.isEnabled else {
+            return Color.secondary.opacity(0.3)
+        }
+        return clipperEngaged ? .orange : .green
+    }
+
+    private var limiterDotColor: Color {
+        guard store.dynamicsConfig.limiter.isEnabled else {
+            return Color.secondary.opacity(0.3)
+        }
+        return limiterEngaged ? .orange : .green
     }
 
     // MARK: - Bindings
@@ -447,43 +503,6 @@ struct DynamicsInlineView: View {
                 store.updateLimiter(lim)
             }
         )
-    }
-}
-
-/// Compact 4 px-tall gain-reduction bar with a dB label, for inline header use.
-private struct InlineGainReductionBar: View {
-    let gainReductionDB: Float
-
-    private var magnitude: Double { Double(max(0.0, -gainReductionDB)) }
-    private var fill: Double { min(magnitude / 12.0, 1.0) }
-    private var colour: Color {
-        switch magnitude {
-        case ..<1.0:  return .green
-        case ..<3.0:  return .yellow
-        case ..<6.0:  return .orange
-        default:      return .red
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color(nsColor: .separatorColor).opacity(0.4))
-                        .frame(height: 4)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(colour)
-                        .frame(width: geo.size.width * fill, height: 4)
-                        .animation(.linear(duration: 1.0 / 30.0), value: fill)
-                }
-            }
-            .frame(height: 4)
-
-            Text(String(format: "GR %.1f dB", gainReductionDB))
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
     }
 }
 

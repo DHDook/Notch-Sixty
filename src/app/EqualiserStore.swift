@@ -266,6 +266,10 @@ final class EqualiserStore: ObservableObject {
     var limiterGainReductionDB: Float {
         routingCoordinator.pipelineManager.renderPipeline?.limiterGainReductionDB ?? 0.0
     }
+
+    var clipperEngaged: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.clipperEngaged ?? false
+    }
     
     // MARK: - Initialization
     
@@ -381,8 +385,6 @@ final class EqualiserStore: ObservableObject {
                 }
             }
 
-            // Check for app updates
-            self.updateService.checkForUpdates()
         }
         
         // Wire up EQ configuration changes
@@ -410,14 +412,6 @@ final class EqualiserStore: ObservableObject {
 
         // Forward device manager changes (device list updates)
         deviceManager.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-            .store(in: &cancellables)
-
-        // Forward update service changes
-        updateService.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()

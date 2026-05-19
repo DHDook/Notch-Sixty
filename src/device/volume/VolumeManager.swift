@@ -417,13 +417,20 @@ final class VolumeManager: ObservableObject {
     // MARK: - Volume Gain for Shared Memory Mode
 
     /// Computes the volume gain for shared memory capture mode.
-    /// Returns 0.0 when muted or at 0% volume (ensuring digital silence),
-    /// 1.0 otherwise (pass-through — output device handles volume).
-    /// Mirrors how HAL mode produces silence via gVolume_Master_Value = 0.0.
+    /// Returns 0.0 when muted or at zero volume (ensuring digital silence).
+    /// Otherwise returns the raw driver volume scalar so the render pipeline
+    /// applies the correct attenuation directly to the audio samples.
+    /// (In shared memory mode the driver's WriteMix path bypasses its own
+    /// volume attenuation, so the app must scale the signal itself.)
     func volumeGainForSharedMemory() -> Float {
         if muted { return 0.0 }
         if gain <= 0.0 { return 0.0 }
-        return 1.0
+        // Return the raw volume scalar as a linear gain so the pipeline applies the
+        // correct attenuation in shared memory mode. In that mode the driver's WriteMix
+        // path writes pre-volume audio to shared memory (bypassing driver attenuation),
+        // so the app must scale the signal itself rather than relying on the output
+        // device's volume property, which macOS may restore to its saved value.
+        return gain
     }
 
     // MARK: - Volume Drift Detection

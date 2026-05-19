@@ -10,7 +10,6 @@ struct EQWindowView: View {
     @State private var metersEnabledUI = false
     @State private var showDriverSheet = true
     @State private var showSaveSheet = false
-    @State private var showDynamicsPanel = false
 
     /// Whether the driver installation overlay should be shown.
     private var needsDriverInstallation: Bool {
@@ -233,18 +232,6 @@ struct EQWindowView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showDynamicsPanel.toggle()
-                } label: {
-                    Image(systemName: "waveform.path")
-                }
-                .help("Dynamics — soft clipper & brickwall limiter")
-                .popover(isPresented: $showDynamicsPanel, arrowEdge: .bottom) {
-                    DynamicsView()
-                        .environmentObject(store)
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
                     openSettings()
                 } label: {
                     Image(systemName: "gearshape")
@@ -288,20 +275,6 @@ struct EQWindowView: View {
             showDriverSheet = needsDriverInstallation
             if needsDriverUpdate {
                 openSettings()
-            }
-        }
-        .alert("Update Available", isPresented: store.showUpdateAlert) {
-            Button("Download") {
-                if let url = URL(string: UPDATE_DOWNLOAD_URL) {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-            Button("Dismiss", role: .cancel) { }
-        } message: {
-            if let version = store.updateService.latestVersion {
-                Text("Equaliser v\(version) is available.\nVisit equaliser.knage.net to download the latest version.")
-            } else {
-                Text("A new version of Equaliser is available.")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .savePresetShortcut)) { _ in

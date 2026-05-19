@@ -548,6 +548,12 @@ final class RenderPipeline {
         callbackContext?.dynamicsProcessor.gainReductionDB ?? 0.0
     }
 
+    /// Whether the soft clipper engaged on the last audio buffer.
+    /// Thread-safe: reads the latest atomic value written by the audio thread.
+    var clipperEngaged: Bool {
+        callbackContext?.dynamicsProcessor.clipperEngaged ?? false
+    }
+
     /// Updates the boost gain applied before input gain.
     /// Used for volume boost (>100%) when output device can't go higher.
     /// Linear scale: 1.0 = unity (no boost), 2.0 = 2x boost (6dB gain).

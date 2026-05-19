@@ -52,11 +52,18 @@ final class DynamicsProcessor: @unchecked Sendable {
     // MARK: - Gain Reduction Reporting (audio thread → main thread)
 
     private let _gainReductionBits: ManagedAtomic<Int32>      // Float bits of dB value
+    private let _clipperActiveBits: ManagedAtomic<Int32>      // 1 when clipper engaged last buffer
 
     /// Latest gain reduction in dB (0.0 = no reduction, negative = gain applied).
     /// Safe to read from any thread.
     var gainReductionDB: Float {
         Float(bitPattern: UInt32(bitPattern: _gainReductionBits.load(ordering: .relaxed)))
+    }
+
+    /// Whether the soft clipper engaged on the most recent audio buffer.
+    /// Safe to read from any thread.
+    var clipperEngaged: Bool {
+        _clipperActiveBits.load(ordering: .relaxed) != 0
     }
 
     // MARK: - Initialization
@@ -95,6 +102,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _limiterAlphaRelease = ManagedAtomic(floatBits(defaultAlphaRelease))
 
         _gainReductionBits   = ManagedAtomic(floatBits(0.0))
+        _clipperActiveBits   = ManagedAtomic(0)
     }
 
     deinit {
@@ -237,14 +245,17 @@ final class DynamicsProcessor: @unchecked Sendable {
         var writeIdx     = lookAheadWriteIndex
         var gC           = limiterGainCurrent
         var lastGC       = gC
+        var clipperWasActive = false
 
         for frame in 0..<count {
             // ── Soft Clipper ────────────────────────────────────────────────────
             if softEnabled {
                 for ch in 0..<numCh {
                     guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    let input = buf[frame] * driveLinear
+                    if abs(input) > xLower { clipperWasActive = true }
                     buf[frame] = softClip(
-                        buf[frame] * driveLinear,
+                        input,
                         threshold: threshold,
                         xLower: xLower,
                         xUpper: xUpper,
@@ -303,6 +314,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         lookAheadWriteIndex = writeIdx
         limiterGainCurrent  = gC
+
+        // ── Clipper Activity Tracking ────────────────────────────────────────────
+        _clipperActiveBits.store(softEnabled && clipperWasActive ? 1 : 0, ordering: .relaxed)
 
         // ── Gain Reduction Tracking ──────────────────────────────────────────────
         // Gain_Reduction_dB = 20 * log10(g_c)  [stored atomically for UI read]
