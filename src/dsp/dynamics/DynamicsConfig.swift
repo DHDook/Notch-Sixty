@@ -45,6 +45,20 @@ struct BrickwallLimiterConfig: Codable, Equatable, Sendable {
     /// Range: 0.5 ms to 10.0 ms. Default: 2.0 ms.
     var lookAheadMs: Float = 2.0
 
+    init(
+        isEnabled: Bool = true,
+        ceilingDB: Float = -0.2,
+        attackMs: Float = 0.1,
+        releaseMs: Float = 20.0,
+        lookAheadMs: Float = 2.0
+    ) {
+        self.isEnabled = isEnabled
+        self.ceilingDB = ceilingDB
+        self.attackMs = attackMs
+        self.releaseMs = releaseMs
+        self.lookAheadMs = lookAheadMs
+    }
+
     static let `default` = BrickwallLimiterConfig()
 
     // MARK: - Codable (forward-compatible)
