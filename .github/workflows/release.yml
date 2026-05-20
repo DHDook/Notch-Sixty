@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
     tags:
       - 'v*.*.*'
 
@@ -22,23 +23,31 @@ jobs:
         run: |
           brew install librsvg create-dmg
 
-      - name: Determine version
+        - name: Determine version
         id: version
         run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
             PRERELEASE="false"
             TAG_NAME="${GITHUB_REF_NAME}"
+            DMG_NAME="equaliser-adv-${VERSION}"
+          elif [[ "${GITHUB_REF_NAME}" == "dev" ]]; then
+            VERSION="0.0.0-dev-$(date -u '+%Y%m%d').${SHORT_SHA}"
+            PRERELEASE="true"
+            TAG_NAME="latest-dev-build"
+            DMG_NAME="equaliser-adv-dev-${VERSION}"
           else
-            SHORT_SHA="${GITHUB_SHA::7}"
             VERSION="0.0.0-$(date -u '+%Y%m%d').${SHORT_SHA}"
             PRERELEASE="true"
             TAG_NAME="latest-build"
+            DMG_NAME="equaliser-adv-${VERSION}"
           fi
           echo "version=${VERSION}"       >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${TAG_NAME}"     >> "$GITHUB_OUTPUT"
-
+          echo "dmg_name=${DMG_NAME}"     >> "$GITHUB_OUTPUT"
+          
       - name: Stamp version into Info.plist
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
@@ -51,7 +60,6 @@ jobs:
 
       - name: Build app bundle
         run: ./bundle.sh
-
       - name: Create DMG
         run: |
           create-dmg \
@@ -60,9 +68,8 @@ jobs:
             --icon "Equaliser.app" 420 120 \
             --window-size 560 400 \
             --icon-size 80 \
-            "release/equaliser-adv-${{ steps.version.outputs.version }}.dmg" \
+            "release/${{ steps.version.outputs.dmg_name }}.dmg" \
             "release/Equaliser.app"
-
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -72,4 +79,4 @@ jobs:
           make_latest: ${{ steps.version.outputs.prerelease == 'false' }}
           generate_release_notes: true
           files: |
-            release/equaliser-adv-${{ steps.version.outputs.version }}.dmg
+            release/${{ steps.version.outputs.dmg_name }}.dmg
