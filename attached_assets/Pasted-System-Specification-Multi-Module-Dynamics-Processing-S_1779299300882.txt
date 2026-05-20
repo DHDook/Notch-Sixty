@@ -1,0 +1,79 @@
+System Specification: Multi-Module Dynamics Processing Suite Integration
+Objective
+Integrate a complete multi-module dynamics processing suite into the macOS equalizer application (DHDook/equaliser-adv). The suite includes a De-Esser, Multiband Compressor, Standard Compressor, and Dynamic Range Expander. The implementation requires restructuring the UI hierarchy, updating tooltips, embedding CoreAudio pipeline logic, and enforcing auto-sizing behaviors to optimize menu visibility.
+1. UI Layout, Tooltip, & Window Architecture
+Tooltip Update
+Action: Update the existing tooltip block located above the master dynamics toggles to include 1-2 sentence definitions for each new processor.
+Text String to Inject:
+"De-Esser: Tames harsh, high-frequency sibilance ('S' and 'T' sounds) without altering the mid-range bite. Multiband Compressor: Independently controls the dynamics of separate frequency bands to prevent bass explosions from choking the mix. Compressor: Automatically balances dynamic range to provide a cohesive, glued sound and add transient punch. Expander: Widens dynamic range by restoring life to over-compressed tracks or gating low-level hiss."
+Main Screen Layout & Sequencing
+Action: Add individual master bypass toggles for each new processor.
+Placement Constraints: Stack the toggles directly below the dynamics text tooltip box, and directly above the existing Clipper Toggle. Arrange them in the precise order of the DSP signal chain:
+De-Esser Toggle (Top)
+Multiband Compressor Toggle
+Compressor Toggle
+Expander Toggle (Bottom, immediately above the Clipper Toggle)
+Layout Shift: Programmatically shift the Clipper Toggle and Limiter Toggle downward to accommodate all four new toggles safely without overlapping elements.
+Dynamics Menu Restructuring
+Placement & Labeling: Inject four separate settings blocks inside the Dynamics configuration menu. Position them sequentially directly above the Clipper section, following the same signal chain order. Use these exact text headings:
+"De-Esser"
+"Multiband Compressor"
+"Compressor"
+"Expander"
+Controls Per Section: Populate each new block with its required configuration sliders:
+De-Esser Sliders: Frequency (2000 Hz to 10000 Hz), Threshold (-60.0 to 0.0 dB).
+Multiband Compressor Sliders: Crossover Low/Mid (40 Hz to 250 Hz), Crossover Mid/High (1000 Hz to 8000 Hz), Low-Band Threshold (-60.0 to 0.0 dB), Mid-Band Threshold (-60.0 to 0.0 dB), High-Band Threshold (-60.0 to 0.0 dB). Keep Attack, Release, and Ratio hardcoded to safe internal defaults to save layout space.
+Compressor Sliders: Threshold (-60.0 to 0.0 dB), Ratio (1.0 to 20.0), Attack (0.1 to 100.0 ms), Release (5.0 to 1000.0 ms), Makeup Gain (0.0 to 24.0 dB).
+Expander Sliders: Threshold (-60.0 to 0.0 dB), Ratio (1.0 to 4.0 expansion factor), Range (-40.0to 0.0 dB max attenuation ceiling).
+Menu Auto-Sizing Behavior: Adjust the window height parameters or main stack constraints of the Dynamics menu view. The menu wrapper window must dynamically stretch to fit all new parameters alongside the existing Clipper and Limiter settings. Strict Rule: Ensure the final rendered view fits perfectly on-screen so that no vertical scrolling is needed to view all options.
+2. Initialization & Safe Default Profiles
+Initialize all modules with the following safe, playback-neutral defaults. This ensures that when a user activates a toggle, the audio stabilizes smoothly without triggering volume drop-offs or distortion.
+All Master Toggles: OFF
+De-Esser Defaults: Frequency: 6000 Hz | Threshold: -20.0 dB
+Multiband Defaults: Low/Mid Cross: 150 Hz | Mid/High Cross: 3000 Hz | All Band Thresholds: 0.0 dB(No compression until adjusted).
+Compressor Defaults: Threshold: -16.0 dB | Ratio: 3.5:1 | Attack: 25.0 ms | Release: 150.0 ms | Makeup Gain: 2.5 dB
+Expander Defaults: Threshold: -35.0 dB | Ratio: 1.5:1 | Range: -12.0 dB
+Global Configuration State (EQ Maps Serialization)
+Incorporate these parameters into your state structures to ensure they save and load alongside individual EQ maps:
+swift
+var deesserEnabled: Bool = false, deesserFreq: Float = 6000.0, deesserThresholdDB: Float = -20.0
+var multibandEnabled: Bool = false, mbCrossLowMid: Float = 150.0, mbCrossMidHigh: Float = 3000.0
+var mbThresholdLowDB: Float = 0.0, mbThresholdMidDB: Float = 0.0, mbThresholdHighDB: Float = 0.0
+var compressorEnabled: Bool = false, compressorThresholdDB: Float = -16.0, compressorRatio: Float = 3.5
+var compressorAttackMS: Float = 25.0, compressorReleaseMS: Float = 150.0, compressorMakeupGainDB: Float = 2.5
+var expanderEnabled: Bool = false, expanderThresholdDB: Float = -35.0, expanderRatio: Float = 1.5, expanderRangeDB: Float = -12.0
+Use code with caution.
+
+3. Mathematical Framework & Core DSP Logic
+The audio stream processing loops must execute downstream from the parametric EQ stages, but upstream from the Clipper and Limiter stages, using this strict sequence:
+Module 1: De-Esser (Frequency-Selective Bandpass Sidechain)
+Route a duplicate copy of the stereo input buffers into a sidechain Linkwitz-Riley 2nd-order bandpass filter centered at deesserFreq to isolate the sibilance envelope.
+Rectify the sidechain signal to decibels: \(X_{\text{side\_dB}} = 20 \cdot \log_{10}(\max(\vert{}s_{\text{left}}\vert{}, \vert{}s_{\text{right}}\vert{}) + 10^{-5})\).
+Compute sibilance gain reduction: If \(X_{\text{side\_dB}} > \text{deesserThresholdDB}\), then \(\Delta G_{\text{dB}} = \text{deesserThresholdDB} - X_{\text{side\_dB}}\), else \(\Delta G_{\text{dB}} = 0\).
+Smooth \(\Delta G_{\text{dB}}\) using a fast attack (\(1.0 \text{ ms}\)) and release (\(50.0 \text{ ms}\)) coefficient. Convert the result to a linear multiplier \(G_{\text{linear}} = 10^{G_{\text{smoothed\_dB}} / 20}\).
+Apply \(G_{\text{linear}}\) directly to the main audio channels: \(x[n] = x[n] \cdot G_{\text{linear}}\).
+Module 2: Multiband Compressor (Linkwitz-Riley 4th-Order Splitter)
+Split the incoming audio into three independent streams (Low, Mid, High) using cascaded Linkwitz-Riley 4th-Order (24 dB/oct) Low-Pass and High-Pass filters built from the mbCrossLowMid and mbCrossMidHigh frequencies.
+For each split band stream, compute independent peak tracking envelopes:
+\(X_{\text{band\_dB}}=20\cdot \log _{10}(\max (|\text{band}_{\text{left}}|,|\text{band}_{\text{right}}|)+10^{-5})\)
+Apply static compression mappings if a band exceeds its specific threshold:
+\(\text{If\ }X_{\text{band\_dB}}>\text{Threshold}_{\text{band\_dB}}:\Delta G_{\text{band\_dB}}=\left(\text{Threshold}_{\text{band\_dB}}+\frac{X_{\text{band\_dB}}-\text{Threshold}_{\text{band\_dB}}}{4.0}\right)-X_{\text{band\_dB}}\quad (\text{Fixed\ 4.0\ Ratio})\)
+Smooth each band's gain reduction independently using fixed internal time constants optimized for those frequencies (Low: \(40\text{ms}\) attack / \(200\text{ms}\) release; Mid: \(20\text{ms}\) attack / \(100\text{ms}\) release; High: \(10\text{ms}\) attack / \(50\text{ms}\) release).
+Convert to linear factors, multiply them against their respective isolated band audio channels, and sum the three updated streams back into a single stereo mix buffer before handing it to Module 3.
+Module 3: Standard Compressor
+Apply the primary wideband compression engine exactly as specified previously:
+Track the unified rectified peak decibel level across channels: \(X_{\text{dB}} = 20 \cdot \log_{10}(\max(\vert{}x_{\text{left}}\vert{}, \vert{}x_{\text{right}}\vert{}) + 10^{-5})\).
+Compute the attenuation delta: If \(X_{\text{dB}} > \text{compressorThresholdDB}\), then \(\Delta G_{\text{dB}} = \text{compressorThresholdDB} + \frac{X_{\text{dB}} - \text{compressorThresholdDB}}{\text{compressorRatio}} - X_{\text{dB}}\), else \(\Delta G_{\text{dB}} = 0\).
+Smooth the gain envelope using calculated slider coefficients (\(\alpha _{\text{attack}}\), \(\alpha _{\text{release}}\)).
+Convert back to a linear scale, factor in the compressorMakeupGainDB, and apply the multiplier to the stereo stream.
+Module 4: Dynamic Range Expander (Downward Expander Mode)
+Use the compressor's wideband decibel envelope (\(X_{\text{dB}}\)) as the sidechain input to determine expansion.
+Compute downward expansion behavior when the signal drops below the threshold floor:
+\(\text{If\ }X_{\text{dB}}<\text{expanderThresholdDB}:\Delta G_{\text{exp\_dB}}=(\text{expanderThresholdDB}-X_{\text{dB}})\cdot (1.0-\text{expanderRatio})\)
+\(\text{Else}:\Delta G_{\text{exp\_dB}}=0\)
+Clamp \(\Delta G_{\text{exp\_dB}}\) to prevent attenuation from dropping below your safety range floor: \(\Delta G_{\text{exp\_dB}} = \max(\Delta G_{\text{exp\_dB}}, \text{expanderRangeDB})\).
+Smooth this expansion envelope using a quick attack parameter (\(5.0\text{ ms}\) to handle incoming signals quickly) and a smooth release parameter (\(200\text{ms}\)). Convert to a linear factor and multiply across both stereo channels.
+4. Implementation Steps for the Agent
+State Mapping: Add the new properties to your serialization/preset system.
+UI Layout Adjustment: Open your main window classes. Place the four toggles below the tooltip box and above the Clipper switch. Rearrange the Dynamics menu layout to insert the four new parameter blocks right above the Clipper section, then automatically stretch the parent view frame so no scrollbars hide the sliders.
+DSP Pipeline Execution: Hook these mathematics calculation blocks sequentially into your active CoreAudio sample render loops. Ensure the array buffers cycle from the EQ -> De-Esser -> Multiband Crossovers -> Compressor -> Expander -> Clipper -> Limiter.

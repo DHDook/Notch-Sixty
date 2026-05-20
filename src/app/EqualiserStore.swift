@@ -261,6 +261,30 @@ final class EqualiserStore: ObservableObject {
         dynamicsConfig = config
     }
 
+    func updateDeEsser(_ deEsser: DeEsserConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.deEsser = deEsser
+        dynamicsConfig = config
+    }
+
+    func updateMultibandCompressor(_ mb: MultibandCompressorConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.multibandCompressor = mb
+        dynamicsConfig = config
+    }
+
+    func updateCompressor(_ comp: CompressorConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.compressor = comp
+        dynamicsConfig = config
+    }
+
+    func updateExpander(_ exp: ExpanderConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.expander = exp
+        dynamicsConfig = config
+    }
+
     /// Gain reduction in dB reported by the brickwall limiter (0 dB = no reduction).
     /// Reads the latest value atomically from the audio thread.
     var limiterGainReductionDB: Float {
