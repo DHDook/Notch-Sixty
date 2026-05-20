@@ -399,7 +399,9 @@ final class VolumeManager: ObservableObject {
     /// - Returns: Boost factor (1.0 = unity, 175x for 30% volume).
     func boostGain() -> Float {
         guard boostEnabled else { return 1.0 }
-        guard !muted else { return 1.0 }
+        // Return 0.0 when muted so the render pipeline outputs digital silence,
+        // independent of whether the hardware/driver mute property takes effect.
+        guard !muted else { return 0.0 }
         guard gain > 0 else { return 1.0 }
         
         // Convert from driver's scalar dB mapping to actual linear gain

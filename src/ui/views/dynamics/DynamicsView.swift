@@ -14,10 +14,9 @@ struct DynamicsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Title bar
             HStack {
                 Text("Dynamics")
-                    .font(.headline)
+                    .font(.system(size: 15, weight: .semibold))
                 Spacer()
             }
             .padding(.horizontal, 20)
@@ -25,12 +24,15 @@ struct DynamicsView: View {
             .padding(.bottom, 8)
 
             Form {
-                softClipperSection
+                clipperSection
                 limiterSection
             }
             .formStyle(.grouped)
         }
-        .frame(width: 440)
+        // item 10: width +25% (440 → 550); item 5: minHeight avoids scrolling
+        .frame(width: 550, minHeight: 520)
+        // item 3: solid background so slider thumbs render crisply against the popover
+        .background(Color(nsColor: .windowBackgroundColor))
         .onReceive(
             Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
         ) { _ in
@@ -38,13 +40,15 @@ struct DynamicsView: View {
         }
     }
 
-    // MARK: - Soft Clipper Section
+    // MARK: - Clipper Section (item 7: renamed from "Soft Clipper")
 
-    private var softClipperSection: some View {
+    private var clipperSection: some View {
+        // item 11: footer removed
         Section {
             Toggle("Enabled", isOn: softClipperEnabled)
                 .toggleStyle(.switch)
-                .controlSize(.small)
+                .controlSize(.regular)
+                .font(.system(size: 13))
 
             DynamicsSliderRow(
                 label: "Drive",
@@ -76,20 +80,19 @@ struct DynamicsView: View {
             )
 
         } header: {
-            Text("Soft Clipper")
-        } footer: {
-            Text("Analogue-style wave-shaper. Gently rounds transient peaks before the brickwall limiter, reducing the harshness of subsequent limiting. Disabled by default.")
-                .fixedSize(horizontal: false, vertical: true)
+            Text("Clipper")
         }
     }
 
-    // MARK: - Limiter Section
+    // MARK: - Limiter Section (item 7: renamed from "Brickwall Limiter")
 
     private var limiterSection: some View {
+        // item 11: footer removed
         Section {
             Toggle("Enabled", isOn: limiterEnabled)
                 .toggleStyle(.switch)
-                .controlSize(.small)
+                .controlSize(.regular)
+                .font(.system(size: 13))
 
             DynamicsSliderRow(
                 label: "Ceiling",
@@ -131,10 +134,7 @@ struct DynamicsView: View {
                 .opacity(store.dynamicsConfig.limiter.isEnabled ? 1.0 : 0.4)
 
         } header: {
-            Text("Brickwall Limiter")
-        } footer: {
-            Text("Look-ahead true peak limiter. Attack and look-ahead control how quickly the limiter responds to peaks. Guarantees the output cannot exceed the ceiling. Enabled by default as a clipping safeguard.")
-                .fixedSize(horizontal: false, vertical: true)
+            Text("Limiter")
         }
     }
 
@@ -243,8 +243,7 @@ struct DynamicsView: View {
 // MARK: - Slider Row
 
 /// A labelled slider row with an inline editable value field on the right.
-/// Optional endpoint labels are rendered as Slider minimum/maximum value labels,
-/// which places them flush with the track endpoints and avoids tick marks.
+/// Optional endpoint labels are rendered as Slider minimum/maximum value labels.
 private struct DynamicsSliderRow: View {
     let label: String
     @Binding var value: Double
@@ -258,8 +257,8 @@ private struct DynamicsSliderRow: View {
     @State private var textValue: String = ""
     @FocusState private var isFieldFocused: Bool
 
-    /// Binding that snaps the slider value to the nearest step without passing
-    /// `step:` to Slider itself, which would cause macOS to draw tick marks.
+    /// Snaps the slider value to the nearest step without passing `step:` to Slider
+    /// itself, which would cause macOS to draw tick marks.
     private var snappedBinding: Binding<Double> {
         Binding(
             get: { value },
@@ -271,22 +270,24 @@ private struct DynamicsSliderRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        // item 6: explicit .center alignment keeps TextField on the same baseline as the slider track
+        HStack(alignment: .center, spacing: 8) {
+            // item 9: font size +2pt (caption ≈ 11pt → 13pt)
             Text(label)
-                .font(.caption)
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 64, alignment: .leading)
+                .frame(minWidth: 72, alignment: .leading)
 
             if leftEndLabel != nil || rightEndLabel != nil {
                 Slider(value: snappedBinding, in: range) {
                     EmptyView()
                 } minimumValueLabel: {
                     Text(leftEndLabel ?? "")
-                        .font(.caption2)
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 } maximumValueLabel: {
                     Text(rightEndLabel ?? "")
-                        .font(.caption2)
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
                 .controlSize(.small)
@@ -295,14 +296,18 @@ private struct DynamicsSliderRow: View {
                     .controlSize(.small)
             }
 
+            // item 8: fixed width 80 keeps the row width stable for 1-, 2-, and 3-digit values
+            // item 6: .controlSize(.small) matches the Slider height so .center alignment is exact
+            // item 4: onChange(initial:true) keeps the displayed value in sync from first render
             TextField("", text: $textValue)
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 13).monospacedDigit())
                 .multilineTextAlignment(.trailing)
                 .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 68, maxWidth: 68)
+                .controlSize(.small)
+                .frame(width: 80)
                 .focused($isFieldFocused)
                 .onSubmit { commitText() }
-                .onChange(of: value) { _, newValue in
+                .onChange(of: value, initial: true) { _, newValue in
                     if !isFieldFocused {
                         textValue = formatValue(newValue)
                     }
@@ -310,13 +315,9 @@ private struct DynamicsSliderRow: View {
                 .onChange(of: isFieldFocused) { _, focused in
                     if !focused { commitText() }
                 }
-                .onAppear {
-                    textValue = formatValue(value)
-                }
         }
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1.0)
-        .animation(.easeInOut(duration: 0.15), value: isDisabled)
     }
 
     private func commitText() {
@@ -341,17 +342,14 @@ private struct DynamicsSliderRow: View {
 // MARK: - Gain Reduction Meter
 
 /// Horizontal bar showing the brickwall limiter's current gain reduction.
-/// Polls at 30 fps via the parent view's timer. Colour shifts from green → yellow → orange → red
-/// as reduction depth increases.
+/// Polls at 30 fps via the parent view's timer. Colour shifts green → yellow → orange → red.
 private struct GainReductionMeterRow: View {
     let gainReductionDB: Float
 
-    /// Magnitude of reduction (always ≥ 0; 0 = no reduction).
     private var reductionMagnitude: Double {
         Double(max(0.0, -gainReductionDB))
     }
 
-    /// Full-scale range for the visual bar: 0 to −12 dB.
     private static let displayRangeDB: Double = 12.0
 
     private var fillFraction: Double {
@@ -373,14 +371,14 @@ private struct GainReductionMeterRow: View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 Text("Gain Reduction")
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 64, alignment: .leading)
+                    .frame(minWidth: 72, alignment: .leading)
 
                 Spacer()
 
                 Text(String(format: "%.1f dB", gainReductionDB))
-                    .font(.caption.monospacedDigit())
+                    .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(isActive ? .primary : .secondary)
             }
 
@@ -404,29 +402,72 @@ private struct GainReductionMeterRow: View {
 // MARK: - Inline Header Widget
 
 /// Compact dynamics widget shown inline in the main window header, to the right of Gain Out.
-/// Shows indicator dots and enable toggles for the soft clipper and brickwall limiter.
-/// Dot colours: grey = disabled, green = enabled & idle, orange = enabled & active.
-/// A waveform button below the Limiter toggle opens the full Dynamics panel.
+/// Shows indicator dots and enable toggles for the soft clipper and brickwall limiter,
+/// plus a tooltip `?` button that surfaces the definitions for both processors.
 struct DynamicsInlineView: View {
     @EnvironmentObject var store: EqualiserStore
     @State private var clipperEngaged: Bool = false
     @State private var limiterEngaged: Bool = false
     @State private var showDynamicsPanel = false
+    // item 13: state for the definitions tooltip
+    @State private var showDefinitions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Dynamics")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+            // item 13: "Dynamics" label with adjacent ? tooltip button
+            HStack(spacing: 4) {
+                Text("Dynamics")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
 
+                Button {
+                    showDefinitions.toggle()
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showDefinitions, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Clipper")
+                                .font(.caption.bold())
+                            Text("Analogue-style wave-shaper that gently rounds transient peaks before the limiter, reducing the harshness of subsequent limiting.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Limiter")
+                                .font(.caption.bold())
+                            Text("Look-ahead true peak limiter. Guarantees the output cannot exceed the ceiling. Enabled by default as a clipping safeguard.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(14)
+                    .frame(width: 260)
+                }
+            }
+
+            // item 12: Text label with fixed frame width ensures the toggle switch
+            // controls appear at the same horizontal position on both rows.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(clipperDotColor)
                         .frame(width: 6, height: 6)
-                    Toggle("Clipper", isOn: clipperEnabled)
+                    Text("Clipper")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .leading)
+                    Toggle("", isOn: clipperEnabled)
+                        .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.mini)
                         .fixedSize()
@@ -436,17 +477,23 @@ struct DynamicsInlineView: View {
                     Circle()
                         .fill(limiterDotColor)
                         .frame(width: 6, height: 6)
-                    Toggle("Limiter", isOn: limiterEnabled)
+                    Text("Limiter")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .leading)
+                    Toggle("", isOn: limiterEnabled)
+                        .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.mini)
                         .fixedSize()
                 }
 
+                // item 2: approximately double the default caption2 (~10pt) size
                 Button {
                     showDynamicsPanel.toggle()
                 } label: {
                     Image(systemName: "waveform.path")
-                        .font(.caption2)
+                        .font(.system(size: 20))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
