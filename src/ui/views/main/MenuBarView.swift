@@ -4,6 +4,7 @@ import SwiftUI
 /// Designed with compact controls: each control (label + picker) in its own row.
 struct MenuBarContentView: View {
     @EnvironmentObject var store: EqualiserStore
+    @EnvironmentObject var windowActivation: WindowActivationController
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     
@@ -98,6 +99,7 @@ struct MenuBarContentView: View {
         VStack(spacing: 0) {
             // Open Notch Sixty button - full width
             Button {
+                windowActivation.prepareToShowWindow()
                 openWindow(id: "equaliser")
                 NSApp.activate(ignoringOtherApps: true)
                 dismiss()

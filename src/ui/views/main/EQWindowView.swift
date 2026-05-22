@@ -5,6 +5,7 @@ import Combine
 struct EQWindowView: View {
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject var store: EqualiserStore
+    @EnvironmentObject var windowActivation: WindowActivationController
     @StateObject private var driverManager = DriverManager.shared
     @State private var showCompareHelp = false
     @State private var showSnapshotCompareHelp = false
@@ -444,6 +445,7 @@ struct EQWindowView: View {
             }
         )
         .onAppear {
+            windowActivation.windowBecameVisible(.equaliser)
             store.meterStore.windowBecameVisible()
             metersEnabledUI = store.meterStore.metersEnabled
             showStateResetAlert = store.didResetStateOnLaunch
@@ -455,8 +457,7 @@ struct EQWindowView: View {
             if metersEnabledUI != value { metersEnabledUI = value }
         }
         .onDisappear {
-            // Temporary diagnostic — remove after confirming.
-            print("EQWindowView disappeared")
+            windowActivation.windowBecameHidden(.equaliser)
             store.meterStore.windowBecameHidden()
         }
         .sheet(isPresented: $showDriverSheet) {
@@ -534,7 +535,8 @@ struct SystemEQToggleView: View {
     }
 }
 
-// #Preview("EQ Window") {
-//     EQWindowView()
-//         .environmentObject(EqualiserStore())
-// }
+#Preview("EQ Window") {
+    EQWindowView()
+        .environmentObject(EqualiserStore())
+        .environmentObject(WindowActivationController())
+}

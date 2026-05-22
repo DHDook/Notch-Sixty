@@ -20,6 +20,7 @@ enum MicCalibrationMode: String, CaseIterable {
 
 struct SettingsView: View {
     @EnvironmentObject var store: EqualiserStore
+    @EnvironmentObject var windowActivation: WindowActivationController
     @State private var selectedTab: SettingsTab = .display
     
     /// Allows programmatic selection of tab (e.g., to show Driver tab when update required).
@@ -64,12 +65,17 @@ struct SettingsView: View {
         }
         .frame(width: 760, height: 640)
         .onAppear {
+            windowActivation.windowBecameVisible(.settings)
+
             // Auto-select Driver tab if update required
             if let initialTab = initialTab {
                 selectedTab = initialTab
                 // Clear the flag so user doesn't get forced back on subsequent opens
                 store.clearDriverUpdateRequired()
             }
+        }
+        .onDisappear {
+            windowActivation.windowBecameHidden(.settings)
         }
     }
 }
