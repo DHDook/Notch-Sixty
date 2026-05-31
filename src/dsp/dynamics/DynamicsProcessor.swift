@@ -77,6 +77,30 @@ final class DynamicsProcessor: @unchecked Sendable {
     let stereoWidener:  StereoWidener
     let lufsProcessor:  LoudnessMatchProcessor
 
+    // MARK: - Advanced DSP State (audio thread only)
+
+    /// DC offset blocker: x_prev and y_prev per channel (1-pole HP at ≈ 0.5 Hz).
+    nonisolated(unsafe) var dcOffsetState:   [Float]
+    /// De-harsh tilt filter DF2T state: w1, w2 per channel.
+    nonisolated(unsafe) var deharshState:    [Float]
+    /// Loudness contour biquad state: 4 floats per channel (2 biquad stages × w1/w2).
+    nonisolated(unsafe) var contourState:    [Float]
+    /// Crest factor: running peak and RMS power envelopes.
+    nonisolated(unsafe) var crestPeakEnv:   Float = 0.0
+    nonisolated(unsafe) var crestRmsEnv:    Float = 0.0
+    /// Right-channel time-delay circular buffer; one pointer per channel.
+    private let timeDelayBufs: [UnsafeMutablePointer<Float>]
+    private static let maxDelaySamples: Int = 8192
+    nonisolated(unsafe) var timeDelayWriteIdx: Int  = 0
+    nonisolated(unsafe) var timeDelaySamples:  Int  = 0
+    /// Pre-processing signal capture for delta solo; one pointer per channel.
+    private let deltaBufs: [UnsafeMutablePointer<Float>]
+    /// Pause gate: smoothed RMS envelope and gate state.
+    nonisolated(unsafe) var pauseGateLevel:  Float = 0.0
+    nonisolated(unsafe) var pauseGateIsOpen: Bool  = true
+    /// TPDF dither: previous random value to form triangle-PDF noise.
+    nonisolated(unsafe) var ditherPrevRand:  Float = 0.0
+
     // MARK: - Atomic Parameters (main thread → audio thread)
 
     // De-esser
@@ -139,6 +163,33 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _expGRBits:     ManagedAtomic<Int32>       // expander GR dB
     private let _clipperGRBits: ManagedAtomic<Int32>       // clipper GR dB (–6 when engaged)
 
+    // MARK: - Advanced Processing Atomics (main → audio)
+
+    private let _stereoMode:             ManagedAtomic<Int32>  // StereoModeSelection.rawValue
+    private let _dcOffsetEnabled:        ManagedAtomic<Int32>
+    private let _dialogueGateEnabled:    ManagedAtomic<Int32>
+    private let _loudnessContourEnabled: ManagedAtomic<Int32>
+    private let _deesserDynModeEnabled:  ManagedAtomic<Int32>
+    private let _asymmetryTrimBits:      ManagedAtomic<Int32>  // Float bits, dB
+    private let _deharshEnabled:         ManagedAtomic<Int32>
+    private let _deharshTiltBits:        ManagedAtomic<Int32>  // Float bits, dB
+    private let _balanceBits:            ManagedAtomic<Int32>  // Float bits, −1 to +1
+    private let _tpGuardEnabled:         ManagedAtomic<Int32>
+    private let _timeDelayBits:          ManagedAtomic<Int32>  // Float bits, ms
+    private let _deltaSoloEnabled:       ManagedAtomic<Int32>
+    private let _latencyModeBits:        ManagedAtomic<Int32>  // LatencyMode.rawValue
+    private let _pauseGateEnabled:       ManagedAtomic<Int32>
+    private let _syncBufferEnabled:      ManagedAtomic<Int32>
+    private let _ditherModeBits:         ManagedAtomic<Int32>  // DitherMode.rawValue
+
+    // MARK: - Advanced Metrics (audio → main)
+
+    private let _phaseCorrelationBits:   ManagedAtomic<Int32>  // Float bits, −1 to +1
+    private let _crestFactorBits:        ManagedAtomic<Int32>  // Float bits, dB
+    private let _balanceMeterBits:       ManagedAtomic<Int32>  // Float bits, −1 to +1
+    private let _truePeakClipperTripped: ManagedAtomic<Int32>  // sticky 0 / 1
+    private let _truePeakLimiterTripped: ManagedAtomic<Int32>  // sticky 0 / 1
+
     // MARK: - Public GR Accessors
 
     var gainReductionDB: Float {
@@ -167,6 +218,34 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     var clipperGainReductionDB: Float {
         Float(bitPattern: UInt32(bitPattern: _clipperGRBits.load(ordering: .relaxed)))
+    }
+
+    // MARK: - Advanced Metric Accessors
+
+    /// Smoothed Pearson L/R phase correlation (−1.0 anti-phase … +1.0 in-phase).
+    var livePhaseCorrelation: Float {
+        Float(bitPattern: UInt32(bitPattern: _phaseCorrelationBits.load(ordering: .relaxed)))
+    }
+    /// Peak-to-RMS crest factor in dB measured after the compressor stage.
+    var liveCrestFactorDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _crestFactorBits.load(ordering: .relaxed)))
+    }
+    /// Instantaneous balance meter (−1.0 = full left, 0.0 = centre, +1.0 = full right).
+    var liveBalanceMeter: Float {
+        Float(bitPattern: UInt32(bitPattern: _balanceMeterBits.load(ordering: .relaxed)))
+    }
+    /// True if the soft clipper output exceeded 0 dBFS since the last `clearTruePeakFlags()`.
+    var truePeakClipperTripped: Bool {
+        _truePeakClipperTripped.load(ordering: .relaxed) != 0
+    }
+    /// True if the brickwall limiter ceiling was breached since the last `clearTruePeakFlags()`.
+    var truePeakLimiterTripped: Bool {
+        _truePeakLimiterTripped.load(ordering: .relaxed) != 0
+    }
+    /// Resets the sticky true-peak trip flags. Call from the main thread after showing the indicator.
+    func clearTruePeakFlags() {
+        _truePeakClipperTripped.store(0, ordering: .relaxed)
+        _truePeakLimiterTripped.store(0, ordering: .relaxed)
     }
 
     // MARK: - Initialization
@@ -276,6 +355,50 @@ final class DynamicsProcessor: @unchecked Sendable {
         _compGRBits        = ManagedAtomic(floatBits(0.0))
         _expGRBits         = ManagedAtomic(floatBits(0.0))
         _clipperGRBits     = ManagedAtomic(floatBits(0.0))
+
+        // Advanced DSP buffers
+        var delays: [UnsafeMutablePointer<Float>] = []
+        var deltas: [UnsafeMutablePointer<Float>] = []
+        for _ in 0..<ch {
+            let dBuf = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxDelaySamples)
+            dBuf.initialize(repeating: 0, count: Self.maxDelaySamples)
+            delays.append(dBuf)
+            let dtBuf = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxLookAheadSamples)
+            dtBuf.initialize(repeating: 0, count: Self.maxLookAheadSamples)
+            deltas.append(dtBuf)
+        }
+        self.timeDelayBufs = delays
+        self.deltaBufs     = deltas
+
+        // Advanced DSP state arrays (initialised to zero = neutral)
+        self.dcOffsetState = Array(repeating: 0.0, count: 2 * ch)
+        self.deharshState  = Array(repeating: 0.0, count: 2 * ch)
+        self.contourState  = Array(repeating: 0.0, count: 4 * ch)
+
+        // Advanced processing atomics (main → audio)
+        _stereoMode             = ManagedAtomic(Int32(StereoModeSelection.stereo.rawValue))
+        _dcOffsetEnabled        = ManagedAtomic(0)
+        _dialogueGateEnabled    = ManagedAtomic(0)
+        _loudnessContourEnabled = ManagedAtomic(0)
+        _deesserDynModeEnabled  = ManagedAtomic(0)
+        _asymmetryTrimBits      = ManagedAtomic(floatBits(0.0))
+        _deharshEnabled         = ManagedAtomic(0)
+        _deharshTiltBits        = ManagedAtomic(floatBits(-1.5))
+        _balanceBits            = ManagedAtomic(floatBits(0.0))
+        _tpGuardEnabled         = ManagedAtomic(0)
+        _timeDelayBits          = ManagedAtomic(floatBits(0.0))
+        _deltaSoloEnabled       = ManagedAtomic(0)
+        _latencyModeBits        = ManagedAtomic(Int32(LatencyMode.music.rawValue))
+        _pauseGateEnabled       = ManagedAtomic(0)
+        _syncBufferEnabled      = ManagedAtomic(0)
+        _ditherModeBits         = ManagedAtomic(Int32(DitherMode.bypass.rawValue))
+
+        // Advanced metric atomics (audio → main)
+        _phaseCorrelationBits   = ManagedAtomic(floatBits(0.0))
+        _crestFactorBits        = ManagedAtomic(floatBits(0.0))
+        _balanceMeterBits       = ManagedAtomic(floatBits(0.0))
+        _truePeakClipperTripped = ManagedAtomic(0)
+        _truePeakLimiterTripped = ManagedAtomic(0)
     }
 
     deinit {
@@ -288,6 +411,14 @@ final class DynamicsProcessor: @unchecked Sendable {
                 p.deinitialize(count: Self.maxLookAheadSamples)
                 p.deallocate()
             }
+        }
+        for p in timeDelayBufs {
+            p.deinitialize(count: Self.maxDelaySamples)
+            p.deallocate()
+        }
+        for p in deltaBufs {
+            p.deinitialize(count: Self.maxLookAheadSamples)
+            p.deallocate()
         }
     }
 
@@ -362,6 +493,58 @@ final class DynamicsProcessor: @unchecked Sendable {
         lookAheadSize = newSize
     }
 
+    // MARK: - Advanced Processing Setters (main thread)
+
+    func setStereoMode(_ mode: StereoModeSelection) {
+        _stereoMode.store(Int32(mode.rawValue), ordering: .relaxed)
+    }
+    func setDCOffsetFilterEnabled(_ v: Bool) {
+        _dcOffsetEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setDialogueGateEnabled(_ v: Bool) {
+        _dialogueGateEnabled.store(v ? 1 : 0, ordering: .relaxed)
+        lufsProcessor.setDialogueGateEnabled(v)
+    }
+    func setLoudnessContourEnabled(_ v: Bool) {
+        _loudnessContourEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setDeesserDynamicModeEnabled(_ v: Bool) {
+        _deesserDynModeEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setClipperAsymmetryTrimDB(_ db: Float) {
+        _asymmetryTrimBits.store(floatBits(max(-3.0, min(3.0, db))), ordering: .relaxed)
+    }
+    func setDeharshFilterEnabled(_ v: Bool) {
+        _deharshEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setDeharshTiltAmountDB(_ db: Float) {
+        _deharshTiltBits.store(floatBits(max(-6.0, min(0.0, db))), ordering: .relaxed)
+    }
+    func setStereoBalancePosition(_ balance: Float) {
+        _balanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
+    }
+    func setLimiterTruePeakGuardEnabled(_ v: Bool) {
+        _tpGuardEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setStereoTimeDelayMS(_ ms: Float) {
+        _timeDelayBits.store(floatBits(max(0.0, min(20.0, ms))), ordering: .relaxed)
+    }
+    func setDeltaSoloActive(_ v: Bool) {
+        _deltaSoloEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setLatencyMode(_ mode: LatencyMode) {
+        _latencyModeBits.store(Int32(mode.rawValue), ordering: .relaxed)
+    }
+    func setPauseGateEnabled(_ v: Bool) {
+        _pauseGateEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setHardwareSyncBufferEnabled(_ v: Bool) {
+        _syncBufferEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setDitherMode(_ mode: DitherMode) {
+        _ditherModeBits.store(Int32(mode.rawValue), ordering: .relaxed)
+    }
+
     /// Applies a full config snapshot atomically (main thread).
     func applyConfig(_ config: DynamicsConfig, sampleRate: Double) {
         storedSampleRate = sampleRate
@@ -407,6 +590,25 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLimiterAttackMs(config.limiter.attackMs, sampleRate: sampleRate)
         setLimiterReleaseMs(config.limiter.releaseMs, sampleRate: sampleRate)
         setLimiterLookAheadMs(config.limiter.lookAheadMs, sampleRate: sampleRate)
+
+        // Advanced processing (sections A–J)
+        let adv = config.advanced
+        setStereoMode(adv.stereoMode)
+        setDCOffsetFilterEnabled(adv.dcOffsetFilterEnabled)
+        setDialogueGateEnabled(adv.loudnessDialogueGateEnabled)
+        setLoudnessContourEnabled(adv.loudnessContourEnabled)
+        setDeesserDynamicModeEnabled(adv.deesserDynamicModeEnabled)
+        setClipperAsymmetryTrimDB(adv.clipperAsymmetryTrimDB)
+        setDeharshFilterEnabled(adv.deharshFilterEnabled)
+        setDeharshTiltAmountDB(adv.deharshTiltAmountDB)
+        setStereoBalancePosition(adv.stereoBalancePosition)
+        setLimiterTruePeakGuardEnabled(adv.limiterTruePeakGuardEnabled)
+        setStereoTimeDelayMS(adv.stereoTimeDelayMS)
+        setDeltaSoloActive(adv.deltaSoloActive)
+        setLatencyMode(adv.latencyMode)
+        setPauseGateEnabled(adv.pauseGateEnabled)
+        setHardwareSyncBufferEnabled(adv.hardwareSyncBufferEnabled)
+        setDitherMode(adv.ditherMode)
     }
 
     /// Called when the pipeline sample rate changes (main thread).
@@ -431,6 +633,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLimiterReleaseMs(releaseMs, sampleRate: sampleRate)
         stereoWidener.resetState()
         lufsProcessor.resetState(sampleRate: sampleRate)
+
+        // Reset advanced DSP state
+        for i in 0..<dcOffsetState.count { dcOffsetState[i] = 0 }
+        for i in 0..<deharshState.count  { deharshState[i]  = 0 }
+        for i in 0..<contourState.count  { contourState[i]  = 0 }
+        crestPeakEnv    = 0.0
+        crestRmsEnv     = 0.0
+        pauseGateLevel  = 0.0
+        pauseGateIsOpen = true
+        ditherPrevRand  = 0.0
+        for p in timeDelayBufs { p.initialize(repeating: 0, count: Self.maxDelaySamples) }
+        timeDelayWriteIdx = 0
     }
 
     // MARK: - DSP Processing (audio thread)
@@ -452,36 +666,305 @@ final class DynamicsProcessor: @unchecked Sendable {
         let softOn    = _softClipperEnabled.load(ordering: .relaxed) != 0
         let limOn     = _limiterEnabled.load(ordering: .relaxed) != 0
 
-        guard wideOn || lufsOn || deEsserOn || mbOn || compOn || expOn || softOn || limOn else {
+        let stereoModeRaw = _stereoMode.load(ordering: .relaxed)
+        let dcOn          = _dcOffsetEnabled.load(ordering: .relaxed) != 0
+        let contourOn     = _loudnessContourEnabled.load(ordering: .relaxed) != 0
+        let deharshOn     = _deharshEnabled.load(ordering: .relaxed) != 0
+        let pauseOn       = _pauseGateEnabled.load(ordering: .relaxed) != 0
+        let ditherMode    = _ditherModeBits.load(ordering: .relaxed)
+        let deltaSoloOn   = _deltaSoloEnabled.load(ordering: .relaxed) != 0
+
+        guard stereoModeRaw != 0 || dcOn || wideOn || lufsOn || contourOn
+                || deEsserOn || mbOn || compOn || expOn || softOn || limOn
+                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn else {
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
             return
         }
 
-        // Stage 0a: Stereo Widener (before de-esser)
+        // Capture pre-chain signal for delta solo (must be first).
+        if deltaSoloOn { captureDeltaInput(abl: abl, numCh: numCh, count: count) }
+
+        // Stage −1: Stereo mode fold-down.
+        if stereoModeRaw != 0 { processStereoMode(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 0: DC offset filter.
+        if dcOn { processDCOffset(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 0a: Stereo Widener.
         if wideOn { stereoWidener.process(abl: abl, numCh: numCh, count: count, sampleRate: storedSampleRate) }
 
-        // Stage 0b: LUFS gain correction, then measurement update (after widening)
+        // Stage 0b: LUFS Loudness Match.
         if lufsOn {
             lufsProcessor.applyGain(abl: abl, numCh: numCh, count: count)
             lufsProcessor.update(abl: abl, numCh: numCh, count: count, sampleRate: storedSampleRate)
         }
 
+        // Stage 0c: Loudness Contouring.
+        if contourOn { processLoudnessContour(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 1: De-Esser.
         if deEsserOn { processDeEsser(abl: abl, numCh: numCh, count: count) }
-        if mbOn      { processMultiband(abl: abl, numCh: numCh, count: count) }
-        if compOn    { processCompressor(abl: abl, numCh: numCh, count: count) }
-        if expOn     { processExpander(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 2: Multiband Compressor.
+        if mbOn { processMultiband(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 3: Compressor.
+        if compOn { processCompressor(abl: abl, numCh: numCh, count: count) }
+
+        // Crest factor measurement after compressor.
+        measureCrestFactor(abl: abl, numCh: numCh, count: count)
+
+        // Stage 4: Expander.
+        if expOn { processExpander(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 5: Soft Clipper + Brickwall Limiter.
         processSoftClipperAndLimiter(abl: abl, numCh: numCh, count: count, softOn: softOn, limOn: limOn)
 
-        // Report per-stage GR to main thread
+        // Stage 6: De-Harsh Tilt Filter.
+        if deharshOn { processDeHarsh(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 7: Balance Matrix + Inter-Channel Time Delay.
+        processBalanceAndDelay(abl: abl, numCh: numCh, count: count)
+
+        // Stage 8: Dynamic Pause Gate.
+        if pauseOn { processPauseGate(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 9: TPDF Dither.
+        if ditherMode != 0 { processTPDFDither(abl: abl, numCh: numCh, count: count, mode: ditherMode) }
+
+        // Stage 10: Delta Solo (subtract original from processed).
+        if deltaSoloOn { processDeltaSolo(abl: abl, numCh: numCh, count: count) }
+
+        // Report per-stage GR to main thread.
         _deEsserGRBits.store(floatBits(deEsserEnvDB), ordering: .relaxed)
         let mbLowGRdB  = mbGainLow  > 1e-9 ? 20.0 * log10(mbGainLow)  : -90.0
         let mbMidGRdB  = mbGainMid  > 1e-9 ? 20.0 * log10(mbGainMid)  : -90.0
         let mbHighGRdB = mbGainHigh > 1e-9 ? 20.0 * log10(mbGainHigh) : -90.0
-        _mbLowGRBits.store(floatBits(mbLowGRdB),  ordering: .relaxed)
-        _mbMidGRBits.store(floatBits(mbMidGRdB),  ordering: .relaxed)
-        _mbHighGRBits.store(floatBits(mbHighGRdB), ordering: .relaxed)
-        _compGRBits.store(floatBits(compEnvDB), ordering: .relaxed)
-        _expGRBits.store(floatBits(expEnvDB),   ordering: .relaxed)
+        _mbLowGRBits.store(floatBits(mbLowGRdB),   ordering: .relaxed)
+        _mbMidGRBits.store(floatBits(mbMidGRdB),   ordering: .relaxed)
+        _mbHighGRBits.store(floatBits(mbHighGRdB),  ordering: .relaxed)
+        _compGRBits.store(floatBits(compEnvDB),     ordering: .relaxed)
+        _expGRBits.store(floatBits(expEnvDB),       ordering: .relaxed)
+    }
+
+    // MARK: - Advanced Modules (A–J)
+
+    @inline(__always)
+    private func captureDeltaInput(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let safeCount = min(count, Self.maxLookAheadSamples)
+        for ch in 0..<numCh {
+            guard let src = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let dst = deltaBufs[ch]
+            for i in 0..<safeCount { dst[i] = src[i] }
+        }
+    }
+
+    @inline(__always)
+    private func processStereoMode(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        guard numCh >= 2 else { return }
+        guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+              let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
+        for i in 0..<count {
+            let mid = 0.5 * (bufL[i] + bufR[i])
+            bufL[i] = mid
+            bufR[i] = mid
+        }
+    }
+
+    /// 1-pole DC blocker: y[n] = x[n] − x[n−1] + R·y[n−1], R ≈ 1 − 2π·fc/sr, fc ≈ 0.5 Hz.
+    @inline(__always)
+    private func processDCOffset(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let r: Float = 1.0 - Float(2.0 * Double.pi * 0.5 / storedSampleRate)
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            var xPrev = dcOffsetState[ch * 2]
+            var yPrev = dcOffsetState[ch * 2 + 1]
+            for i in 0..<count {
+                let x = buf[i]
+                let y = x - xPrev + r * yPrev
+                xPrev = x
+                yPrev = y
+                buf[i] = y
+            }
+            dcOffsetState[ch * 2]     = xPrev
+            dcOffsetState[ch * 2 + 1] = yPrev
+        }
+    }
+
+    /// Fletcher-Munson loudness compensation: low shelf +3 dB at 80 Hz, high shelf +1.5 dB at 6 kHz.
+    @inline(__always)
+    private func processLoudnessContour(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let sr = storedSampleRate
+        let (b0ls, b1ls, b2ls, a1ls, a2ls) = Self.lowShelfCoeffs(fc: 80.0, gainDB:  3.0, sr: sr)
+        let (b0hs, b1hs, b2hs, a1hs, a2hs) = Self.highShelfCoeffs(fc: 6000.0, gainDB: 1.5, sr: sr)
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            var w1ls = contourState[ch * 4]
+            var w2ls = contourState[ch * 4 + 1]
+            var w1hs = contourState[ch * 4 + 2]
+            var w2hs = contourState[ch * 4 + 3]
+            for i in 0..<count {
+                let s1 = Self.processBiquad(buf[i], b0: b0ls, b1: b1ls, b2: b2ls, na1: a1ls, na2: a2ls, w1: &w1ls, w2: &w2ls)
+                buf[i] = Self.processBiquad(s1,     b0: b0hs, b1: b1hs, b2: b2hs, na1: a1hs, na2: a2hs, w1: &w1hs, w2: &w2hs)
+            }
+            contourState[ch * 4]     = w1ls
+            contourState[ch * 4 + 1] = w2ls
+            contourState[ch * 4 + 2] = w1hs
+            contourState[ch * 4 + 3] = w2hs
+        }
+    }
+
+    /// Peak-to-RMS crest factor measurement after the compressor stage.
+    @inline(__always)
+    private func measureCrestFactor(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let peakDecay: Float = Float(exp(-1.0 / (storedSampleRate * 0.400)))
+        let rmsDecay:  Float = Float(exp(-1.0 / (storedSampleRate * 0.300)))
+        for i in 0..<count {
+            var peak: Float = 0.0
+            var rmsSum: Float = 0.0
+            for ch in 0..<numCh {
+                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                let s = buf[i]
+                let a = s < 0 ? -s : s
+                if a > peak { peak = a }
+                rmsSum += s * s
+            }
+            crestPeakEnv = max(peak, peakDecay * crestPeakEnv)
+            crestRmsEnv  = rmsDecay * crestRmsEnv + (1.0 - rmsDecay) * (rmsSum / Float(max(numCh, 1)))
+        }
+        let peakDB: Float = crestPeakEnv > 1e-10 ? 20.0 * log10(crestPeakEnv) : -100.0
+        let rmsDB:  Float = crestRmsEnv  > 1e-10 ? 10.0 * log10(crestRmsEnv)  : -100.0
+        _crestFactorBits.store(floatBits(max(0.0, peakDB - rmsDB)), ordering: .relaxed)
+    }
+
+    /// High-frequency tilt filter applied after the brickwall limiter (de-harsh mode).
+    @inline(__always)
+    private func processDeHarsh(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let tiltDB = bitsToFloat(_deharshTiltBits.load(ordering: .relaxed))
+        let (b0, b1, b2, na1, na2) = Self.highShelfCoeffs(fc: 3500.0, gainDB: tiltDB, sr: storedSampleRate)
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            var w1 = deharshState[ch * 2]
+            var w2 = deharshState[ch * 2 + 1]
+            for i in 0..<count {
+                buf[i] = Self.processBiquad(buf[i], b0: b0, b1: b1, b2: b2, na1: na1, na2: na2, w1: &w1, w2: &w2)
+            }
+            deharshState[ch * 2]     = w1
+            deharshState[ch * 2 + 1] = w2
+        }
+    }
+
+    /// Constant-power balance matrix, inter-channel time delay, and live balance meter.
+    @inline(__always)
+    private func processBalanceAndDelay(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        guard numCh >= 2,
+              let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+              let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
+
+        // Constant-power balance law.
+        let balance = bitsToFloat(_balanceBits.load(ordering: .relaxed))
+        let angle   = (balance + 1.0) * Float.pi * 0.25   // 0 … π/2
+        let gainL   = max(0.0, cos(angle))
+        let gainR   = max(0.0, sin(angle))
+        for i in 0..<count { bufL[i] *= gainL; bufR[i] *= gainR }
+
+        // Live balance meter: (powerR − powerL) / totalPower.
+        var powerL: Float = 0.0, powerR: Float = 0.0
+        for i in 0..<count { powerL += bufL[i] * bufL[i]; powerR += bufR[i] * bufR[i] }
+        let total = powerL + powerR
+        _balanceMeterBits.store(
+            floatBits(total > 1e-12 ? (powerR - powerL) / total : 0.0),
+            ordering: .relaxed
+        )
+
+        // Inter-channel time delay (right channel delayed relative to left).
+        let delayMs      = bitsToFloat(_timeDelayBits.load(ordering: .relaxed))
+        let newDelay     = Int((delayMs / 1000.0) * Float(storedSampleRate) + 0.5)
+        let delaySamples = min(newDelay, Self.maxDelaySamples - 1)
+        timeDelaySamples = delaySamples
+        guard delaySamples > 0 else { return }
+
+        let delayBuf = timeDelayBufs[1]
+        let bufSize  = Self.maxDelaySamples
+        for i in 0..<count {
+            delayBuf[timeDelayWriteIdx] = bufR[i]
+            let readIdx = (timeDelayWriteIdx - delaySamples + bufSize) % bufSize
+            bufR[i] = delayBuf[readIdx]
+            timeDelayWriteIdx = (timeDelayWriteIdx + 1) % bufSize
+        }
+    }
+
+    /// Dynamic pause gate: silences output smoothly when RMS falls below −60 dBFS for 500 ms.
+    @inline(__always)
+    private func processPauseGate(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let holdAlpha: Float = Float(exp(-1.0 / (storedSampleRate * 0.5)))
+        let threshold: Float = 1e-6  // −60 dBFS power
+        for i in 0..<count {
+            var rmsSum: Float = 0.0
+            for ch in 0..<numCh {
+                if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
+                    rmsSum += buf[i] * buf[i]
+                }
+            }
+            pauseGateLevel  = holdAlpha * pauseGateLevel + (1.0 - holdAlpha) * (rmsSum / Float(max(numCh, 1)))
+            pauseGateIsOpen = pauseGateLevel >= threshold
+
+            if !pauseGateIsOpen {
+                for ch in 0..<numCh {
+                    if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
+                        buf[i] = 0.0
+                    }
+                }
+            }
+        }
+    }
+
+    /// TPDF dither at 24-bit LSB. `mode == 1` is flat TPDF, `mode == 2` is first-order noise-shaped.
+    @inline(__always)
+    private func processTPDFDither(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int, mode: Int32
+    ) {
+        let lsb: Float = 1.0 / 8_388_608.0  // 2^−23 (24-bit LSB amplitude)
+        for i in 0..<count {
+            let r1 = Float.random(in: -lsb...lsb)
+            let r2 = Float.random(in: -lsb...lsb)
+            let noise: Float = mode == 2 ? (r1 - ditherPrevRand) : (r1 + r2)
+            ditherPrevRand = r2
+            for ch in 0..<numCh {
+                if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
+                    buf[i] += noise
+                }
+            }
+        }
+    }
+
+    /// Delta solo: outputs the difference (processed − original) so you can hear what the chain adds.
+    @inline(__always)
+    private func processDeltaSolo(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let safeCount = min(count, Self.maxLookAheadSamples)
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let orig = deltaBufs[ch]
+            for i in 0..<safeCount { buf[i] -= orig[i] }
+        }
     }
 
     // MARK: - Module 1: De-Esser
@@ -496,7 +979,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         let alphaAtt = Self.computeAlpha(tauSeconds: 0.001, sampleRate: sr)
         let alphaRel = Self.computeAlpha(tauSeconds: 0.050, sampleRate: sr)
         let (b0, b1, b2, na1, na2) = Self.bpfCoeffs(fc: freqHz, q: 2.0, sr: sr)
+        let dynMode  = _deesserDynModeEnabled.load(ordering: .relaxed) != 0
         var env = deEsserEnvDB
+        // Per-frame BPF output store for dynamic EQ mode (max 2 channels; stack-allocated).
+        var bpfOut0: Float = 0.0
+        var bpfOut1: Float = 0.0
 
         for frame in 0..<count {
             var sidePeak: Float = 0.0
@@ -507,6 +994,8 @@ final class DynamicsProcessor: @unchecked Sendable {
                 let y = Self.processBiquad(buf[frame], b0: b0, b1: b1, b2: b2, na1: na1, na2: na2, w1: &w1, w2: &w2)
                 deEsserFilterState[ch * 2]     = w1
                 deEsserFilterState[ch * 2 + 1] = w2
+                // Store BPF outputs so the dynamic-EQ gain path can use them.
+                if ch == 0 { bpfOut0 = y } else if ch == 1 { bpfOut1 = y }
                 let absY = y < 0 ? -y : y
                 if absY > sidePeak { sidePeak = absY }
             }
@@ -516,9 +1005,20 @@ final class DynamicsProcessor: @unchecked Sendable {
                 ? alphaAtt * env + (1.0 - alphaAtt) * target
                 : alphaRel * env + (1.0 - alphaRel) * target
             let gain = pow(10.0, env * 0.05)
-            for ch in 0..<numCh {
-                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                buf[frame] *= gain
+            if dynMode {
+                // Dynamic EQ mode: attenuate only the sibilant BPF band, leaving the
+                // rest of the spectrum untouched (subtractive EQ rather than wideband gain).
+                if numCh > 0, let buf = abl[0].mData?.assumingMemoryBound(to: Float.self) {
+                    buf[frame] += bpfOut0 * (gain - 1.0)
+                }
+                if numCh > 1, let buf = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+                    buf[frame] += bpfOut1 * (gain - 1.0)
+                }
+            } else {
+                for ch in 0..<numCh {
+                    guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    buf[frame] *= gain
+                }
             }
         }
         deEsserEnvDB = env
@@ -955,6 +1455,46 @@ final class DynamicsProcessor: @unchecked Sendable {
         let na1   =  2.0 * cosW * a0inv
         let na2   = -(1.0 - alpha) * a0inv
         return (b0, 0.0, b2, na1, na2)
+    }
+
+    /// 2nd-order low shelf (Audio EQ Cookbook, S=1 matched slope).
+    /// Returns (b0, b1, b2, na1, na2) where na1/na2 are pre-negated for processBiquad.
+    private static func lowShelfCoeffs(fc: Float, gainDB: Float, sr: Double) -> (Float, Float, Float, Float, Float) {
+        let A    = pow(10.0, Double(gainDB) / 40.0)
+        let w0   = 2.0 * Double.pi * Double(max(fc, 10.0)) / sr
+        let cosW = cos(w0); let sinW = sin(w0)
+        let alp  = sinW * 0.7071067811865476  // sinW / √2  (S=1)
+        let s2A  = 2.0 * sqrt(A) * alp
+        let Ap1  = A + 1.0;  let Am1 = A - 1.0
+        let b0f  = A * (Ap1 - Am1 * cosW + s2A)
+        let b1f  = 2.0 * A * (Am1 - Ap1 * cosW)
+        let b2f  = A * (Ap1 - Am1 * cosW - s2A)
+        let a0f  = Ap1 + Am1 * cosW + s2A
+        let a1f  = -2.0 * (Am1 + Ap1 * cosW)   // already signed
+        let a2f  = Ap1 + Am1 * cosW - s2A
+        let inv  = 1.0 / a0f
+        return (Float(b0f*inv), Float(b1f*inv), Float(b2f*inv),
+                Float(-a1f*inv), Float(-a2f*inv))   // na1 = −a1/a0, na2 = −a2/a0
+    }
+
+    /// 2nd-order high shelf (Audio EQ Cookbook, S=1 matched slope).
+    /// Returns (b0, b1, b2, na1, na2) where na1/na2 are pre-negated for processBiquad.
+    private static func highShelfCoeffs(fc: Float, gainDB: Float, sr: Double) -> (Float, Float, Float, Float, Float) {
+        let A    = pow(10.0, Double(gainDB) / 40.0)
+        let w0   = 2.0 * Double.pi * Double(max(fc, 10.0)) / sr
+        let cosW = cos(w0); let sinW = sin(w0)
+        let alp  = sinW * 0.7071067811865476  // sinW / √2  (S=1)
+        let s2A  = 2.0 * sqrt(A) * alp
+        let Ap1  = A + 1.0;  let Am1 = A - 1.0
+        let b0f  = A * (Ap1 + Am1 * cosW + s2A)
+        let b1f  = -2.0 * A * (Am1 + Ap1 * cosW)
+        let b2f  = A * (Ap1 + Am1 * cosW - s2A)
+        let a0f  = Ap1 - Am1 * cosW + s2A
+        let a1f  = 2.0 * (Am1 - Ap1 * cosW)    // already signed
+        let a2f  = Ap1 - Am1 * cosW - s2A
+        let inv  = 1.0 / a0f
+        return (Float(b0f*inv), Float(b1f*inv), Float(b2f*inv),
+                Float(-a1f*inv), Float(-a2f*inv))   // na1 = −a1/a0, na2 = −a2/a0
     }
 
     // MARK: - Static Helpers

@@ -576,6 +576,27 @@ final class RenderPipeline {
         callbackContext?.dynamicsProcessor.clipperGainReductionDB ?? 0.0
     }
 
+    // MARK: - Advanced Metric Accessors
+
+    var livePhaseCorrelation: Float {
+        callbackContext?.dynamicsProcessor.livePhaseCorrelation ?? 0.0
+    }
+    var liveCrestFactorDB: Float {
+        callbackContext?.dynamicsProcessor.liveCrestFactorDB ?? 0.0
+    }
+    var liveBalanceMeter: Float {
+        callbackContext?.dynamicsProcessor.liveBalanceMeter ?? 0.0
+    }
+    var truePeakClipperTripped: Bool {
+        callbackContext?.dynamicsProcessor.truePeakClipperTripped ?? false
+    }
+    var truePeakLimiterTripped: Bool {
+        callbackContext?.dynamicsProcessor.truePeakLimiterTripped ?? false
+    }
+    func clearTruePeakFlags() {
+        callbackContext?.dynamicsProcessor.clearTruePeakFlags()
+    }
+
     /// Updates the boost gain applied before input gain.
     /// Used for volume boost (>100%) when output device can't go higher.
     /// Linear scale: 1.0 = unity (no boost), 2.0 = 2x boost (6dB gain).

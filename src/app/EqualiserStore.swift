@@ -297,6 +297,40 @@ final class EqualiserStore: ObservableObject {
         dynamicsConfig = dyn
     }
 
+    /// Updates advanced processing parameters (sections A–J) and propagates to the audio pipeline.
+    func updateAdvancedProcessing(_ advanced: AdvancedProcessingConfig) {
+        var config = eqConfiguration.dynamicsConfig
+        config.advanced = advanced
+        dynamicsConfig = config
+    }
+
+    // MARK: - Advanced Live Metrics (audio thread → main thread)
+
+    /// Smoothed Pearson L/R phase correlation (−1.0 anti-phase … +1.0 in-phase).
+    var livePhaseCorrelation: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.livePhaseCorrelation ?? 0.0
+    }
+    /// Peak-to-RMS crest factor in dB after the compressor stage.
+    var liveCrestFactorDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.liveCrestFactorDB ?? 0.0
+    }
+    /// Channel balance meter (−1.0 = full left, 0.0 = centre, +1.0 = full right).
+    var liveBalanceMeter: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.liveBalanceMeter ?? 0.0
+    }
+    /// True if the soft clipper exceeded 0 dBFS since the last `clearTruePeakFlags()`.
+    var truePeakClipperTripped: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.truePeakClipperTripped ?? false
+    }
+    /// True if the brickwall limiter ceiling was breached since the last `clearTruePeakFlags()`.
+    var truePeakLimiterTripped: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.truePeakLimiterTripped ?? false
+    }
+    /// Resets sticky true-peak trip indicators (call from main thread after displaying).
+    func clearTruePeakFlags() {
+        routingCoordinator.pipelineManager.renderPipeline?.clearTruePeakFlags()
+    }
+
     // MARK: - Per-Stage Gain Reduction (audio thread → main thread)
 
     /// Reads the latest value atomically from the audio thread. 0 dB = no reduction.

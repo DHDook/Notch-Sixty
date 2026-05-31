@@ -297,31 +297,255 @@ struct LoudnessMatchConfig: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Stereo Mode Selection
+
+/// Stereo fold-down mode applied before all other processing stages.
+enum StereoModeSelection: Int, Codable, Equatable, Sendable {
+    /// Full stereo signal passes through unchanged. Default.
+    case stereo   = 0
+    /// Mid-only signal sent to both channels (narrow / wide-mono).
+    case wideMono = 1
+    /// True mono: sum L+R halved, output identical on both channels.
+    case trueMono = 2
+}
+
+// MARK: - Latency Mode
+
+/// Optimisation target for audio processing latency.
+enum LatencyMode: Int, Codable, Equatable, Sendable {
+    /// Prioritise lowest possible latency (music production, monitoring).
+    case music = 0
+    /// Prioritise audio/video synchronisation (film, broadcast, streaming).
+    case movie = 1
+}
+
+// MARK: - Dither Mode
+
+/// Output dither algorithm applied as the final processing stage.
+enum DitherMode: Int, Codable, Equatable, Sendable {
+    /// No dither applied. Default.
+    case bypass = 0
+    /// Triangle PDF dither — minimum bias, 24-bit LSB noise floor.
+    case tpdf   = 1
+    /// Noise-shaped dither — perceptually weighted for 44.1 / 48 kHz.
+    case shaped = 2
+}
+
+// MARK: - Advanced Processing Configuration
+
+/// Extended processing parameters covering spatial, spectral, and system features.
+///
+/// All parameters default to neutral / bypassed values and use `decodeIfPresent`
+/// so presets saved before this struct existed load cleanly.
+///
+/// Live metrics (`highResDecouplingActive`) are computed at runtime and not persisted.
+struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
+
+    // ── A. High-Resolution Coefficient Decoupling (display only) ──────
+    /// Automatically true when the session sample rate exceeds 96 kHz.
+    /// Shown in System Utilities; never written to disk.
+    var highResDecouplingActive: Bool = false
+
+    // ── B. Loudness Dialogue Gate ─────────────────────────────────────
+    /// Raises the LUFS gating floor from −70 dBFS to −60 dBFS, excluding
+    /// low-level ambience from the loudness measurement.
+    var loudnessDialogueGateEnabled: Bool = false
+
+    // ── C. Clipper Phase Asymmetry Trim ───────────────────────────────
+    /// Applies an asymmetric gain offset (dB) at the soft clipper output
+    /// to compensate for transient waveform asymmetry. Range: −3 to +3 dB.
+    var clipperAsymmetryTrimDB: Float = 0.0
+
+    // ── D. Dynamic EQ Mode (De-Esser) ─────────────────────────────────
+    /// When enabled the de-esser operates as a frequency-selective dynamic
+    /// EQ, attenuating only the sibilant band rather than the full signal.
+    var deesserDynamicModeEnabled: Bool = false
+
+    // ── D. De-Harsh Tilt Filter ───────────────────────────────────────
+    var deharshFilterEnabled: Bool = false
+    /// High-frequency attenuation amount. Range: −6 to 0 dB. Default: −1.5 dB.
+    var deharshTiltAmountDB: Float = -1.5
+
+    // ── D. Stereo Balance Matrix ───────────────────────────────────────
+    /// Channel balance. −1.0 = full left, 0.0 = centre, +1.0 = full right.
+    var stereoBalancePosition: Float = 0.0
+
+    // ── E. Loudness Contouring ────────────────────────────────────────
+    /// Applies a gentle Fletcher-Munson compensation curve, boosting bass
+    /// and treble to counteract reduced sensitivity at quiet listening levels.
+    var loudnessContourEnabled: Bool = false
+
+    // ── E. True-Peak Auto-Guard ───────────────────────────────────────
+    /// Enables inter-sample peak detection in the limiter, applying an
+    /// additional −1.5 dBFS safety margin below the configured ceiling.
+    var limiterTruePeakGuardEnabled: Bool = false
+
+    // ── E. Inter-Channel Time Delay ───────────────────────────────────
+    /// Delays the right channel relative to left (positive = right delayed).
+    /// Range: 0 to 20 ms. Default: 0 ms.
+    var stereoTimeDelayMS: Float = 0.0
+
+    // ── F. DC Offset Filter ───────────────────────────────────────────
+    /// Inserts a 0.5 Hz single-pole high-pass filter at the very start of
+    /// the chain to eliminate any DC component in the signal.
+    var dcOffsetFilterEnabled: Bool = false
+
+    // ── F. Delta Solo Monitoring ──────────────────────────────────────
+    /// Outputs the difference between processed and unprocessed signal so
+    /// the contribution of the dynamics chain can be monitored in isolation.
+    var deltaSoloActive: Bool = false
+
+    // ── F. Latency Mode ───────────────────────────────────────────────
+    var latencyMode: LatencyMode = .music
+
+    // ── G. Dynamic Pause Gate ─────────────────────────────────────────
+    /// Smoothly silences output during extended near-silence, preventing
+    /// amplifier noise and click artefacts on audio resume.
+    var pauseGateEnabled: Bool = false
+
+    // ── G. Stereo Mode Fold-Down ──────────────────────────────────────
+    var stereoMode: StereoModeSelection = .stereo
+
+    // ── H. Hardware Sync / Pre-Buffer Engine ──────────────────────────
+    /// Aligns the CoreAudio I/O buffer size to the Latency Mode setting
+    /// (128 frames for Music, 512 frames for Movie).
+    var hardwareSyncBufferEnabled: Bool = false
+
+    // ── I. TPDF Dither Matrix ─────────────────────────────────────────
+    var ditherMode: DitherMode = .bypass
+
+    // MARK: - Codable
+
+    static let `default` = AdvancedProcessingConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case loudnessDialogueGateEnabled
+        case clipperAsymmetryTrimDB
+        case deesserDynamicModeEnabled
+        case deharshFilterEnabled, deharshTiltAmountDB
+        case stereoBalancePosition
+        case loudnessContourEnabled
+        case limiterTruePeakGuardEnabled
+        case stereoTimeDelayMS
+        case dcOffsetFilterEnabled
+        case deltaSoloActive
+        case latencyMode
+        case pauseGateEnabled
+        case stereoMode
+        case hardwareSyncBufferEnabled
+        case ditherMode
+        // highResDecouplingActive is not persisted (runtime-computed)
+    }
+
+    init(
+        highResDecouplingActive: Bool = false,
+        loudnessDialogueGateEnabled: Bool = false,
+        clipperAsymmetryTrimDB: Float = 0.0,
+        deesserDynamicModeEnabled: Bool = false,
+        deharshFilterEnabled: Bool = false,
+        deharshTiltAmountDB: Float = -1.5,
+        stereoBalancePosition: Float = 0.0,
+        loudnessContourEnabled: Bool = false,
+        limiterTruePeakGuardEnabled: Bool = false,
+        stereoTimeDelayMS: Float = 0.0,
+        dcOffsetFilterEnabled: Bool = false,
+        deltaSoloActive: Bool = false,
+        latencyMode: LatencyMode = .music,
+        pauseGateEnabled: Bool = false,
+        stereoMode: StereoModeSelection = .stereo,
+        hardwareSyncBufferEnabled: Bool = false,
+        ditherMode: DitherMode = .bypass
+    ) {
+        self.highResDecouplingActive     = highResDecouplingActive
+        self.loudnessDialogueGateEnabled = loudnessDialogueGateEnabled
+        self.clipperAsymmetryTrimDB      = clipperAsymmetryTrimDB
+        self.deesserDynamicModeEnabled   = deesserDynamicModeEnabled
+        self.deharshFilterEnabled        = deharshFilterEnabled
+        self.deharshTiltAmountDB         = deharshTiltAmountDB
+        self.stereoBalancePosition       = stereoBalancePosition
+        self.loudnessContourEnabled      = loudnessContourEnabled
+        self.limiterTruePeakGuardEnabled = limiterTruePeakGuardEnabled
+        self.stereoTimeDelayMS           = stereoTimeDelayMS
+        self.dcOffsetFilterEnabled       = dcOffsetFilterEnabled
+        self.deltaSoloActive             = deltaSoloActive
+        self.latencyMode                 = latencyMode
+        self.pauseGateEnabled            = pauseGateEnabled
+        self.stereoMode                  = stereoMode
+        self.hardwareSyncBufferEnabled   = hardwareSyncBufferEnabled
+        self.ditherMode                  = ditherMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        loudnessDialogueGateEnabled = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessDialogueGateEnabled) ?? false
+        clipperAsymmetryTrimDB      = try c.decodeIfPresent(Float.self,                 forKey: .clipperAsymmetryTrimDB)      ?? 0.0
+        deesserDynamicModeEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .deesserDynamicModeEnabled)   ?? false
+        deharshFilterEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .deharshFilterEnabled)        ?? false
+        deharshTiltAmountDB         = try c.decodeIfPresent(Float.self,                 forKey: .deharshTiltAmountDB)         ?? -1.5
+        stereoBalancePosition       = try c.decodeIfPresent(Float.self,                 forKey: .stereoBalancePosition)       ?? 0.0
+        loudnessContourEnabled      = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessContourEnabled)      ?? false
+        limiterTruePeakGuardEnabled = try c.decodeIfPresent(Bool.self,                  forKey: .limiterTruePeakGuardEnabled) ?? false
+        stereoTimeDelayMS           = try c.decodeIfPresent(Float.self,                 forKey: .stereoTimeDelayMS)           ?? 0.0
+        dcOffsetFilterEnabled       = try c.decodeIfPresent(Bool.self,                  forKey: .dcOffsetFilterEnabled)       ?? false
+        deltaSoloActive             = try c.decodeIfPresent(Bool.self,                  forKey: .deltaSoloActive)             ?? false
+        latencyMode                 = try c.decodeIfPresent(LatencyMode.self,           forKey: .latencyMode)                 ?? .music
+        pauseGateEnabled            = try c.decodeIfPresent(Bool.self,                  forKey: .pauseGateEnabled)            ?? false
+        stereoMode                  = try c.decodeIfPresent(StereoModeSelection.self,   forKey: .stereoMode)                  ?? .stereo
+        hardwareSyncBufferEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .hardwareSyncBufferEnabled)   ?? false
+        ditherMode                  = try c.decodeIfPresent(DitherMode.self,            forKey: .ditherMode)                  ?? .bypass
+        highResDecouplingActive     = false  // always computed at runtime
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(loudnessDialogueGateEnabled,   forKey: .loudnessDialogueGateEnabled)
+        try c.encode(clipperAsymmetryTrimDB,        forKey: .clipperAsymmetryTrimDB)
+        try c.encode(deesserDynamicModeEnabled,     forKey: .deesserDynamicModeEnabled)
+        try c.encode(deharshFilterEnabled,          forKey: .deharshFilterEnabled)
+        try c.encode(deharshTiltAmountDB,           forKey: .deharshTiltAmountDB)
+        try c.encode(stereoBalancePosition,         forKey: .stereoBalancePosition)
+        try c.encode(loudnessContourEnabled,        forKey: .loudnessContourEnabled)
+        try c.encode(limiterTruePeakGuardEnabled,   forKey: .limiterTruePeakGuardEnabled)
+        try c.encode(stereoTimeDelayMS,             forKey: .stereoTimeDelayMS)
+        try c.encode(dcOffsetFilterEnabled,         forKey: .dcOffsetFilterEnabled)
+        try c.encode(deltaSoloActive,               forKey: .deltaSoloActive)
+        try c.encode(latencyMode,                   forKey: .latencyMode)
+        try c.encode(pauseGateEnabled,              forKey: .pauseGateEnabled)
+        try c.encode(stereoMode,                    forKey: .stereoMode)
+        try c.encode(hardwareSyncBufferEnabled,     forKey: .hardwareSyncBufferEnabled)
+        try c.encode(ditherMode,                    forKey: .ditherMode)
+    }
+}
+
 // MARK: - Combined Dynamics Configuration
 
 /// Full dynamics configuration covering all processing stages.
 ///
-/// Signal chain:
-/// Stereo Widener → Loudness Match → De-Esser → Multiband Compressor
-/// → Compressor → Expander → Soft Clipper → Brickwall Limiter.
+/// Extended signal chain:
+/// [Stereo Fold-Down] → [DC Offset Filter] → Stereo Widener → Loudness Match
+/// → [Loudness Contour] → De-Esser → Multiband Compressor → Compressor
+/// → Expander → Soft Clipper → [De-Harsh] → Brickwall Limiter
+/// → [Balance + Time Delay] → [Pause Gate] → [TPDF Dither] → [Delta Solo].
 ///
 /// All fields use `decodeIfPresent` so presets saved before a field was introduced
 /// load cleanly and fall back to the safe neutral default for that stage.
 struct DynamicsConfig: Codable, Equatable, Sendable {
-    var stereoWidener:      StereoWidenerConfig      = .default
-    var loudnessMatch:      LoudnessMatchConfig       = .default
-    var deEsser:            DeEsserConfig             = .default
-    var multibandCompressor: MultibandCompressorConfig = .default
-    var compressor:         CompressorConfig          = .default
-    var expander:           ExpanderConfig            = .default
-    var softClipper:        SoftClipperConfig         = .default
-    var limiter:            BrickwallLimiterConfig     = .default
+    var stereoWidener:       StereoWidenerConfig       = .default
+    var loudnessMatch:       LoudnessMatchConfig        = .default
+    var deEsser:             DeEsserConfig              = .default
+    var multibandCompressor: MultibandCompressorConfig  = .default
+    var compressor:          CompressorConfig           = .default
+    var expander:            ExpanderConfig             = .default
+    var softClipper:         SoftClipperConfig          = .default
+    var limiter:             BrickwallLimiterConfig      = .default
+    /// Advanced / extended processing parameters (sections A–J).
+    var advanced:            AdvancedProcessingConfig   = .default
 
     static let `default` = DynamicsConfig()
 
     private enum CodingKeys: String, CodingKey {
         case stereoWidener, loudnessMatch, deEsser, multibandCompressor
-        case compressor, expander, softClipper, limiter
+        case compressor, expander, softClipper, limiter, advanced
     }
 
     init(
@@ -332,7 +556,8 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         compressor: CompressorConfig = .default,
         expander: ExpanderConfig = .default,
         softClipper: SoftClipperConfig = .default,
-        limiter: BrickwallLimiterConfig = .default
+        limiter: BrickwallLimiterConfig = .default,
+        advanced: AdvancedProcessingConfig = .default
     ) {
         self.stereoWidener       = stereoWidener
         self.loudnessMatch       = loudnessMatch
@@ -342,18 +567,20 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         self.expander            = expander
         self.softClipper         = softClipper
         self.limiter             = limiter
+        self.advanced            = advanced
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        stereoWidener       = try c.decodeIfPresent(StereoWidenerConfig.self,      forKey: .stereoWidener)       ?? .default
-        loudnessMatch       = try c.decodeIfPresent(LoudnessMatchConfig.self,      forKey: .loudnessMatch)       ?? .default
-        deEsser             = try c.decodeIfPresent(DeEsserConfig.self,            forKey: .deEsser)             ?? .default
+        stereoWidener       = try c.decodeIfPresent(StereoWidenerConfig.self,       forKey: .stereoWidener)       ?? .default
+        loudnessMatch       = try c.decodeIfPresent(LoudnessMatchConfig.self,       forKey: .loudnessMatch)       ?? .default
+        deEsser             = try c.decodeIfPresent(DeEsserConfig.self,             forKey: .deEsser)             ?? .default
         multibandCompressor = try c.decodeIfPresent(MultibandCompressorConfig.self, forKey: .multibandCompressor) ?? .default
-        compressor          = try c.decodeIfPresent(CompressorConfig.self,         forKey: .compressor)          ?? .default
-        expander            = try c.decodeIfPresent(ExpanderConfig.self,           forKey: .expander)            ?? .default
-        softClipper         = try c.decodeIfPresent(SoftClipperConfig.self,        forKey: .softClipper)         ?? .default
-        limiter             = try c.decodeIfPresent(BrickwallLimiterConfig.self,   forKey: .limiter)             ?? .default
+        compressor          = try c.decodeIfPresent(CompressorConfig.self,          forKey: .compressor)          ?? .default
+        expander            = try c.decodeIfPresent(ExpanderConfig.self,            forKey: .expander)            ?? .default
+        softClipper         = try c.decodeIfPresent(SoftClipperConfig.self,         forKey: .softClipper)         ?? .default
+        limiter             = try c.decodeIfPresent(BrickwallLimiterConfig.self,    forKey: .limiter)             ?? .default
+        advanced            = try c.decodeIfPresent(AdvancedProcessingConfig.self,  forKey: .advanced)            ?? .default
     }
 
     func encode(to encoder: Encoder) throws {
@@ -366,5 +593,6 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         try c.encode(expander,            forKey: .expander)
         try c.encode(softClipper,         forKey: .softClipper)
         try c.encode(limiter,             forKey: .limiter)
+        try c.encode(advanced,            forKey: .advanced)
     }
 }

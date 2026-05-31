@@ -27,8 +27,10 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     // MARK: - Atomics (main thread → audio thread)
 
-    private let _enabled:            ManagedAtomic<Int32>
-    private let _targetLUFSBits:     ManagedAtomic<Int32>  // Float bits
+    private let _enabled:                ManagedAtomic<Int32>
+    private let _targetLUFSBits:         ManagedAtomic<Int32>  // Float bits
+    /// When non-zero, raises the gate floor from −70 dBFS to −60 dBFS.
+    private let _dialogueGateEnabled:    ManagedAtomic<Int32>
 
     // MARK: - Audio-Thread State
 
@@ -68,8 +70,9 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     // MARK: - Initialisation
 
     init() {
-        _enabled        = ManagedAtomic(0)
-        _targetLUFSBits = ManagedAtomic(floatBitsL(-16.0))
+        _enabled             = ManagedAtomic(0)
+        _targetLUFSBits      = ManagedAtomic(floatBitsL(-16.0))
+        _dialogueGateEnabled = ManagedAtomic(0)
         kwState1  = Array(repeating: 0.0, count: 2 * 2)  // 2 channels × 2 state vars
         kwState2  = Array(repeating: 0.0, count: 2 * 2)
         powerFIFO = Array(repeating: 0.0, count: Self.maxFIFOBlocks)
@@ -82,6 +85,7 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     func setEnabled(_ v: Bool)              { _enabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setTargetLUFS(_ lufs: Float)       { _targetLUFSBits.store(floatBitsL(lufs), ordering: .relaxed) }
+    func setDialogueGateEnabled(_ v: Bool)  { _dialogueGateEnabled.store(v ? 1 : 0, ordering: .relaxed) }
 
     func applyConfig(_ config: LoudnessMatchConfig) {
         setEnabled(config.isEnabled)
@@ -160,13 +164,16 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
         }
 
         // Step 3: compute integrated loudness from FIFO (excluding gated blocks)
+        let activeGate: Float = _dialogueGateEnabled.load(ordering: .relaxed) != 0
+            ? 1e-6   // −60 dBFS: power = (10^(−60/20))² = 1e-6
+            : Self.gateThreshold
         var totalPower: Float = 0.0
         var validBlocks: Int  = 0
         let blocksToRead = min(fifoFilled, fifoCapacity)
         let startIdx = fifoWriteIndex - blocksToRead
         for k in 0..<blocksToRead {
             let p = powerFIFO[(startIdx + k) % Self.maxFIFOBlocks]
-            if p >= Self.gateThreshold {
+            if p >= activeGate {
                 totalPower += p
                 validBlocks += 1
             }

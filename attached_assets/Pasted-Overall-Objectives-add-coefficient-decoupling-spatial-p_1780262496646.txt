@@ -1,0 +1,718 @@
+Overall Objectives: add coefficient decoupling, spatial phase, loudness gate, true-peak diagnostics, phase asymmetry correction, crest factor tracking, dynamic EQ filter, treble roll-off, and balance matrix, dc offset filter, delta auditing, latency mode switch, time-delay, ISP autoguard, loudness contouring, dynamic pause gating, stereo mode fold-down logic, dynamic buffer size automation, bit-depth padding, TPDF dither matrix, pre-buffer engine,
+
+A. Refactoring Directive: Double-Precision High-Resolution Coefficient Decoupling Matrix
+
+Objective
+Refactor the coefficient generation and biquad calculation loops inside src/dsp/BiquadFilter.swift to protect against digital coefficient crowding, clamping, and numerical rounding noise when operating at ultra-high-resolution sample rates up to 384 kHz. This specification instructs the agent to decouple the mathematical filter pole calculations into a high-precision Double context, leveraging bilinear transformation mapping before updating the real-time background processing vectors.
+
+
+
+1. The Core Bottleneck: Coefficient Crowding at 384 kHz
+When executing standard biquad Infinite Impulse Response (IIR) filter equations at extreme sample rates like 384,000 Hz, the digital filter's mathematical poles and zeros get compressed aggressively close to the edge of the unit circle boundary (\(z = 1\)).
+If calculated using standard single-precision (Float) variables, the microscopic rounding approximations manifest as a harsh digital noise floor buildup in the high frequencies, subtly "blurring" transient clarity and altering your target \(Q\) boundaries.
+To maintain pristine audio clarity over your bi-amped Klipsch horn tweeters, coefficient calculation must be decoupled from standard float execution, utilizing hardware-accelerated double-precision mapping layers instead.
+
+
+
+2. UI Layout & State Configuration
+Action: No interactive UI component changes are required for the main screen.
+Settings Readout: Inside the "System Utilities" configuration menu tab, update the status tracking block to register when this adaptive calculation layer triggers.
+State Variable Mapping: Map this serialization tracking token into your core state structures:
+
+swift
+var highResDecouplingActive: Bool = false // Automatically flips true if active rate exceeds 96.0 kHz
+
+3. Core DSP Mathematical Framework & DecouPLING LOGIC
+Instruct the engine to process coefficient calculations inside your configuration state handlers using double-precision structures (vDSP_biquad_SetupD), mapping results to the real-time audio thread lock-free.
+
+#### 2. Mathematical Scaling Implementation Rule
+When calculating the raw transfer function variables ($b_0, b_1, b_2, a_1, a_2$) for any active EQ band, if the `activeSystemSampleRate` atomic value reads higher than 96000.0 Hz:
+- Force the coefficient generator to calculate the raw filter trigonometry angles using double-precision floating-point numbers (`Double` or `vDSP_biquad_SetupD`).
+- Implement an automated Bilinear Transformation scaling algorithm to gracefully map the calculated filter poles and zeros from a normalized reference space up to the active 384 kHz hardware execution grid.
+
+```swift
+// REFACTOR ACTION: Double-Precision High-Resolution Coefficient Calculator Hook
+func computeHighResBiquadCoefficients(targetFreq: Double, targetGain: Double, targetQ: Double, sampleRate: Double) {
+    // Utilize double-precision math to entirely prevent digital coefficient crowding noise at 384 kHz
+    let w0 = 2.0 * Double.pi * targetFreq / sampleRate
+    let alpha = sin(w0) / (2.0 * targetQ)
+    
+    // Execute hardware-accelerated double-precision coefficient scaling via Accelerate Framework
+    // This keeps the high-end transients of your music mathematically pure, stable, and transparent
+    let b0 = (1.0 + alpha * A) / a0
+    // [Pass final scaled vector parameters directly to the Stage 01 rendering loop]
+
+
+B. Refactoring Directive: Spatial Phase, Loudness Gate, & True-Peak Diagnostics Integration
+
+Objective
+Integrate a real-time Phase Correlation Meter, an Automatic Loudness Gate Toggle, and True-Peak Inter-Sample Over-Indicators into the macOS equalizer application (DHDook/equaliser-adv). Refactor the existing UI components and the CoreAudio data thread loops to incorporate these diagnostic tools cleanly into your 2-column layout grid.
+
+
+
+1. UI Layout & Grid Realignment
+
+Main View Stack Additions
+Phase Correlation Meter: Render a slim horizontal progress-bar meter positioned directly underneath the Stereo Widener Master Bypass Toggle in Column 2. Scale the meter to map visually from left to right spanning a numerical range of -1.0 to +1.0.
+True-Peak Over-Indicators: Add two small circular LED visual components positioned directly above the top boundary of Meter 7 (Clipper Meter) and Meter 8 (Limiter Meter) in Column 1.
+
+Dynamics Configuration Menu Additions
+Dialogue Gate Toggle: Inside the existing "Loudness Match" section, insert a new master checkbox or switch labeled "Dialogue Gate" directly beneath the Target Level slider. Enforce the strict height rule ensuring the parent menu frame auto-scales to contain this row without introducing vertical scrollbars.
+
+
+
+2. State & Preset Serialization
+Map these new structural variables to your global configuration state containers to ensure they load and save alongside individual EQ presets:
+
+swift
+var loudnessDialogueGateEnabled: Bool = true
+var livePhaseCorrelationValue: Float = 1.0  // Stored tracking parameter
+var truePeakClipperTripped: Bool = false    // Visual warning state
+var truePeakLimiterTripped: Bool = false    // Visual warning state
+Use code with caution.
+
+
+
+
+3. Core DSP Mathematical Framework & Processing Logic
+Instruct the engine to calculate these metric parameters inside the CoreAudio loop and pipe them safely via lock-free atomic transfers to the UI Main Thread.
+
+Step A: Phase Correlation Mathematics
+Directly inside your Three-Band Stereo Widener module execution block, track the phase relationship of the final combined output samples before passing the vectors downstream. For every processing block, calculate the dot product of the Left and Right channel arrays:
+\(\text{Covariance}(L,R)=\sum _{n=0}^{N-1}(x_{\text{L}}[n]\cdot x_{\text{R}}[n])\)
+\(\text{Energy}_{\text{L}}=\sum _{n=0}^{N-1}(x_{\text{L}}[n])^{2},\quad \text{Energy}_{\text{R}}=\sum _{n=0}^{N-1}(x_{\text{R}}[n])^{2}\)
+Compute the running alignment metric:
+\(\text{Correlation}=\frac{\text{Covariance}(L,R)}{\sqrt{\text{Energy}_{\text{L}}\cdot \text{Energy}_{\text{R}}}+\epsilon }\)
+Atomically store this resulting value (-1.0 to +1.0) into livePhaseCorrelationValue to drive the horizontal main UI bar movement.
+
+Step B: Dialogue Gate Condition Logic
+Inside your Real-Time LUFS Loudness Matching module, wrap the short-term window summation calculation loop inside an absolute boundary condition tree matching your UI state toggle:
+
+swift
+// REFACTOR ACTION: Update LUFS Ring Buffer Block Evaluator
+if loudnessDialogueGateEnabled {
+    // Exclude the current processing block if its total energy falls below the noise threshold floor
+    if currentBlockPowerDB < -70.0 {
+        // Halt short-term ring buffer collection for this block window to freeze gain adjustments
+        return 
+    }
+}
+Use code with caution.
+
+
+Step C: 4x Oversampling Inter-Sample True Peak Detection
+Directly inside the processing loops for both your Clipper and Limiter modules, implement a 4x oversampling interpolation filter (using an FIR polyphase filter structure) on the output channel streams to catch inter-sample peaks.
+If any interpolated mathematical sample value breaches 1.0 (equivalent to 0.0 dBFS), instantly set the matching boolean flag (truePeakClipperTripped or truePeakLimiterTripped) to true.
+Apply a 2.0-second visual hold timer inside your 60 Hz UI Main Thread ballistics loop to ensure the red warning LED remains statically illuminated on the screen long enough for human eyes to trap before decaying cleanly back to an unlit state.
+
+
+
+4. Action Steps for the Agent
+Refactor UI Constraints: Update your 2-column main screen layout file. Inject the horizontal phase tracker below the Widener switch, and seat the two circular clip lights above the peak meters. Update the Loudness panel layout to accept the Dialogue Gate switch safely.
+Inject Monitoring Math: Thread the covariance phase formulas directly into the Stereo Widener node, and append the 4x interpolation peak checks to your final safety ceiling processors.
+Bridge State Channels: Thread these diagnostic data metrics through your lock-free atomic transfer layer to keep the UI smooth and completely detached from the CoreAudio audio pipeline execution thread.
+
+
+C. Refactoring Directive: Phase Asymmetry Correction & Crest Factor Tracking Integration
+
+
+Objective
+Integrate an Asymmetry Correction phase network and a real-time Crest Factor dynamic tracker meterinto the macOS equalizer application (DHDook/equaliser-adv). Refactor the layout configuration maps and background CoreAudio loop callbacks to inject these tools natively into your 2-column user interface environment.
+
+
+
+1. UI Layout & Grid Component Integration
+
+Main View Stack Additions
+Crest Factor Meter: Render a narrow vertical LED style meter positioned in Column 1, seated directly below Row 5 (Compressor row) and directly above Row 6 (Expander row).
+Visual Direction: Scale the visual bar to fill upward from a bottom baseline of 0 dB to a top maximum limit of 20 dB. Color-code the bar to illuminate in Deep Blue/Green between 10 dB and 20 dB (high dynamic punch), transitioning down to Amber/Red below 6 dB (heavy dynamic squashing).
+
+Dynamics Configuration Menu Additions
+Asymmetry Trim Control: Inside the existing "Clipper" parameter section, insert a new linear slider labeled "Asymmetry Trim".
+Range: 0% (Bypassed / Linear phase) to 100% (Maximum phase rotation dispersion).
+Safe Default: 50% (Provides optimal waveform balancing for speech and acoustic transient material).
+Height Enforcements: Enforce the auto-scaling rule ensuring the parent view container expands horizontally to preserve the zero vertical scrolling rule.
+
+
+
+2. State & Preset Serialization
+Map these new tracking properties to your configuration state files to ensure parameter serialization within individual EQ presets:
+
+swift
+var clipperAsymmetryTrim: Float = 0.5    // 50% Safe Default Phase Rotation
+var liveCrestFactorValue: Float = 12.0   // Running dynamic punch metric
+Use code with caution.
+
+
+
+
+3. Core DSP Mathematical Framework & Processing Logic
+Instruct the engine to calculate these parameters using hardware-accelerated functions inside your background audio block threads.
+
+Step A: Asymmetry All-Pass Phase Rotation Network
+Directly inside the input initialization block of your Clipper module, pass the incoming stereo stream through a cascaded chain of four 1st-order All-Pass Filters before executing any waveform clipping.
+The clipperAsymmetryTrim slider changes the filter coefficient variables (\(\alpha _{\text{phase}}\)) to shift the phase angles of the frequencies between \(100\text{ Hz}\) and \(500\text{ Hz}\) by 90 degrees relative to each other.
+Mathematical Formula: For each sample channel, compute:
+\(y[n]=\alpha _{\text{phase}}\cdot x[n]+x[n-1]-\alpha _{\text{phase}}\cdot y[n-1]\)
+This disperses the lopsided peaks symmetrically across the zero axis, creating uniform headroom for both positive and negative voltage peaks.
+
+Step B: Crest Factor Dynamic Calculation Loop
+Directly inside your wideband Compressor processing module, compute the running variance between peak levels and average levels over the current audio processing buffer block.
+Capture the absolute maximum peak level inside the current block: \(\text{BlockPeak} = \max(\vert{}x[0]\vert{} \dots \vert{}x[N-1]\vert{})\).
+Calculate the Root-Mean-Square (RMS) power over the exact same block window:
+\(\text{BlockRMS}=\sqrt{\frac{1}{N}\sum _{n=0}^{N-1}(x[n])^{2}}\)
+Convert both metrics into the logarithmic decibel domain and isolate their variance delta:
+\(\text{Peak}_{\text{dB}}=20\cdot \log _{10}(\text{BlockPeak}+10^{-5})\)
+\(\text{RMS}_{\text{dB}}=20\cdot \log _{10}(\text{BlockRMS}+10^{-5})\)
+\(\Delta \text{Crest}_{\text{dB}}=\text{Peak}_{\text{dB}}-\text{RMS}_{\text{dB}}\)
+Atomically store this value directly into liveCrestFactorValue. Apply a smooth 150 ms ballistics decay filter inside your 60 Hz UI thread refresh loop to drive the upward-bouncing Crest Factor meter smoothly.
+
+
+
+4. Action Steps for the Agent
+Refactor UI Constraints: Update your 2-column main dashboard container layout. Mount the upward-filling Crest Factor indicator bar into the space between the Compressor and Expander groupings. Open the Clipper settings code and insert the Asymmetry slider seamlessly.
+Deploy Phase & Extraction Math: Implement the all-pass array filtering logic inside the Clipper pipeline block, and thread the Peak/RMS decibel subtraction loop into the wideband Compressor thread.
+Audit Thread Safety: Enforce the atomic .store() and .load() rules across clipperAsymmetryTrimand liveCrestFactorValue to guarantee that your diagnostic monitoring tools cannot interfere with the real-time playback thread.
+D. Analog Tilt, & Balance Matrix Integration
+
+
+Objective
+Integrate a Dynamic EQ mode selection configuration, a high-end analog-modeled Global High-Frequency Tilt Filter (De-Harsh), a real-time Stereo Balance optimization matrix, and associated visual tracking indicators into the macOS equalizer application (DHDook/equaliser-adv). Refactor the interface layout containers, tooltip strings, and CoreAudio background rendering loop callbacks to execute these analytical pipelines within a strict, non-scrolling two-column grid structure.
+
+
+
+1. UI Layout & Grid Component Integration
+
+Main View UI Grid (The Functional Stack)
+Action: Update the main view dashboard layout to seamlessly seat the new switches and meters without disrupting the dual-column symmetry or adding layout padding.
+De-Harsh Toggle: Mount a standalone master bypass switch in Column 2 as Row 3 (Right Side), positioned directly beneath the spatial vector mapping components.
+Stereo Balance Control Group: Render a horizontal adjustment slider paired directly with a thin center-pivoted horizontal volume bar meter at the bottom of Column 2 as Row 4 (Right Side).
+
+text
+========================================================================
+[COLUMN 1: METERED DYNAMICS (LEFT)]      [COLUMN 2: SPATIAL & UTILITY (RIGHT)]
+========================================================================
+Row 1: [De-Esser Meter]  -> [Toggle]      Row 1: [Stereo Widener Toggle]
+Row 2: [MB Low Meter]  ┐                 Row 2: [Loudness Match Toggle]
+Row 3: [MB Mid Meter]  ├─> [Toggle]           [Horizontal Phase Meter]
+Row 4: [MB High Meter] ┘                      [Square Vector Map / Plot]
+Row 5: [Compressor Meter] -> [Toggle]     Row 3: [De-Harsh Filter Toggle]
+Row 5b:[Crest Factor Meter] -> (No Toggle) Row 4: [Balance Toggle / Slider Row]
+Row 6: [Expander Meter]   -> [Toggle]         [Horizontal Balance Meter]
+Row 7: [Clipper Meter+Hold]-> [Toggle]     
+Row 8: [Limiter Meter]    -> [Toggle]     
+Use code with caution.
+
+
+Dynamics Configuration Menu Additions
+Dynamic EQ Toggle Switch: Inside the existing "De-Esser" section, insert a new master checkbox or switch labeled "Dynamic EQ Mode" beneath the threshold controls.
+De-Harsh Parameter Section: Create a new configuration section labeled "De-Harsh" directly below the Stereo Widener section. Populate it with one linear layout slider:
+Slider 1: "De-Harsh Tilt" — Range: -3.0 dB (Maximum treble reduction / see-saw tilt) to 0.0 dB(Flat / Completely bypassed). Default: 0.0 dB.
+Height Constraints Enforcements: Adjust parent layout constraints dynamically to ensure all controls expand cleanly without violating the strict zero vertical scrolling rule.
+
+
+
+2. Tooltip Definition Updates
+Action: Update the unified text tooltip box situated above the main screen grid layout to cleanly integrate the functional definitions for the new De-Harsh and Dynamic EQ sub-systems.
+Exact Text String to Inject:
+"Stereo Widener: Adjusts multi-band spatial fields to expand guitars and ambient sounds while keeping low bass centered. Loudness Match: Automatically smooths out long-term volume offsets between disparate source tracks to a stable target LUFS baseline. De-Esser: Tames harsh high-frequency sibilance ('S' and 'T' vocal sounds). Dynamic EQ Mode: Converts the De-Esser into a localized dynamic cut, saving surrounding high-end air. Multiband Compressor: Separately controls the dynamics of independent low, mid, and high frequency bands. Compressor: Balances the wideband dynamic range to glue the stereo mix together. Expander: Gently attenuates sub-threshold elements to lower background noise or expand flat mixes. De-Harsh: Employs a phase-pure analog see-saw tilt to naturally smooth bright production styles. Clipper: Shaves microsecond transient peaks to maximize clean headroom. Limiter: Acts as an absolute brickwall ceiling to stop digital clipping distortion."
+
+
+
+3. State & Preset Serialization
+Map these variables into your core serialization models to ensure parameter values load and save alongside individual EQ presets:
+
+swift
+var deesserDynamicModeEnabled: Bool = false
+var deharshFilterEnabled: Bool = false
+var deharshTiltAmountDB: Float = 0.0        // Range: -3.0 dB to 0.0 dB
+var stereoBalancePosition: Float = 0.0      // Range: -1.0 (Hard Left) to +1.0 (Hard Right)
+var liveBalanceMeterValue: Float = 0.0     // Real-time tracking parameter centered at 0.0
+Use code with caution.
+
+
+
+
+4. Core DSP Mathematical Framework & Processing Logic
+Instruct the engine to calculate these parameters using hardware-accelerated functions inside your background audio block threads.
+
+Step A: Dynamic EQ Band-Compression Upgrade
+Directly inside your existing De-Esser processing class, modify the gain reduction step to handle frequency-selective cuts if deesserDynamicModeEnabled reads true:
+Instead of multiplying the calculated linear reduction factor (\(G_{\text{linear}}\)) across the entire wideband buffer, pass the buffer through an internal parametric biquad band-pass filter node centered at deesserFreq.
+Dynamically scale down the gain coefficient (\(dB\)) of only that isolated filter band based on the raw attenuation tracker value, leaving the surrounding sample arrays structurally uncompressed.
+
+Step B: Analog-Modeled Global High-Frequency Tilt Filter
+Directly inside the rendering callback executing immediately after your main parametric EQ engine, implement a 1st-order phase-pure global tilt filter topology running on the main stereo stream.
+Set a fixed, musical pivot frequency point (\(f_{\text{pivot}}\)) at \(1000\text{ Hz}\). This serves as the acoustic center gravity axis (the see-saw center).
+When deharshTiltAmountDB is modified, calculate the low and high frequency gain multipliers to tilt the spectrum linearly. For a target treble cut of \(A = \text{deharshTiltAmountDB}\) (where \(A\) is negative, e.g., \(-2.0\text{ dB}\)), the matching see-saw compensation boost applied to the lower frequencies is calculated as:
+\(\text{Gain}_{\text{Low}}=-0.5\cdot A\)
+\(\text{Gain}_{\text{High}}=0.5\cdot A\)
+Construct a 1st-order shelving transfer function where the high frequencies are attenuated smoothly from the pivot up to the Nyquist limit, and low frequencies are proportionally stabilized, preserving identical RMS total volume and maintaining a pristine phase response without digital transient smearing.
+
+Step C: Inter-Channel Balance Scaling & RMS Metering
+At the absolute terminal output boundary of your CoreAudio callback track, calculate the balance metrics and apply stereo center leveling overrides:
+Compute the independent RMS power of both the Left and Right channel blocks:
+\(\text{RMS}_{\text{L}}=\sqrt{\frac{1}{N}\sum _{n=0}^{N-1}(x_{\text{left}}[n])^{2}},\quad \text{RMS}_{\text{R}}=\sqrt{\frac{1}{N}\sum _{n=0}^{N-1}(x_{\text{right}}[n])^{2}}\)
+Store the variance delta into your shared atomic parameter tracker:
+\(\text{liveBalanceMeterValue}=20\cdot \log _{10}(\text{RMS}_{\text{L}})-20\cdot \log _{10}(\text{RMS}_{\text{R}}+10^{-5})\)
+Apply the inverse volume scaling factors from your balance slider array inputs onto the channel frames to alter physical playback leveling:
+If stereoBalancePosition \(\le 0.0\) (Panning Left): Multiply Right channel frames by \((1.0 - \vert\text{stereoBalancePosition}\vert)\).
+If stereoBalancePosition \(>0.0\) (Panning Right): Multiply Left channel frames by \((1.0 - \text{stereoBalancePosition})\).
+
+
+
+5. Action Steps for the Agent
+Refactor UI Constraints: Update your 2-column main screen layout file. Inject the De-Harsh toggle row, and position the horizontal balance tracking bar at the bottom of the right column grid. Update the tooltips with the text block from Section 2. Open the configuration menus and mount the dynamic EQ switch and De-Harsh Tilt sliders.
+Deploy Global Tilt & Balance Scaling Math:
+
+Adjust your De-Esser code execution path to process localized biquad cuts, thread the analog see-saw tilt filter below the EQ arrays, and apply the final scalar gain balance logic to the output vectors.
+Bridge State Channels via Atomics: Thread these state tracking data properties through your lock-free atomic transfer layer to guarantee your visual meters read smoothly without interrupting background playback.
+E. Refactoring Directive: Microsecond Time Delay, ISP Auto-Guard, & Dynamic Loudness Contours
+
+
+Objective
+Integrate an Inter-Channel Time Delay (ICTD) matrix, an Oversampled True-Peak Safety Guard, and a real-time Dynamic Loudness Contour (Fletcher-Munson) Filter into the macOS equalizer application (DHDook/equaliser-adv). Refactor the interface layout containers, tooltip strings, and CoreAudio background rendering loop callbacks to execute these specialized non-synthetic enhancements within a strict, non-scrolling two-column grid structure.
+
+
+
+1. UI Layout & Grid Component Integration
+
+Main View UI Grid (The Functional Stack Updates)
+Loudness Contour Toggle: Mount a standalone master bypass switch in Column 2 as Row 4 (Right Side), positioned directly beneath the De-Harsh switch.
+Time & Stereo Balance Control Group: Expand the existing balance group at the absolute bottom of Column 2 as Row 5 (Right Side). Render two closely nested horizontal adjustment sliders (labeled "Symmetry Balance" and "Time Alignment") paired directly above the single center-pivoted horizontal volume bar meter.
+
+Dynamics Configuration Menu Additions
+True-Peak Guard Toggle Switch: Inside the existing "Limiter" section, insert a new master checkbox or switch labeled "Enable True-Peak Auto-Guard" beneath the standard ceiling controls.
+Height Constraints Enforcements: Adjust parent layout constraints dynamically to ensure all controls expand horizontally cleanly, enforcing the strict zero vertical scrolling rule.
+
+
+
+2. Tooltip Definition Updates
+Action: Update the unified text tooltip box situated above the main screen grid layout to cleanly integrate the functional definitions for these final optimization sub-systems.
+Exact Text String to Inject:
+"Stereo Widener: Adjusts multi-band spatial fields to expand guitars and ambient sounds while keeping low bass centered. Loudness Match: Automatically smooths out long-term volume offsets between disparate source tracks to a stable target LUFS baseline. De-Esser: Tames harsh high-frequency sibilance ('S' and 'T' vocal sounds). Dynamic EQ Mode: Converts the De-Esser into a localized dynamic cut, saving surrounding high-end air. Multiband Compressor: Separately controls the dynamics of independent low, mid, and high frequency bands. Compressor: Balances the wideband dynamic range to glue the stereo mix together. Expander: Gently attenuates sub-threshold elements to lower background noise or expand flat mixes. De-Harsh: Employs a phase-pure analog see-saw tilt to naturally smooth bright production styles. Loudness Contour: Dynamically balances sub-bass and treble curves during low-volume playback to counteract human hearing deficiencies. Clipper: Shaves microsecond transient peaks to maximize clean headroom. Limiter: Acts as an absolute brickwall ceiling to stop digital clipping distortion. True-Peak Auto-Guard: Forces the limiter to utilize 4x oversampling to actively eliminate analog inter-sample distortion."
+
+
+
+3. State & Preset Serialization
+Map these variables into your core serialization models to ensure parameter values load and save alongside individual EQ presets:
+
+swift
+var loudnessContourEnabled: Bool = false
+var limiterTruePeakGuardEnabled: Bool = false
+var stereoTimeDelayMS: Float = 0.0          // Range: -10.0 ms (Left Delayed) to +10.0 ms (Right Delayed)
+Use code with caution.
+
+
+
+
+4. Core DSP Mathematical Framework & Processing Logic
+Instruct the engine to calculate these parameters using hardware-accelerated functions inside your background audio block threads.
+
+Step A: Real-Time Dynamic Loudness Contour Filter
+Directly inside your Real-Time LUFS Loudness Matching module execution thread, implement a dual-band shelving boost network that triggers conditionally based on your target volume state:
+Read the user's active targetLoudnessLUFS parameter. If loudnessContourEnabled is true, calculate a depth attenuation offset relative to a standard studio mixing volume reference baseline of \(-14\text{ LUFS}\):
+\(\text{VolumeOffset}=\max (0.0,-14.0-\text{targetLoudnessLUFS})\)
+Use this calculated scalar to dynamically apply an inverted Fletcher-Munson equal-loudness curve [2]. Multiply low-shelving (\(60\text{ Hz}\)) and high-shelving (\(12\text{ kHz}\)) filter gains directly proportional to the offset:
+\(\text{Gain}_{\text{Bass\_Boost}}=\text{VolumeOffset}\cdot 0.25\)
+\(\text{Gain}_{\text{Treble\_Boost}}=\text{VolumeOffset}\cdot 0.10\)
+This automatically thickens the bass and lifts the air transparently only when the application is set to quiet playback targets, bypassing entirely when listening at loud cinematic thresholds.
+
+Step B: Microsecond Inter-Channel Time Delay (ICTD) Matrix
+At the terminal output boundary of your CoreAudio callback track, immediately adjacent to your Stereo Balance scaling logic, implement an fractional sample interpolation delay lines loop:
+Based on the slider parameter value of stereoTimeDelayMS, calculate the equivalent integer sample frame offset: \(\text{SampleDelay} = \text{abs}(\text{stereoTimeDelayMS}) \cdot (f_s / 1000.0)\).
+Delay Routing:
+If stereoTimeDelayMS \(\le 0.0\): Route the Left channel sample vectors through a short circular FIFO buffer delay line by the calculated sample frame offset.
+If stereoTimeDelayMS \(>0.0\): Route the Right channel sample vectors through a short circular FIFO buffer delay line by the calculated sample frame offset.
+
+Step C: Oversampled True-Peak Safety Limiting Guard
+Directly inside your Limiter module, rewrite the peak-detection code path to execute an absolute look-ahead conditional branches:
+If limiterTruePeakGuardEnabled reads true, pass the incoming signal through your 4x FIR polyphase interpolation filter matrix before analyzing the sidechain envelope.
+The limiter must track the continuous inter-sample peak envelope instead of discrete digital sample peaks. If an interpolated sub-sample peak breaches your limiter ceiling, the engine must apply rapid, look-ahead gain reduction to suppress the inter-sample spike completely, passing a pristine, analog-safe waveform to your external stereo system components.
+
+
+
+5. Action Steps for the Agent
+Refactor UI Grid Constraints: Update your 2-column main dashboard container file. Inject the Loudness Contour toggle row, and expand the bottom group layout of Column 2 to accept the Time Delay and Balance sliders stacked side-by-side above the horizontal VU bar. Inject the True-Peak Auto-Guard check-box safely into your Limiter configuration layout window.
+Deploy Time Interp & Contour Math Filters: Thread the equal-loudness shelving coefficients into your Loudness Match module, initialize a thread-safe circular sample array line for the microsecond speaker delays, and map the look-ahead oversampling loop inside your final Limiter engine.
+Bridge State Channels via Atomics: Thread these parameters through your lock-free atomic transfer layer to guarantee your real-time CoreAudio background playback remains non-blocking and stable under all operating conditions.
+F.Refactoring Directive: DC Offset Filtering, Delta Auditing, & Latency Mode Switching
+
+
+Objective
+Integrate a 1st-order DC Offset Removal Filter, a phase-inverted Dynamic Delta Solo Auditing Matrix, and a selectable Look-Ahead Latency Compensation Selector into the macOS equalizer application (DHDook/equaliser-adv). Refactor the interface layout containers, tooltip strings, global configuration structures, and CoreAudio background rendering loop callbacks to execute these operational utilities.
+
+
+
+1. UI Layout & Grid Component Integration
+
+Main View UI Grid (The Functional Stack Updates)
+Action: Update the bottom rows of Column 2 (Right Side) to integrate the new operational controls. Ensure all additions align symmetrically with the existing rows in Column 1.
+DC Filter & Delta Solo Row: Add a horizontal dual-component row inside Column 2 as Row 7 (Right Side), pairing a master bypass toggle labeled "DC Filter" directly to the left of an action button labeled "Delta Solo".
+Latency Mode Selector Row: Add a horizontal segmented picker control inside Column 2 as Row 8 (Right Side), labeled "Latency Mode". The picker must contain exactly two options: Music and Movie.
+
+text
+========================================================================
+[COLUMN 1: METERED DYNAMICS (LEFT)]      [COLUMN 2: SPATIAL & UTILITY (RIGHT)]
+========================================================================
+Row 1: [De-Esser Meter]  -> [Toggle]      Row 1: [Stereo Widener Toggle]
+Row 2: [MB Low Meter]  ┐                 Row 2: [Loudness Match Toggle]
+Row 3: [MB Mid Meter]  ├─> [Toggle]           [Horizontal Phase Meter]
+Row 4: [MB High Meter] ┘                      [Square Vector Map / Plot]
+Row 5: [Compressor Meter] -> [Toggle]     Row 3: [De-Harsh Filter Toggle]
+Row 5b:[Crest Factor Meter] -> (No Toggle) Row 4: [Loudness Contour Toggle]
+Row 6: [Expander Meter]   -> [Toggle]     Row 5: [Time/Balance Toggle Slider Row]
+Row 7: [Clipper Meter+Hold]-> [Toggle]     Row 6: [Stream Status 384kHz Label]
+                                          Row 7: [DC Filter Switch] -> [Delta Solo]
+Row 8: [Limiter Meter]    -> [Toggle]     Row 8: [Latency Mode: Music / Movie]
+Use code with caution.
+
+
+Dynamics Configuration Menu Additions
+Action: Create a final configuration section labeled "System Utilities" inside the Dynamics panel, positioned directly underneath the Limiter section.
+Controls: Duplicate or group the DC Filter, Delta Solo, and Latency Mode parameter states here for detailed user calibration.
+Height Constraints Enforcements: Adjust parent layout parameters dynamically to ensure all controls fit tightly, adhering to the strict zero vertical scrolling rule across all view panels.
+
+
+
+2. Tooltip Definition Updates
+Action: Update the unified text tooltip box situated above the main screen grid layout to cleanly integrate the functional definitions for these operational sub-systems.
+Exact Text String to Inject:
+"Stereo Widener: Adjusts multi-band spatial fields to expand guitars and ambient sounds while keeping low bass centered. Loudness Match: Automatically smooths out long-term volume offsets between disparate source tracks to a stable target LUFS baseline. De-Esser: Tames harsh high-frequency sibilance ('S' and 'T' vocal sounds). Dynamic EQ Mode: Converts the De-Esser into a localized dynamic cut, saving surrounding high-end air. Multiband Compressor: Separately controls the dynamics of independent low, mid, and high frequency bands. Compressor: Balances the wideband dynamic range to glue the stereo mix together. Expander: Gently attenuates sub-threshold elements to lower background noise or expand flat mixes. De-Harsh: Employs a phase-pure analog see-saw tilt to naturally smooth bright production styles. Loudness Contour: Dynamically balances sub-bass and treble curves during low-volume playback to counteract human hearing deficiencies. DC Filter: Automatically removes hidden direct-current electrical offsets below 0.5 Hz to maximize amplifier efficiency and speaker headroom. Delta Solo: Inverts the processing phase to isolate and audition strictly the acoustic changes introduced by your active EQ map. Latency Mode: Toggles the limiter buffer footprint between look-ahead mode for music hi-fi fidelity and an ultra-low latency mode to eliminate lip-sync delay when watching movies. Clipper: Shaves microsecond transient peaks to maximize clean headroom. Limiter: Acts as an absolute brickwall ceiling to stop digital clipping distortion."
+
+
+
+3. State & Preset Serialization
+Map these variables into your core configuration states and serialization architectures to ensure parameters load and save seamlessly alongside individual EQ presets:
+
+swift
+var dcOffsetFilterEnabled: Bool = true
+var deltaSoloActive: Bool = false
+var latencyModeSetting: Int = 0 // 0 = Music (Look-Ahead Active), 1 = Movie (Ultra-Low Latency)
+Use code with caution.
+
+
+
+
+4. Core CoreAudio Pipeline Adjustment Logic
+Instruct the engine to calculate these parameters using hardware-accelerated functions inside your background audio block threads.
+
+Step A: DC Offset Filter Node Implementation
+At the absolute front of your digital signal processing chain (Stage 0, preceding the Parametric EQ and Stereo Widener), implement a 1st-order High-Pass biquad filter with a strict cutoff set to \(0.5\text{ Hz}\).
+If dcOffsetFilterEnabled evaluates to true, process the incoming raw stereo sample arrays to center the waveform perfectly on the zero-amplitude line, stripping out sub-sonic direct-current bias before the audio encounters threshold-dependent processing.
+
+Step B: Dynamic Look-Ahead Buffer Switching
+Inside your Limiter processing module loop, bind the internal sample look-ahead delay window variable directly to the value of latencyModeSetting.
+If set to 0 (Music Mode): Allow the look-ahead analysis window and polyphase true-peak filters to run unrestricted for maximum protective headroom tracking.
+If set to 1 (Movie Mode): Dynamic bypass the look-ahead analysis window and scale the internal processing buffer footprint down to 0 samples. This eliminates internal module group delay to guarantee perfect audio-to-video alignment during movie playback.
+
+Step C: Delta Solo Auditing Matrix Math
+At the absolute terminal boundary of your CoreAudio callback track loop—immediately after the Limiter stage but right before handing the final output pointers to the macOS hardware layer—evaluate the boolean state of deltaSoloActive.
+If true, cache a copy of the original raw input samples entering the pipeline at Stage 0, and subtract the final processed output sample vectors from them:
+\(x_{\text{left\_final}}[n]=x_{\text{left\_input}}[n]-x_{\text{left\_processed}}[n]\)
+\(x_{\text{right\_final}}[n]=x_{\text{right\_input}}[n]-x_{\text{right\_processed}}[n]\)
+This phase-inversion matrix completely cancels out the unprocessed elements of the signal, isolating and monitoring exclusively the mathematical modifications introduced by your active EQ map and dynamics suite.
+
+
+
+5. Action Steps for the Agent
+Refactor UI Grid Constraints: Modify the dashboard layout view files to implement the updated Column 2 rows. Mount the DC Filter toggle, Delta Solo button, and Latency segmented control row symmetrically. Inject the updated tooltip block from Section 2 into the dynamic text box layer.
+Inject Pipeline Routing Nodes: Thread the 0.5 Hz high-pass biquad algorithm into the front of the rendering track loop, create the zero-sample conditional switch inside the Limiter class, and map the terminal delta-subtraction array equations onto your output buffers.
+Bridge Parameter States via Atomics: Enforce lock-free thread safety configurations using atomic .store() and .load() routines to ensure the UI switches interact with the CoreAudio background rendering loop cleanly without introducing memory race conditions or dropouts.
+G. Refactoring Directive: Dynamic Pause Gating & Stereo Mode Fold-Down Logic Integration
+
+
+Objective
+Integrate a hardware-protecting Dynamic Pause Gate and a selectable Stereo Mode Fold-Down Logic Switch into the macOS equalizer application (DHDook/equaliser-adv). Refactor the interface layout containers, tooltip strings, configuration structures, and CoreAudio background rendering loop callbacks to execute these operational utilities.
+
+
+
+1. UI Layout & Grid Component Integration
+
+Main View UI Grid (The Functional Stack Updates)
+Action: Append a final control row to the bottom of Column 2 (Right Side) to complete the dual-column symmetry without adding vertical padding.
+Pause Gate & Stereo Mode Row: Add a horizontal dual-component row inside Column 2 as Row 9 (Right Side), pairing a master bypass toggle labeled "Pause Gate" directly to the left of a segmented picker labeled "Stereo Mode".
+Segmented Picker Options: Configure the Stereo Mode segmented control to host exactly three choices: Stereo, Wide-Mono, and True-Mono.
+
+text
+========================================================================
+[COLUMN 1: METERED DYNAMICS (LEFT)]      [COLUMN 2: SPATIAL & UTILITY (RIGHT)]
+========================================================================
+Row 1: [De-Esser Meter]  -> [Toggle]      Row 1: [Stereo Widener Toggle]
+Row 2: [MB Low Meter]  ┐                 Row 2: [Loudness Match Toggle]
+Row 3: [MB Mid Meter]  ├─> [Toggle]           [Horizontal Phase Meter]
+Row 4: [MB High Meter] ┘                      [Square Vector Map / Plot]
+Row 5: [Compressor Meter] -> [Toggle]     Row 3: [De-Harsh Filter Toggle]
+Row 5b:[Crest Factor Meter] -> (No Toggle) Row 4: [Loudness Contour Toggle]
+Row 6: [Expander Meter]   -> [Toggle]     Row 5: [Time/Balance Toggle Slider Row]
+Row 7: [Clipper Meter+Hold]-> [Toggle]     Row 6: [Stream Status 384kHz Label]
+                                          Row 7: [DC Filter Switch] -> [Delta Solo]
+Row 8: [Limiter Meter]    -> [Toggle]     Row 8: [Latency Mode: Music / Movie]
+                                          Row 9: [Pause Gate] -> [Stereo Mode Selection]
+Use code with caution.
+
+
+Dynamics Configuration Menu Additions
+Action: Append these controls to the bottom of the "System Utilities" section inside the Dynamics configuration panel.
+Height Constraints Enforcements: Adjust parent layout constraints dynamically to ensure all newly added controls fit tightly within the bounds of the existing window, adhering to the strict zero vertical scrolling rule.
+
+
+
+2. Tooltip Definition Updates
+Action: Update the unified text tooltip box situated above the main screen grid layout to cleanly integrate the functional definitions for these final operational sub-systems.
+Exact Text String to Inject:
+"Stereo Widener: Adjusts multi-band spatial fields to expand guitars and ambient sounds while keeping low bass centered. Loudness Match: Automatically smooths out long-term volume offsets between disparate source tracks to a stable target LUFS baseline. De-Esser: Tames harsh high-frequency sibilance ('S' and 'T' vocal sounds). Dynamic EQ Mode: Converts the De-Esser into a localized dynamic cut, saving surrounding high-end air. Multiband Compressor: Separately controls the dynamics of independent low, mid, and high frequency bands. Compressor: Balances the wideband dynamic range to glue the stereo mix together. Expander: Gently attenuates sub-threshold elements to lower background noise or expand flat mixes. De-Harsh: Employs a phase-pure analog see-saw tilt to naturally smooth bright production styles. Loudness Contour: Dynamically balances sub-bass and treble curves during low-volume playback to counteract human hearing deficiencies. DC Filter: Automatically removes hidden direct-current electrical offsets below 0.5 Hz to maximize amplifier efficiency and speaker headroom. Delta Solo: Inverts the processing phase to isolate and audition strictly the acoustic changes introduced by your active EQ map. Latency Mode: Toggles the limiter buffer footprint between look-ahead mode for music hi-fi fidelity and an ultra-low latency mode to eliminate lip-sync delay when watching movies. Pause Gate: Automatically applies an ultra-fast 5ms look-ahead fade to absolute silence during track changes or sample-rate handshakes to eliminate loud hardware clicks and speaker pops. Stereo Mode: Controls inter-channel summing topology, offering standard Stereo, True-Mono for historical records, and Wide-Mono to repair disjointed hard-panned 1960s/70s audio mixes cleanly. Clipper: Shaves microsecond transient peaks to maximize clean headroom. Limiter: Acts as an absolute brickwall ceiling to stop digital clipping distortion."
+
+
+
+3. State & Preset Serialization
+Map these variables into your core configuration states and serialization architectures to ensure parameters load and save seamlessly alongside individual EQ presets:
+
+swift
+var pauseGateEnabled: Bool = true
+var stereoModeSelection: Int = 0 // 0 = Stereo, 1 = Wide-Mono, 2 = True-Mono
+Use code with caution.
+
+
+
+
+4. Core CoreAudio Pipeline Operational Logic
+Instruct the engine to calculate these parameters using hardware-accelerated functions inside your background audio block threads.
+
+Step A: Look-Ahead Pause Gating Implementation
+Inside your CoreAudio ring buffer monitor loop, track the status of the incoming buffer data stream. If the incoming samples drop to absolute digital silence or intercept a StreamFormat sample rate change trigger command:
+Evaluate pauseGateEnabled. If true, instantly calculate a volume envelope ramp factor down to 0.0 over a linear \(5\text{ ms}\) window before the hardware switch or native stream state modification fires.
+Multiply outgoing sample arrays by this ramp coefficient, and smoothly ramp the multiplier back up to 1.0 over a matching \(5\text{ ms}\) fade-in window once continuous, validated audio frames resume. This permanently suppresses transitional switching pops and speaker relay clicks.
+
+Step B: Stereo Mode Routing Topology Optimization
+At the absolute front of your digital signal processing chain (Stage 0, preceding the DC Filter and EQ engines), intercept the incoming stereo block frames and evaluate stereoModeSelection:
+Case 0 (Stereo): Pass the incoming Left and Right samples downstream entirely untouched.
+Case 1 (Wide-Mono): Sum the incoming channels to a unified mono signal: \(M = 0.5 \cdot (x_{\text{left}} + x_{\text{right}})\). Route this \(M\) signal to both outputs, but pass the Right channel vector through a non-destructive 1st-order All-Pass filter matrix to introduce a frequency-dependent phase spread, turning hard-panned historical vintage rock mix tracks into a cohesive, centered, yet room-filling wall of sound.
+Case 2 (True-Mono): Sum the channels to a unified mono signal: \(M = 0.5 \cdot (x_{\text{left}} + x_{\text{right}})\). Duplicate the exact same identical array to both audio paths:
+\(x_{\text{left}}[n]=M\)
+\(x_{\text{right}}[n]=M\)
+This completely disables all spatial attributes to guarantee absolute phase accuracy for historical mono source tracking.
+
+
+
+5. Action Steps for the Agent
+Refactor UI Constraints: Update your 2-column main screen layout file. Inject the Pause Gate toggle and Stereo Mode segmented control into Column 2 as Row 9. Update the tooltip layer with the revised definitions string from Section 2.
+Deploy Gating & Summing Code Path Logic: Implement the 5ms look-ahead envelope ramp inside the stream status handling thread, and thread the Case-based channel matrix summing layout at Stage 0 of the DSP block callback queue.
+Bridge State Channels via Atomics: Thread these parameter properties through your lock-free atomic transfer layer to ensure the UI switches interact with the background CoreAudio rendering loop cleanly without introducing memory race conditions or playback drops.
+H. Rate Pre-Buffer Engine
+
+
+Objective
+Integrate an Intelligent Sample-Rate Pre-Buffer Engine into the macOS equalizer application (DHDook/equaliser-adv). This specification instructs the agent to create a temporary, look-ahead FIFO audio cache memory ring buffer that catches and holds incoming PCM sample arrays during bit-perfect clock handshakes (up to 384 kHz). The engine releases the buffered audio only after verifying that the external DAC hardware has achieved a stable, physical clock lock, completely eliminating truncated track starts or missing notes on vintage amplification setups.
+
+
+
+1. UI Layout & Component Sequencing
+
+Main View Stack Addition
+Action: Modify the absolute bottom row of Column 2 (Right Side) to append the configuration check control horizontally.
+Placement Constraints: Expand the existing layout row holding the Pause Gate toggle inside Column 2 as Row 9 (Right Side). Position a new checkbox labeled "Sync Buffer" directly to the right of the Pause Gate switch.
+Layout Window Bounds: Enforce strict horizontal and vertical constraint rules to lock this component pair cleanly inside the column structure, preserving the strict zero vertical scrolling rule of the main application window.
+
+Tooltip Update
+Action: Update the unified text tooltip box situated above the main screen grid layout to append the operational definition for this sample-rate caching system.
+Text String to Append:
+"Sync Buffer: Creates a temporary audio memory cache that holds incoming audio frames during a bit-perfect sample rate clock change, releasing the stream only after the external DAC hardware successfully locks to eliminate truncated track intros."
+
+
+
+2. State & Preset Serialization
+Map this parameter into your global state container structures to ensure it serializes cleanly alongside individual EQ maps:
+
+swift
+var hardwareSyncBufferEnabled: Bool = true
+Use code with caution.
+
+
+
+
+3. Core CoreAudio Cache Pre-Buffering Logic
+Instruct the engine to implement a short look-ahead memory array that bridges the physical latency gap of external audio converters.
+
+Step A: Intercepting the Format Handshake
+Inside your CoreAudio format listener thread, immediately following a detected sample rate change command (handling targets dynamically up to 384 kHz boundaries):
+Check the atomic boolean state of hardwareSyncBufferEnabled. If false, bypass this routine entirely.
+If true, instantly configure an internal thread-safe FIFO ring buffer array to initialize an look-ahead window allocation of 1024 sample frames.
+
+Step B: Caching and Stream Suppression
+While the background CoreAudio listener thread executes AudioHardwareDeviceSetProperty to re-clock the physical device hardware, route all incoming raw PCM data blocks directly into the allocated memory ring buffer.
+Force the primary processing loop thread to push absolute digital zeros (0.0 or digital silence) into the hardware channel vectors. This prevents any raw, asynchronous chunks of audio data from dropping down into your pipeline or causing physical system clicks while the DAC clock is unsettled.
+
+Step C: Atomic Stream Release Execution
+Continuously monitor the DAC device hardware state handler.
+The exact microsecond the external DAC reports a fully stable, verified hardware clock lock status, trigger an atomic release command.
+Read the cached PCM frames out from the memory ring buffer sequentially and feed them smoothly downstream as the direct inputs for your core processing pipeline, completely preserving the absolute first notes and microsecond transients of the incoming track.
+
+
+
+4. Implementation Steps for the Agent
+Refactor UI Constraints: Update your 2-column main screen layout file. Embed the "Sync Buffer" checkbox to the right of the Pause Gate switch at Row 9. Append the new definition block to the screen tooltips.
+Deploy Memory Buffer Array Matrix: Implement the 1024-sample lock-free FIFO array inside your CoreAudio stream format listener thread layer.
+Bridge State Channels via Atomics: Ensure look-ahead release commands pass via atomic boundaries, allowing the real-time audio thread to switch inputs from digital silence to the cached memory arrays smoothly without dropouts.
+I.Refactoring Directive: Bit-Depth Padding & TPDF Dither Matrix Integration
+
+Objective
+Integrate a mastering-grade Bit-Depth Padding and TPDF Dither Engine into the macOS equalizer application (DHDook/equaliser-adv). This specification instructs the agent to create a mathematical noise-injection block at the terminal exit point of the CoreAudio callback loop. This engine linearizes the audio stream when converting internal 32-bit floating-point DSP calculations down to fixed 24-bit or 16-bit hardware audio frames, permanently eliminating digital quantization distortion on low-level reverb trails and fading audio decays.
+
+
+
+1. UI Layout & Component Sequencing
+
+Main View UI Grid (The Functional Stack Updates)
+Action: Append a final control row to the bottom of Column 2 (Right Side) to complete the dual-column symmetry without adding vertical padding.
+Dither Mode Row: Add a horizontal row inside Column 2 as Row 11 (Right Side), rendering a segmented picker control labeled "Dither Mode".
+Segmented Picker Options: Configure the control to host exactly three options: Bypass, TPDF, and Shaped.
+
+text
+========================================================================
+[COLUMN 1: METERED DYNAMICS (LEFT)]      [COLUMN 2: SPATIAL & UTILITY (RIGHT)]
+========================================================================
+Row 1: [De-Esser Meter]  -> [Toggle]      Row 1: [Global Media Transport HUD]
+Row 2: [MB Low Meter]  ┐                 Row 2: [Stereo Widener Toggle]
+Row 3: [MB Mid Meter]  ├─> [Toggle]      Row 3: [Loudness Match Toggle]
+Row 4: [MB High Meter] ┘                      [Horizontal Phase Meter]
+                                              [Square Vector Map / Plot]
+Row 5: [Compressor Meter] -> [Toggle]     Row 4: [De-Harsh Filter Toggle]
+Row 5b:[Crest Factor Meter] -> (No Toggle) Row 5: [Loudness Contour Toggle]
+Row 6: [Expander Meter]   -> [Toggle]     Row 6: [Time/Balance Toggle Slider Row]
+Row 7: [Clipper Meter+Hold]-> [Toggle]        [Horizontal Balance Meter]
+                                          Row 7: [Stream Status 384kHz Label]
+Row 8: [Limiter Meter]    -> [Toggle]     Row 8: [DC Filter Switch] -> [Delta Solo]
+                                          Row 9: [Latency Mode: Music / Movie]
+                                          Row 10:[Pause Gate] -> [Sync Buffer Check]
+                                          Row 11:[Dither Mode Selection Picker]
+Use code with caution.
+
+
+Dynamics Configuration Menu Additions
+Action: Append this segmented picker to the absolute bottom of the "System Utilities" section inside the Dynamics configuration panel.
+Height Constraints Enforcements: Adjust parent layout constraints dynamically to ensure all newly added controls fit tightly within the bounds of the existing window, adhering to the strict zero vertical scrolling rule across all view panels.
+
+
+
+2. Tooltip Definition Updates
+Action: Update the unified text tooltip box situated above the main screen grid layout to cleanly integrate the functional definition for this bit-reduction helper utility.
+Exact Text String to Inject:
+"Stereo Widener: Adjusts multi-band spatial fields to expand guitars and ambient sounds while keeping low bass centered. Loudness Match: Automatically smooths out long-term volume offsets between disparate source tracks to a stable target LUFS baseline. De-Esser: Tames harsh high-frequency sibilance ('S' and 'T' vocal sounds). Dynamic EQ Mode: Converts the De-Esser into a localized dynamic cut, saving surrounding high-end air. Multiband Compressor: Separately controls the dynamics of independent low, mid, and high frequency bands. Compressor: Balances the wideband dynamic range to glue the stereo mix together. Expander: Gently attenuates sub-threshold elements to lower background noise or expand flat mixes. De-Harsh: Employs a phase-pure analog see-saw tilt to naturally smooth bright production styles. Loudness Contour: Dynamically balances sub-bass and treble curves during low-volume playback to counteract human hearing deficiencies. DC Filter: Automatically removes hidden direct-current electrical offsets below 0.5 Hz to maximize amplifier efficiency and speaker headroom. Delta Solo: Inverts the processing phase to isolate and audition strictly the acoustic changes introduced by your active EQ map. Latency Mode: Toggles the limiter buffer footprint between look-ahead mode for music hi-fi fidelity and an ultra-low latency mode to eliminate lip-sync delay when watching movies. Pause Gate: Automatically applies an ultra-fast 5ms look-ahead fade to absolute silence during track changes or sample-rate handshakes to eliminate loud hardware clicks and speaker pops. Stereo Mode: Controls inter-channel summing topology, offering standard Stereo, True-Mono for historical records, and Wide-Mono to repair disjointed hard-panned 1960s/70s audio mixes cleanly. Sync Buffer: Creates a temporary audio memory cache that holds incoming audio frames during a bit-perfect sample rate clock change, releasing the stream only after the external DAC hardware successfully locks to eliminate truncated track intros. Dither Mode: Manages bit-depth reduction transitions when converting 32-bit internal DSP math down to your external DAC hardware resolution, utilizing Triangular Probability Density Function noise to eliminate harsh digital quantization distortion on fading tracks. Clipper: Shaves microsecond transient peaks to maximize clean headroom. Limiter: Acts as an absolute brickwall ceiling to stop digital clipping distortion."
+
+
+
+3. State & Preset Serialization
+Map this variable into your core configuration states and serialization architectures to ensure parameters load and save seamlessly alongside individual EQ presets:
+
+swift
+var outputDitherModeSelection: Int = 1 // 0 = Bypass, 1 = TPDF (Safe Default), 2 = Noise-Shaped
+Use code with caution.
+
+
+
+
+4. Core CoreAudio Bit-Reduction Dither Logic
+Instruct the engine to implement a high-speed mathematical probability equation inside the terminal processing thread block.
+
+Step A: Exit Point Interception Positioning
+Position this mathematical module at the absolute terminal exit boundary of your CoreAudio callback loop (Stage 11). It must execute after the Delta Solo check, immediately preceding the step that converts 32-bit floating-point data streams down into fixed hardware buffer arrays.
+
+Step B: TPDF Generation Mathematical Formula
+If outputDitherModeSelection evaluates to 1 (TPDF Mode), compute a randomized dither signal independently for every audio frame sample.
+Generate two unique pseudo-random white noise floating-point values (\(R_{1}\) and \(R_{2}\)) uniformly distributed between -0.5 and +0.5.
+To prevent audio thread stalling, use high-speed uniform random number bitwise shifts rather than blocking system timing queries.
+Calculate the Triangular Probability Density Function (\(D_{\text{tpdf}}\)) scalar factor tailored to match standard 24-bit fixed digital converter resolution:
+\(\text{LSB}_{\text{factor}}=2^{-23}\approx 0.00000011920929\)
+\(D_{\text{tpdf}}=(R_{1}+R_{2})\cdot \text{LSB}_{\text{factor}}\)
+
+Step C: Buffer Summation & Quantization Execution
+Inject the calculated dither noise value directly into the final 32-bit sample variables before casting the memory block down to integers for your physical DAC output channels:
+\(x_{\text{left\_final}}[n]=x_{\text{left\_processed}}[n]+D_{\text{tpdf}}\)
+\(x_{\text{right\_final}}[n]=x_{\text{right\_processed}}[n]+D_{\text{tpdf}}\)
+(Note: If outputDitherModeSelection equals 2 [Shaped], pass the noise factor through a basic 1st-order high-pass error-feedback loop to filter the added dither energy up into inaudible regions above 18 kHz).
+
+
+
+5. Action Steps for the Agent
+
+
+Refactor UI Constraints: Update your 2-column main screen layout file. Draw the segmented picker control inside Column 2 as Row 11. Inject the updated tooltip block from Section 2 into the dynamic text box layer.
+Deploy Mathematics Coding Blocks: Implement the high-speed pseudo-random floating-point algorithm and LSB summation blocks at the final exit boundary node of the CoreAudio pipeline loop.
+Bridge Parameter States via Atomics: Enforce lock-free thread safety configurations using atomic .store() and .load() routines to ensure that toggle changes made on the interface menu stream into the processing core cleanly without causing digital glitches.
+J.Refactoring Directive: CoreAudio Dynamic I/O Buffer Size Automation
+
+
+Objective
+Link the existing Latency Mode segmented control (Music / Movie selection) directly to a hardware-level CoreAudio I/O Buffer Frame Size Optimizer. When the user changes this control, the application must issue native CoreAudio hardware commands to dynamically scale the underlying audio driver buffer size between 1024 samples (for maximum processing safety and thermal efficiency during music playback) and 64 samples (for absolute zero-latency alignment during movie playback).
+
+
+
+1. UI Layout & Component Synchronization
+
+Main View UI Grid (The Functional Stack Verification)
+Action: Do not add any new visual controls to the main dashboard. Instead, append an internal hardware execution hook to the existing Latency Mode segmented control located at Row 9 (Right Side) of Column 2.
+
+text
+========================================================================
+[COLUMN 1: METERED DYNAMICS (LEFT)]      [COLUMN 2: SPATIAL & UTILITY (RIGHT)]
+========================================================================
+Row 8: [Limiter Meter]    -> [Toggle]     Row 8: [DC Filter Switch] -> [Delta Solo]
+                                          Row 9: [Latency Mode: Music / Movie] (Dynamic Buffer Link)
+                                          Row 10:[Pause Gate] -> [Sync Buffer Check]
+                                          Row 11:[Dither Mode Selection Picker]
+Use code with caution.
+
+
+Tooltip Update
+Action: Update the unified text tooltip box situated above the main screen grid layout to append the description of this underlying hardware buffer automation.
+Exact Text String to Inject:
+"Stereo Widener: Adjusts multi-band spatial fields to expand guitars and ambient sounds while keeping low bass centered. Loudness Match: Automatically smooths out long-term volume offsets between disparate source tracks to a stable target LUFS baseline. De-Esser: Tames harsh high-frequency sibilance ('S' and 'T' vocal sounds). Dynamic EQ Mode: Converts the De-Esser into a localized dynamic cut, saving surrounding high-end air. Multiband Compressor: Separately controls the dynamics of independent low, mid, and high frequency bands. Compressor: Balances the wideband dynamic range to glue the stereo mix together. Expander: Gently attenuates sub-threshold elements to lower background noise or expand flat mixes. De-Harsh: Employs a phase-pure analog see-saw tilt to naturally smooth bright production styles. Loudness Contour: Dynamically balances sub-bass and treble curves during low-volume playback to counteract human hearing deficiencies. DC Filter: Automatically removes hidden direct-current electrical offsets below 0.5 Hz to maximize amplifier efficiency and speaker headroom. Delta Solo: Inverts the processing phase to isolate and audition strictly the acoustic changes introduced by your active EQ map. Latency Mode (Buffer Sync): Toggles the limiter look-ahead footprint and dynamically changes the underlying macOS CoreAudio hardware I/O buffer frame size between 1024 samples for maximum music stability and 64 samples for lag-free movie lip-sync. Pause Gate: Automatically applies an ultra-fast 5ms look-ahead fade to absolute silence during track changes or sample-rate handshakes to eliminate loud hardware clicks and speaker pops. Stereo Mode: Controls inter-channel summing topology, offering standard Stereo, True-Mono for historical records, and Wide-Mono to repair disjointed hard-panned 1960s/70s audio mixes cleanly. Sync Buffer: Creates a temporary audio memory cache that holds incoming audio frames during a bit-perfect sample rate clock change, releasing the stream only after the external DAC hardware successfully locks to eliminate truncated track intros. Dither Mode: Manages bit-depth reduction transitions when converting 32-bit internal DSP math down to your external DAC hardware resolution, utilizing Triangular Probability Density Function noise to eliminate harsh digital quantization distortion on fading tracks. Clipper: Shaves microsecond transient peaks to maximize clean headroom. Limiter: Acts as an absolute brickwall ceiling to stop digital clipping distortion."
+
+
+
+2. State & Serialized Framework Parameters
+The state mappings remain bound to the existing configuration property variable, ensuring zero bloat in your preset engine serialization maps:
+
+swift
+var latencyModeSetting: Int = 0 // 0 = Music (1024 Buffer + Look-Ahead), 1 = Movie (64 Buffer + Low-Latency)
+Use code with caution.
+
+
+
+
+3. Core CoreAudio Hardware Buffer Sizing Logic
+Instruct the engine to route low-level hardware configuration payloads to the active macOS audio device container thread upon UI value interaction events.
+
+Step A: Capturing the Hardware UI Event Callback
+Inside your user interface action handler class, monitor the segmented picker input events modifying latencyModeSetting. When a value shift occurs, fetch the active device object ID (AudioDeviceID) mapped to your external target physical playback hardware.
+
+Step B: CoreAudio Target Object Address Property Configuration
+To update hardware buffer attributes safely, construct a native CoreAudio property address pointer structure targeting the primary playback hardware frame layout parameters:
+
+swift
+// REFACTOR ACTION: Initialize Hardware Frame Buffer Target Address Matrix
+var bufferSizeAddress = AudioObjectPropertyAddress(
+    mSelector: kAudioDevicePropertyBufferFrameSize,
+    mScope: kAudioObjectPropertyScopeOutput,
+    mElement: kAudioObjectPropertyElementMain
+)
+Use code with caution.
+
+
+Step C: Atomic Device Data Allocation Adjustments
+Execute a runtime state tree conditional execution block to alter hardware-level sample sizes directly through the CoreAudio system bus layer:
+If latencyModeSetting == 0 (Music Selection Mode active):
+Initialize a raw 32-bit unsigned integer value set to 1024.
+Invoke AudioObjectSetPropertyData applying this 1024 frame payload across the device address object matrix. This safely relaxes CPU computing cycles, maximizes system stability, and gives the engine an expansive runway to compute massive processing cascades cleanly.
+If latencyModeSetting == 1 (Movie Selection Mode active):
+Initialize a raw 32-bit unsigned integer value compressed down to 64.
+Invoke the identical AudioObjectSetPropertyData routine payload to instantly shrink the hardware hardware execution stream window down to 64 samples. This forces macOS to prioritize low-overhead transfer speeds, reducing internal hardware processing latency to near zero, aligning your home theater cinema audio flawlessly to your display panel video layer frames.
+Important Thread-Safety Rule: To prevent audio dropout glitches or kernel panics during live switching transitions, execute a quick, clean 5ms fade-out command using your existing Pause Gate engine logic immediately prior to updating the buffer property, and fade back up smoothly the microsecond the CoreAudio hardware confirms the device configuration re-allocation state has successfully initialized.
+
+
+
+4. Action Steps for the Agent
+Link UI Event Code-Paths: Target the existing selector event loops associated with your Latency Mode segmented control block. Insert the conditional hardware modification structures defined in Section 3.
+Inject CoreAudio SetProperty APIs: Integrate the native low-level AudioObjectSetPropertyDatafunction logic with explicit hardware bindings to your active target output device ID layer.
+Deploy Tooltip Modifications: Replace the old, static definitions container with the newly consolidated master tooltip string string asset provided in Section 2.

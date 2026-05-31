@@ -1,3 +1,5 @@
 - [Biquad DF2T convention](biquad-df2t.md) — pre-negated coefficients (na1, na2); all filter helpers return (b0,b1,b2,na1,na2) in this format.
 - [Per-stage GR chain](per-stage-gr.md) — 8 atomics in DynamicsProcessor, forwarded via RenderPipeline, polled at 60 Hz with 50 ms ballistics in DynamicsInlineView.
 - [Atomic float helpers](atomic-float-helpers.md) — file-private floatBitsX/bitsToFloatX pattern; each DSP file uses a unique suffix to avoid symbol collisions.
+- [Shelf filter coefficients](shelf-filter-coeffs.md) — lowShelfCoeffs/highShelfCoeffs added to DynamicsProcessor; Audio EQ Cookbook S=1 formulas, Double-precision intermediate, pre-negated na1/na2 output.
+- [Advanced DSP buffer layout](advanced-dsp-buffers.md) — deltaBufs use maxLookAheadSamples capacity; timeDelayBufs use maxDelaySamples (8192); de-esser dynEQ stores BPF outputs in stack vars (bpfOut0/bpfOut1) per frame.

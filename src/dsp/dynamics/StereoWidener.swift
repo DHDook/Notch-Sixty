@@ -34,6 +34,18 @@ final class StereoWidener: @unchecked Sendable {
     private let _widthMidBits:  ManagedAtomic<Int32>
     private let _widthHighBits: ManagedAtomic<Int32>
 
+    // MARK: - Phase Correlation Output (audio → main)
+
+    /// Pearson correlation of L and R channels after M/S processing.
+    /// Range −1.0 (anti-phase) to +1.0 (in-phase). Written by audio thread, read by main thread.
+    private let _phaseCorrelationBits: ManagedAtomic<Int32>
+
+    // ── Running correlation accumulators (audio-thread only) ──────────
+    nonisolated(unsafe) private var corrAccLL: Double = 0.0
+    nonisolated(unsafe) private var corrAccRR: Double = 0.0
+    nonisolated(unsafe) private var corrAccLR: Double = 0.0
+    nonisolated(unsafe) private var corrSmoothed: Float = 0.0
+
     // MARK: - Audio-Thread Filter State
     //
     // State layout per channel (16 floats):
@@ -52,10 +64,11 @@ final class StereoWidener: @unchecked Sendable {
     // MARK: - Initialisation
 
     init() {
-        _enabled      = ManagedAtomic(0)
-        _widthLowBits  = ManagedAtomic(floatBitsW(0.0))
-        _widthMidBits  = ManagedAtomic(floatBitsW(1.4))
-        _widthHighBits = ManagedAtomic(floatBitsW(1.25))
+        _enabled             = ManagedAtomic(0)
+        _widthLowBits        = ManagedAtomic(floatBitsW(0.0))
+        _widthMidBits        = ManagedAtomic(floatBitsW(1.4))
+        _widthHighBits       = ManagedAtomic(floatBitsW(1.25))
+        _phaseCorrelationBits = ManagedAtomic(floatBitsW(0.0))
 
         filterState = Array(repeating: 0.0, count: 2 * 16)
 
@@ -96,6 +109,19 @@ final class StereoWidener: @unchecked Sendable {
 
     func resetState() {
         for i in 0..<filterState.count { filterState[i] = 0 }
+        corrAccLL    = 0.0
+        corrAccRR    = 0.0
+        corrAccLR    = 0.0
+        corrSmoothed = 0.0
+        _phaseCorrelationBits.store(floatBitsW(0.0), ordering: .relaxed)
+    }
+
+    // MARK: - Phase Correlation Read (main thread)
+
+    /// Smoothed Pearson correlation coefficient between L and R channels (−1.0 … +1.0).
+    /// Written atomically by the audio thread at the end of each `process()` call.
+    var livePhaseCorrelation: Float {
+        Float(bitPattern: UInt32(bitPattern: _phaseCorrelationBits.load(ordering: .relaxed)))
     }
 
     // MARK: - Audio Thread Processing
@@ -206,6 +232,22 @@ final class StereoWidener: @unchecked Sendable {
             bufL[i] = outLL + outLM + outLH
             bufR[i] = outRL + outRM + outRH
         }
+
+        // Measure Pearson phase correlation after the M/S output.
+        // Uses an exponential decay accumulator (≈ 300 ms time constant).
+        let decay = max(0.0, 1.0 - 1.0 / (sampleRate * 0.3))
+        for i in 0..<count {
+            let l = Double(bufL[i])
+            let r = Double(bufR[i])
+            corrAccLL = corrAccLL * decay + l * l
+            corrAccRR = corrAccRR * decay + r * r
+            corrAccLR = corrAccLR * decay + l * r
+        }
+        let denom = (corrAccLL * corrAccRR).squareRoot()
+        let corrRaw: Float = denom > 1e-12 ? Float(corrAccLR / denom) : 0.0
+        let corrAlpha: Float = Float(exp(-1.0 / (sampleRate * 0.1)))
+        corrSmoothed = corrAlpha * corrSmoothed + (1.0 - corrAlpha) * max(-1.0, min(1.0, corrRaw))
+        _phaseCorrelationBits.store(floatBitsW(corrSmoothed), ordering: .relaxed)
     }
 
     // MARK: - M/S Width Encoding

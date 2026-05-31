@@ -34,6 +34,10 @@ struct DynamicsView: View {
                 expanderSection
                 clipperSection
                 limiterSection
+                stereoMatrixSection
+                spectralEnhancementSection
+                dynamicsRefinementSection
+                systemUtilitiesSection
             }
             .formStyle(.grouped)
         }
@@ -719,6 +723,280 @@ struct DynamicsView: View {
         Binding(
             get: { Double(store.dynamicsConfig.limiter.lookAheadMs) },
             set: { val in var lim = store.dynamicsConfig.limiter; lim.lookAheadMs = Float(val); store.updateLimiter(lim) }
+        )
+    }
+
+    // MARK: - Stereo Matrix Section
+
+    private var stereoMatrixSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                Text("Stereo Mode")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 100, alignment: .leading)
+                Picker("", selection: stereoModeBinding) {
+                    Text("Stereo").tag(StereoModeSelection.stereo)
+                    Text("Wide Mono").tag(StereoModeSelection.wideMono)
+                    Text("True Mono").tag(StereoModeSelection.trueMono)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Toggle("DC Offset Filter", isOn: dcOffsetEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Balance",
+                value: balanceBinding,
+                range: -1.0...1.0,
+                step: 0.01,
+                formatValue: { val in
+                    if val < -0.01 { return String(format: "%.0f%% L", -val * 100) }
+                    if val >  0.01 { return String(format: "%.0f%% R",  val * 100) }
+                    return "Centre"
+                },
+                leftEndLabel: "L",
+                rightEndLabel: "R"
+            )
+
+            DynamicsSliderRow(
+                label: "L/R Delay",
+                value: timeDelayBinding,
+                range: 0.0...20.0,
+                step: 0.1,
+                formatValue: { String(format: "%.1f ms", $0) }
+            )
+        } header: {
+            Text("Stereo Matrix")
+        } footer: {
+            Text("Stereo Mode folds the signal before all other stages. Balance and L/R Delay are applied after the dynamics chain.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Spectral Enhancement Section
+
+    private var spectralEnhancementSection: some View {
+        Section {
+            Toggle("Loudness Contouring", isOn: loudnessContourBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("De-Harsh Filter", isOn: deharshEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Tilt Amount",
+                value: deharshTiltBinding,
+                range: -6.0...0.0,
+                step: 0.5,
+                formatValue: { String(format: "%+.1f dB", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.deharshFilterEnabled
+            )
+        } header: {
+            Text("Spectral Enhancement")
+        } footer: {
+            Text("Loudness Contouring applies a gentle Fletcher-Munson compensation curve. De-Harsh attenuates frequencies above 3.5 kHz after the limiter.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Dynamics Refinement Section
+
+    private var dynamicsRefinementSection: some View {
+        Section {
+            Toggle("Dialogue Gate (LUFS)", isOn: dialogueGateBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("De-Esser: Dynamic EQ Mode", isOn: deesserDynModeBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Asymmetry Trim",
+                value: asymmetryTrimBinding,
+                range: -3.0...3.0,
+                step: 0.1,
+                formatValue: { String(format: "%+.1f dB", $0) },
+                leftEndLabel: "−",
+                rightEndLabel: "+"
+            )
+
+            Toggle("Limiter TP Guard", isOn: tpGuardBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+        } header: {
+            Text("Dynamics Refinement")
+        } footer: {
+            Text("Dialogue Gate raises the LUFS measurement floor to −60 dBFS. Asymmetry Trim compensates for transient waveform asymmetry at the clipper. TP Guard adds −1.5 dBFS ISP headroom in the limiter.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - System Utilities Section
+
+    private var systemUtilitiesSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                Text("Latency Mode")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 100, alignment: .leading)
+                Picker("", selection: latencyModeBinding) {
+                    Text("Music").tag(LatencyMode.music)
+                    Text("Movie").tag(LatencyMode.movie)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            HStack(spacing: 8) {
+                Text("Dither")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 100, alignment: .leading)
+                Picker("", selection: ditherModeBinding) {
+                    Text("Off").tag(DitherMode.bypass)
+                    Text("TPDF").tag(DitherMode.tpdf)
+                    Text("Shaped").tag(DitherMode.shaped)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Toggle("Pause Gate", isOn: pauseGateBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("Sync Buffer to Latency Mode", isOn: syncBufferBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("Delta Solo Monitor", isOn: deltaSoloBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+        } header: {
+            Text("System Utilities")
+        } footer: {
+            Text("Music mode targets 128-frame I/O. Movie mode targets 512-frame I/O (better AV sync). Delta Solo outputs only the processing difference so you can hear what the dynamics chain is adding or removing.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Advanced Bindings
+
+    private var stereoModeBinding: Binding<StereoModeSelection> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.stereoMode },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.stereoMode = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var dcOffsetEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.dcOffsetFilterEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.dcOffsetFilterEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var balanceBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.stereoBalancePosition) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.stereoBalancePosition = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var timeDelayBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.stereoTimeDelayMS) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.stereoTimeDelayMS = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var loudnessContourBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.loudnessContourEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.loudnessContourEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var deharshEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.deharshFilterEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.deharshFilterEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var deharshTiltBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.deharshTiltAmountDB) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.deharshTiltAmountDB = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var dialogueGateBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.loudnessDialogueGateEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.loudnessDialogueGateEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var deesserDynModeBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.deesserDynamicModeEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.deesserDynamicModeEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var asymmetryTrimBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.clipperAsymmetryTrimDB) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.clipperAsymmetryTrimDB = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var tpGuardBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.limiterTruePeakGuardEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.limiterTruePeakGuardEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var latencyModeBinding: Binding<LatencyMode> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.latencyMode },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.latencyMode = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ditherModeBinding: Binding<DitherMode> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.ditherMode },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.ditherMode = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var pauseGateBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.pauseGateEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var syncBufferBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.hardwareSyncBufferEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.hardwareSyncBufferEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var deltaSoloBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.deltaSoloActive },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.deltaSoloActive = val; store.updateAdvancedProcessing(adv) }
         )
     }
 }
