@@ -1,6 +1,7 @@
 import AudioToolbox
 import Atomics
 import CoreAudio
+import Darwin
 import os.log
 
 /// Context passed to both the input and output HAL render callbacks.
@@ -235,6 +236,16 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// except for atomic parameter updates issued by the main thread.
     let dynamicsProcessor: DynamicsProcessor
 
+    /// Per-channel DC-offset blocking filters (0.5 Hz high-pass).
+    /// Applied at the absolute front of the output processing chain, before EQ or any gain stage.
+    /// Audio-thread exclusive — mutated (state update) on every render callback.
+    nonisolated(unsafe) var dcBlockers: [DCBlocker] = []
+
+    /// Atomic flag: 1 once THREAD_TIME_CONSTRAINT_POLICY has been applied to the output
+    /// render thread.  Written once (0→1) from the audio thread; checked on every callback
+    /// via a relaxed CAS so the fast path (already set) costs a single atomic load.
+    let hasAppliedRealtimePolicy: ManagedAtomic<Int32> = ManagedAtomic(0)
+
     /// Pre-computed output buffer pointers (immutable, avoids array allocation on every callback).
     private let outputBufferPointersPrecomputed: [UnsafePointer<Float>]
 
@@ -293,6 +304,10 @@ final class RenderCallbackContext: @unchecked Sendable {
         dp.applyConfig(dynamicsConfig, sampleRate: sampleRate)
         self.dynamicsProcessor = dp
 
+        // Initialise one DC-blocker per channel, tuned to the current sample rate.
+        // The pole is computed once here and stored; no allocation occurs in the render loop.
+        self.dcBlockers = (0 ..< Int(channelCount)).map { _ in DCBlocker(sampleRate: sampleRate) }
+
         // Create EQ chains (one per layer per channel)
         let layerCount = EQLayerConstants.maxLayerCount
         self.leftEQChains = (0..<layerCount).map { _ in EQChain(maxFrameCount: maxFrameCount) }
@@ -305,21 +320,19 @@ final class RenderCallbackContext: @unchecked Sendable {
         }
         self.ringBuffers = rings
 
-        // Pre-allocate one buffer per channel for input callback (deinterleaved layout)
+        // Pre-allocate one buffer per channel for input callback — 64-byte SIMD-aligned.
+        // 64-byte alignment lets ARM64 NEON / vDSP vector instructions read full cache lines
+        // without penalty.  Must be freed with free() in deinit (not Swift's .deallocate()).
         var inputBufs: [UnsafeMutablePointer<Float>] = []
         for _ in 0..<channelCount {
-            let buffer = UnsafeMutablePointer<Float>.allocate(capacity: framesPerBuffer)
-            buffer.initialize(repeating: 0, count: framesPerBuffer)
-            inputBufs.append(buffer)
+            inputBufs.append(Self.allocateSIMDAlignedBuffer(capacity: framesPerBuffer))
         }
         self.inputBuffers = inputBufs
 
-        // Pre-allocate one buffer per channel for output callback reads
+        // Pre-allocate one buffer per channel for output callback reads — 64-byte SIMD-aligned.
         var outputBufs: [UnsafeMutablePointer<Float>] = []
         for _ in 0..<channelCount {
-            let buffer = UnsafeMutablePointer<Float>.allocate(capacity: framesPerBuffer)
-            buffer.initialize(repeating: 0, count: framesPerBuffer)
-            outputBufs.append(buffer)
+            outputBufs.append(Self.allocateSIMDAlignedBuffer(capacity: framesPerBuffer))
         }
         self.outputReadBuffers = outputBufs
 
@@ -375,16 +388,18 @@ final class RenderCallbackContext: @unchecked Sendable {
     }
 
     deinit {
-        // Deallocate input channel buffers
+        // Free SIMD-aligned input channel buffers.
+        // These were allocated via posix_memalign so they must be released with free(),
+        // not Swift's .deallocate() (which routes through swift_deallocRaw and is not
+        // guaranteed to match the posix_memalign allocator on all Darwin releases).
+        // Float is trivially destructible — no deinitialize() call needed.
         for buffer in inputBuffers {
-            buffer.deinitialize(count: framesPerBuffer)
-            buffer.deallocate()
+            free(UnsafeMutableRawPointer(buffer))
         }
 
-        // Deallocate output read buffers
+        // Free SIMD-aligned output read buffers (same reason as above).
         for buffer in outputReadBuffers {
-            buffer.deinitialize(count: framesPerBuffer)
-            buffer.deallocate()
+            free(UnsafeMutableRawPointer(buffer))
         }
 
         inputMeterStorage.deinitialize(count: meterChannelCount)
@@ -547,6 +562,95 @@ final class RenderCallbackContext: @unchecked Sendable {
         }
 
         return minRead
+    }
+
+    // MARK: - Buffer Allocation
+
+    /// Allocates a `Float` buffer of `capacity` samples aligned to 64 bytes.
+    ///
+    /// 64-byte alignment (one ARM64 cache line / two NEON 256-bit registers) lets
+    /// vDSP and hand-written SIMD code read every element without a cross-alignment
+    /// penalty.  The returned pointer MUST be freed with `free()`, NOT with
+    /// Swift's `.deallocate()`.
+    ///
+    /// - Parameter capacity: Number of `Float` elements to allocate.
+    /// - Returns: Zeroed, 64-byte-aligned pointer to `capacity` floats.
+    private static func allocateSIMDAlignedBuffer(capacity: Int) -> UnsafeMutablePointer<Float> {
+        let byteCount = capacity * MemoryLayout<Float>.size
+        var rawPtr: UnsafeMutableRawPointer? = nil
+        let result = posix_memalign(&rawPtr, 64, byteCount)
+        precondition(result == 0, "posix_memalign(\(byteCount), align=64) failed: \(result)")
+        let ptr = rawPtr!.assumingMemoryBound(to: Float.self)
+        memset(ptr, 0, byteCount)
+        return ptr
+    }
+
+    // MARK: - DC Offset Removal
+
+    /// Applies the 0.5 Hz DC-blocking high-pass filter to every channel's processing buffer.
+    ///
+    /// Must be called from the audio render thread immediately after `provideFrames` returns
+    /// a non-zero frame count, and **before** EQ or any gain stage.  The filter state is
+    /// maintained across callbacks so the transient at stream start settles within ~2 seconds.
+    ///
+    /// - Parameter frameCount: Number of frames to process (must match the current render slice).
+    @inline(__always)
+    func applyDCBlock(frameCount: UInt32) {
+        let count = Int(frameCount)
+        for ch in 0 ..< Int(channelCount) {
+            dcBlockers[ch].process(buffer: processingBuffers[ch], frameCount: count)
+        }
+    }
+
+    // MARK: - Real-Time Thread Priority
+
+    /// Elevates the calling (audio render) thread to the macOS Mach real-time scheduling class.
+    ///
+    /// The first call performs `thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)` and sends
+    /// the send-right returned by `mach_thread_self()` back to the kernel.  Every subsequent
+    /// call returns in a single relaxed atomic load — no kernel round-trip, no lock.
+    ///
+    /// Policy constants:
+    /// - `period`      = 10 ms  — nominal callback interval at 512 frames / 48 kHz
+    /// - `computation` =  5 ms  — CPU budget (50 % of period, generous for EQ + dynamics)
+    /// - `constraint`  = 10 ms  — hard real-time deadline
+    /// - `preemptible` =  1     — allow higher-priority threads (interrupts, etc.) to preempt
+    ///
+    /// Must be called from the audio render thread.
+    @inline(__always)
+    func applyRealtimePriorityIfNeeded() {
+        guard hasAppliedRealtimePolicy.compareExchange(
+            expected: 0, desired: 1, ordering: .relaxed
+        ).exchanged else { return }
+
+        // Convert nanoseconds → Mach absolute time units.
+        // On Apple Silicon: numer = denom = 1 (1 ns = 1 unit).
+        // On Intel:         numer = 1, denom = 3 (approximately).
+        var tbInfo = mach_timebase_info_data_t()
+        mach_timebase_info(&tbInfo)
+        let toAbsoluteTime: (UInt64) -> UInt32 = { nanos in
+            let result = nanos &* UInt64(tbInfo.denom) / UInt64(tbInfo.numer)
+            return UInt32(min(result, UInt64(UInt32.max)))
+        }
+
+        var policy = thread_time_constraint_policy_data_t(
+            period:      toAbsoluteTime(10_000_000),
+            computation: toAbsoluteTime( 5_000_000),
+            constraint:  toAbsoluteTime(10_000_000),
+            preemptible: boolean_t(1)
+        )
+
+        let selfThread = mach_thread_self()
+        withUnsafeMutablePointer(to: &policy) { policyPtr in
+            _ = thread_policy_set(
+                selfThread,
+                thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY),
+                UnsafeMutableRawPointer(policyPtr).assumingMemoryBound(to: integer_t.self),
+                THREAD_TIME_CONSTRAINT_POLICY_COUNT
+            )
+        }
+        // Release the send-right returned by mach_thread_self().
+        mach_port_deallocate(mach_task_self_, selfThread)
     }
 
     /// Returns pointers to the processing buffers (immutable, for passing to render context).

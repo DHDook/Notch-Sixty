@@ -1,0 +1,58 @@
+### Prompt Directive: Phase 1 Core Audio Engine & Intuitive View Foundation Implementation
+
+#### 1. Objective
+You are tasked with executing Phase 1 of the development runway for our macOS equalizer application ('DHDook/equaliser-adv'). You must programmatically construct a low-level CoreAudio Hardware Abstraction Layer (HAL) Output Audio Unit, a Zero-Allocation Static Memory Pre-Pool framework, a Mach Kernel real-time thread isolation policy, a Stage 00b Linear-Phase DC Offset Removal filter, and a highly intuitive, Symmetric 2-Column Dashboard layout scaffold using hardware-accelerated, card-backed UI grouping rules.
+
+#### 2. Strict Real-Time DSP & Memory Coding Rules
+- NO HEAP ALLOCATIONS INSIDE AUDIO LOOPS: Absolutely zero instances of dynamic memory allocations, dynamic array initializations (e.g., 'let array = [Float]()'), dynamic appending, or object creations are permitted within the core audio render callback thread. Utilize lock-free, pre-allocated unsafe raw mutable memory block pointers exclusively.
+- ABSOLUTE DISPATCH QUEUE BAN: The real-time audio thread must never invoke 'DispatchQueue.main.sync' or 'async'. Pass telemetry metrics out of the render loop using lock-free ManagedAtomic primitives exclusively.
+- PREVENT RETAIN CYCLES: All closures, timers, and process notification observers managing layout and refresh loops must utilize explicit weak capture lists ('[weak self]') to entirely prevent strong reference cycle memory leaks.
+- AUTOLAYOUT ANCHOR ISOLATION: Programmatically assign layout elements using fluid layout anchors relative to parent boundary containers. Explicitly set translatesAutoresizingMaskIntoConstraints to false on every generated subview to completely eliminate view layout constraint ambiguity and prevent vertical scrolling.
+
+#### 3. Component Architecture & Code Implementation Requirements
+
+##### Component A: Low-Level CoreAudio HAL Output Unit & Thread Priority Pool
+- Target File: `src/dsp/PipelineManager.swift`
+- Action: Strip away all references to high-level AVAudioEngine or AVAudioUnitEQ node objects. Instantiate a low-level CoreAudio HAL Output Audio Unit (`kAudioUnitSubType_HALOutput`). Configure Bus 1 for system input capture and Bus 0 for hardware routing to your external Schiit DAC. 
+- Thread Policy: Capture the raw thread port identifier of your real-time processing loop. Invoke the native macOS kernel 'thread_policy_set' API, applying 'THREAD_TIME_CONSTRAINT_POLICY' to grant your processing loop absolute real-time scheduling priority, pinning it to maximum clock speeds on a dedicated performance CPU core (P-Core).
+
+##### Component B: Zero-Allocation Static Memory Pre-Pool Framework
+- Target File: `src/dsp/PreBufferEngine.swift`
+- Action: Create a thread-safe, lock-free static memory pre-pool. Pre-allocate all required scratchpad memory arrays and circular ring buffers matching our power-of-two frame allocation constraints (64 frames for low-latency Movie Mode, 1024 frames for Music Mode). Force all data arrays to initialize memory allocations aligned perfectly to 64-byte boundaries (`posix_memalign`), allowing Apple Silicon ARM64 vector registers to ingest and process your DSP equations via a single high-speed SIMD CPU cycle.
+
+##### Component C: Stage 00b Linear-Phase DC Offset Removal Filter
+- Target File: `src/dsp/BiquadFilter.swift`
+- Action: Implement a fixed 1st-order Direct Form II Transposed High-Pass biquad filter node at the absolute front of the processing loop callback thread. Enforce a hardcoded cutoff frequency of exactly 0.5 Hz to completely clear direct-current electrical offsets below 0.5 Hz from the incoming stereo stream before any downstream processing stages execute.
+
+##### Component D: Intuitive Symmetric 2-Column Control Dashboard Scaffold
+- Target File: `src/ui/DashboardViewController.swift`
+- Action: Restructure the primary user interface window view hierarchy into a compact, symmetric two-column horizontal grid stack using precise AutoLayout anchors to enforce the absolute rule of zero vertical scrolling across the entire main screen layout container. Enforce layer-backed rendering by calling '.wantsLayer = true' and '.layerContentsRedrawPolicy = .onSetNeedsDisplay' across all structural subviews.
+
+###### 1. Functional Backing Card Containers
+Programmatically nest adjacent functional rows into distinct, slightly rounded rectangle custom NSView backing panels colored with a subtle, dark translucent backing tint (using 'NSColor.controlBackgroundColor' or a 5% opacity white overlay) to visually isolate related modules:
+- Card 1 (Column 1, Rows 1-4): The Dynamic Correction Stack (Placeholder slots for De-Esser and Multiband Comp components).
+- Card 2 (Column 1, Rows 5-7): The Leveling & Expansion Pod (Placeholder slots for Wideband Comp, Expander, and Clipper components).
+- Card 3 (Column 2, Rows 11-13): The Spatial Hologram Pod (Placeholder slots for Crosstalk Matrix and Reflection Cancellation components).
+- Card 4 (Column 2, Rows 14-15): The Base Phase Alignment Stack (Placeholder slots for HPF Phase Linearization and Spectral De-Noising).
+
+###### 2. Proportional Proportional AutoLayout Multipliers
+Fix the horizontal layout dimensions of your Column 1 interface rows using rigid, predictable structural layout anchors:
+- Target Slider Element Widths: Occupy exactly 60% of the bounding card width.
+- Visual Tracking Ballistics Gauge Widths: Occupy exactly 25% of the bounding card width.
+- Master Toggle Checkbox Button Widths: Occupy exactly 15% of the bounding card width.
+
+###### 3. Adaptive Text Field Interface Disclosure
+Initialize all advanced numeric status text readout boxes to be hidden from layout rendering frames by default. Wrap text containers inside a conditionally updated frame block: bind their structural text rendering visibility to the active Boolean states of their parent master toggle checkboxes, smoothly fading properties into view ONLY when the corresponding DSP stage is actively engaged, collapsing the view frames to solid spacer blocks when disabled.
+
+###### 4. Tricolor HUD Meter Color Assignment Stubs
+Pre-configure all tracking progress indicators and canvas drawing pipelines to map to a strict semantic color matrix:
+- Crimson Red: Reserved strictly for Gain Reduction metrics and ISP Overload indicators.
+- Electric Blue: Assigned strictly to Room Correction Inverse Curves and your 24-Bit Bit-Stream Monitor.
+- Emerald Green: Used for Dynamic Gain Expansion (Crest Factor Meter) and verified System Status Text strings.
+
+#### 4. Step-by-Step Execution Verification Pass
+When Phase 1 implementation achieves code completion:
+1. Ensure the application compiles without a single error flag using the local target build configuration templates.
+2. Confirm via Xcode diagnostics terminal windows that the app hooks onto the external Schiit DAC clock interface cleanly.
+3. Verify via your local console logging streams that the active processing loops process silent audio block frames with absolute zero runtime allocation spikes.
+4. Launch the user dashboard to confirm that all column components anchor tightly inside a unified, card-backed, non-scrolling UI window frame grid layout featuring the explicit 60%/25%/15% row proportions.

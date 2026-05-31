@@ -852,6 +852,11 @@ final class RenderPipeline {
             return noErr
         }
 
+        // Elevate the render thread to real-time scheduling priority on the
+        // first invocation.  Subsequent calls return immediately via the
+        // atomic flag check (zero additional overhead).
+        context.applyRealtimePriorityIfNeeded()
+
         // 0. Provide frames for processing (handles both direct capture and ring buffer modes)
         let framesRead = context.provideFrames(frameCount: frameCount)
 
@@ -864,6 +869,11 @@ final class RenderPipeline {
             context.updateOutputMeters(from: ioData, frameCount: frameCount)
             return noErr
         }
+
+        // 1. DC-offset removal — fixed 0.5 Hz high-pass applied per channel before
+        // any EQ or gain stage.  Eliminates sub-Hz electrical bias that would
+        // otherwise accumulate through the downstream biquad sections.
+        context.applyDCBlock(frameCount: frameCount)
 
         // 2. Process EQ on the output buffers in-place
         // Processing mode: 0 = full bypass, 1 = normal (EQ + gains), 2 = gains only (compare flat)
