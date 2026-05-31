@@ -285,14 +285,49 @@ final class EqualiserStore: ObservableObject {
         dynamicsConfig = config
     }
 
-    /// Gain reduction in dB reported by the brickwall limiter (0 dB = no reduction).
-    /// Reads the latest value atomically from the audio thread.
+    func updateStereoWidener(_ config: StereoWidenerConfig) {
+        var dyn = eqConfiguration.dynamicsConfig
+        dyn.stereoWidener = config
+        dynamicsConfig = dyn
+    }
+
+    func updateLoudnessMatch(_ config: LoudnessMatchConfig) {
+        var dyn = eqConfiguration.dynamicsConfig
+        dyn.loudnessMatch = config
+        dynamicsConfig = dyn
+    }
+
+    // MARK: - Per-Stage Gain Reduction (audio thread → main thread)
+
+    /// Reads the latest value atomically from the audio thread. 0 dB = no reduction.
     var limiterGainReductionDB: Float {
         routingCoordinator.pipelineManager.renderPipeline?.limiterGainReductionDB ?? 0.0
     }
 
     var clipperEngaged: Bool {
         routingCoordinator.pipelineManager.renderPipeline?.clipperEngaged ?? false
+    }
+
+    var deEsserGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.deEsserGainReductionDB ?? 0.0
+    }
+    var mbLowGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.mbLowGainReductionDB ?? 0.0
+    }
+    var mbMidGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.mbMidGainReductionDB ?? 0.0
+    }
+    var mbHighGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.mbHighGainReductionDB ?? 0.0
+    }
+    var compressorGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.compressorGainReductionDB ?? 0.0
+    }
+    var expanderGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.expanderGainReductionDB ?? 0.0
+    }
+    var clipperGainReductionDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.clipperGainReductionDB ?? 0.0
     }
     
     // MARK: - Initialization

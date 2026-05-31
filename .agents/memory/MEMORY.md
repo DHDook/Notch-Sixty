@@ -1,0 +1,3 @@
+- [Biquad DF2T convention](biquad-df2t.md) — pre-negated coefficients (na1, na2); all filter helpers return (b0,b1,b2,na1,na2) in this format.
+- [Per-stage GR chain](per-stage-gr.md) — 8 atomics in DynamicsProcessor, forwarded via RenderPipeline, polled at 60 Hz with 50 ms ballistics in DynamicsInlineView.
+- [Atomic float helpers](atomic-float-helpers.md) — file-private floatBitsX/bitsToFloatX pattern; each DSP file uses a unique suffix to avoid symbol collisions.

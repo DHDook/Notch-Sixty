@@ -7,8 +7,17 @@ import Foundation
 ///
 /// Signal chain (per buffer):
 /// ```
-/// Input → [De-Esser] → [Multiband Compressor] → [Compressor] → [Expander]
-///       → [Soft Clipper] → [Look-Ahead Ring Buffer] → [Brickwall Limiter] → Output
+/// Input
+///   → [Stereo Widener]           (optional, Section C)
+///   → [LUFS Loudness Match]      (optional, Section D)
+///   → [De-Esser]
+///   → [Multiband Compressor]     (LR4 gentle 24 dB/oct or LR8 steep 48 dB/oct)
+///   → [Compressor]               (soft-knee)
+///   → [Expander]
+///   → [Soft Clipper]
+///   → [Look-Ahead Ring Buffer]
+///   → [Brickwall Limiter]
+///   → Output
 /// ```
 ///
 /// Thread safety: atomic parameters are written by the main thread and read by the audio
@@ -41,9 +50,11 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var deEsserEnvDB: Float = 0.0
 
     // ── Multiband compressor ──────────────────────────────────────────────
-    /// LR4 biquad states: 4 chains × 2 stages × 2 state vars = 16 floats per channel.
+    /// LR4 biquad states (gentle mode): 4 chains × 2 stages × 2 state vars = 16 floats per channel.
     /// Layout: ch*16 + chainIdx*4 + stageIdx*2 + stateVar
     nonisolated(unsafe) var mbFilterState: [Float]
+    /// Extra LR4 stages for steep (LR8) mode: same layout, represents stages 2 & 3 per chain.
+    nonisolated(unsafe) var mbFilterStateSteep: [Float]
     /// Smoothed linear gains per band (audio thread only). Start at unity.
     nonisolated(unsafe) var mbGainLow: Float  = 1.0
     nonisolated(unsafe) var mbGainMid: Float  = 1.0
@@ -62,6 +73,10 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var expanderAlphaAttack:  Float = 0.0
     nonisolated(unsafe) var expanderAlphaRelease: Float = 0.0
 
+    // ── Stereo Widener + LUFS ─────────────────────────────────────────────
+    let stereoWidener:  StereoWidener
+    let lufsProcessor:  LoudnessMatchProcessor
+
     // MARK: - Atomic Parameters (main thread → audio thread)
 
     // De-esser
@@ -76,14 +91,19 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _mbThreshLowBits:  ManagedAtomic<Int32>    // dB
     private let _mbThreshMidBits:  ManagedAtomic<Int32>    // dB
     private let _mbThreshHighBits: ManagedAtomic<Int32>    // dB
+    /// 0 = gentle (LR4, 24 dB/oct), 1 = steep (LR8, 48 dB/oct).
+    private let _mbSlopeLMBits:    ManagedAtomic<Int32>
+    private let _mbSlopeMHBits:    ManagedAtomic<Int32>
 
     // Compressor
-    private let _compEnabled:      ManagedAtomic<Int32>
-    private let _compThreshBits:   ManagedAtomic<Int32>    // dB
-    private let _compRatioBits:    ManagedAtomic<Int32>    // ratio
-    private let _compAlphaAttack:  ManagedAtomic<Int32>    // precomputed alpha
-    private let _compAlphaRelease: ManagedAtomic<Int32>    // precomputed alpha
-    private let _compMakeupBits:   ManagedAtomic<Int32>    // linear gain
+    private let _compEnabled:        ManagedAtomic<Int32>
+    private let _compThreshBits:     ManagedAtomic<Int32>  // dB
+    private let _compRatioBits:      ManagedAtomic<Int32>  // ratio
+    private let _compAlphaAttack:    ManagedAtomic<Int32>  // precomputed alpha
+    private let _compAlphaRelease:   ManagedAtomic<Int32>  // precomputed alpha
+    private let _compMakeupBits:     ManagedAtomic<Int32>  // linear gain
+    /// Soft-knee width in dB. 0 = hard knee.
+    private let _compKneeWidthBits:  ManagedAtomic<Int32>
 
     // Expander
     private let _expEnabled:    ManagedAtomic<Int32>
@@ -104,15 +124,49 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _limiterAlphaRelease: ManagedAtomic<Int32>
 
     // MARK: - Gain Reduction Reporting (audio thread → main thread)
+    //
+    // Per-stage GR in dB (≤ 0). Positive values are clamped to 0.
+    // Reported at the end of each process() call.
 
-    private let _gainReductionBits: ManagedAtomic<Int32>
-    private let _clipperActiveBits: ManagedAtomic<Int32>
+    private let _gainReductionBits: ManagedAtomic<Int32>   // limiter (alias: limiterGRBits)
+    private let _clipperActiveBits: ManagedAtomic<Int32>   // clipper peak flag
+
+    private let _deEsserGRBits: ManagedAtomic<Int32>       // de-esser GR dB
+    private let _mbLowGRBits:   ManagedAtomic<Int32>       // MB low band GR dB
+    private let _mbMidGRBits:   ManagedAtomic<Int32>       // MB mid band GR dB
+    private let _mbHighGRBits:  ManagedAtomic<Int32>       // MB high band GR dB
+    private let _compGRBits:    ManagedAtomic<Int32>       // compressor GR dB
+    private let _expGRBits:     ManagedAtomic<Int32>       // expander GR dB
+    private let _clipperGRBits: ManagedAtomic<Int32>       // clipper GR dB (–6 when engaged)
+
+    // MARK: - Public GR Accessors
 
     var gainReductionDB: Float {
         Float(bitPattern: UInt32(bitPattern: _gainReductionBits.load(ordering: .relaxed)))
     }
     var clipperEngaged: Bool {
         _clipperActiveBits.load(ordering: .relaxed) != 0
+    }
+    var deEsserGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _deEsserGRBits.load(ordering: .relaxed)))
+    }
+    var mbLowGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _mbLowGRBits.load(ordering: .relaxed)))
+    }
+    var mbMidGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _mbMidGRBits.load(ordering: .relaxed)))
+    }
+    var mbHighGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _mbHighGRBits.load(ordering: .relaxed)))
+    }
+    var compressorGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _compGRBits.load(ordering: .relaxed)))
+    }
+    var expanderGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _expGRBits.load(ordering: .relaxed)))
+    }
+    var clipperGainReductionDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _clipperGRBits.load(ordering: .relaxed)))
     }
 
     // MARK: - Initialization
@@ -135,8 +189,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         // De-esser: 2 state vars per channel
         self.deEsserFilterState = Array(repeating: 0.0, count: ch * 2)
 
-        // Multiband: 16 state vars per channel
-        self.mbFilterState = Array(repeating: 0.0, count: ch * 16)
+        // Multiband: 16 state vars per channel (gentle stages 0-1)
+        self.mbFilterState      = Array(repeating: 0.0, count: ch * 16)
+        // Steep extra stages: 16 state vars per channel (steep stages 2-3)
+        self.mbFilterStateSteep = Array(repeating: 0.0, count: ch * 16)
 
         // Multiband temp band buffers: [3 bands][channelCount]
         var bandBufs: [[UnsafeMutablePointer<Float>]] = []
@@ -164,6 +220,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         let limAlphaAtt  = Self.computeAlpha(tauSeconds: 0.0001, sampleRate: sampleRate)
         let limAlphaRel  = Self.computeAlpha(tauSeconds: 0.020,  sampleRate: sampleRate)
 
+        // Stereo widener + LUFS processor
+        self.stereoWidener = StereoWidener()
+        self.lufsProcessor = LoudnessMatchProcessor()
+
         // Atomics — de-esser
         _deEsserEnabled    = ManagedAtomic(0)
         _deEsserFreqBits   = ManagedAtomic(floatBits(6000.0))
@@ -176,6 +236,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         _mbThreshLowBits  = ManagedAtomic(floatBits(0.0))
         _mbThreshMidBits  = ManagedAtomic(floatBits(0.0))
         _mbThreshHighBits = ManagedAtomic(floatBits(0.0))
+        _mbSlopeLMBits    = ManagedAtomic(0)  // gentle
+        _mbSlopeMHBits    = ManagedAtomic(0)  // gentle
 
         // Atomics — compressor
         _compEnabled      = ManagedAtomic(0)
@@ -184,6 +246,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _compAlphaAttack  = ManagedAtomic(floatBits(compAlphaAtt))
         _compAlphaRelease = ManagedAtomic(floatBits(compAlphaRel))
         _compMakeupBits   = ManagedAtomic(floatBits(Self.dbToLinear(2.5)))
+        _compKneeWidthBits = ManagedAtomic(floatBits(6.0))
 
         // Atomics — expander
         _expEnabled     = ManagedAtomic(0)
@@ -203,9 +266,16 @@ final class DynamicsProcessor: @unchecked Sendable {
         _limiterAlphaAttack  = ManagedAtomic(floatBits(limAlphaAtt))
         _limiterAlphaRelease = ManagedAtomic(floatBits(limAlphaRel))
 
-        // Reporting
+        // GR reporting
         _gainReductionBits = ManagedAtomic(floatBits(0.0))
         _clipperActiveBits = ManagedAtomic(0)
+        _deEsserGRBits     = ManagedAtomic(floatBits(0.0))
+        _mbLowGRBits       = ManagedAtomic(floatBits(0.0))
+        _mbMidGRBits       = ManagedAtomic(floatBits(0.0))
+        _mbHighGRBits      = ManagedAtomic(floatBits(0.0))
+        _compGRBits        = ManagedAtomic(floatBits(0.0))
+        _expGRBits         = ManagedAtomic(floatBits(0.0))
+        _clipperGRBits     = ManagedAtomic(floatBits(0.0))
     }
 
     deinit {
@@ -233,6 +303,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setMBThresholdLowDB(_ db: Float)    { _mbThreshLowBits.store(floatBits(db),  ordering: .relaxed) }
     func setMBThresholdMidDB(_ db: Float)    { _mbThreshMidBits.store(floatBits(db),  ordering: .relaxed) }
     func setMBThresholdHighDB(_ db: Float)   { _mbThreshHighBits.store(floatBits(db), ordering: .relaxed) }
+    func setMBSlopeLowMid(_ slope: CrossoverSlope)  { _mbSlopeLMBits.store(Int32(slope.rawValue), ordering: .relaxed) }
+    func setMBSlopeMidHigh(_ slope: CrossoverSlope) { _mbSlopeMHBits.store(Int32(slope.rawValue), ordering: .relaxed) }
 
     func setCompressorEnabled(_ v: Bool)     { _compEnabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setCompressorThresholdDB(_ db: Float) { _compThreshBits.store(floatBits(db), ordering: .relaxed) }
@@ -247,6 +319,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     func setCompressorMakeupGainDB(_ db: Float) {
         _compMakeupBits.store(floatBits(Self.dbToLinear(db)), ordering: .relaxed)
+    }
+    func setCompressorKneeWidthDB(_ db: Float) {
+        _compKneeWidthBits.store(floatBits(max(0.0, min(20.0, db))), ordering: .relaxed)
     }
 
     func setExpanderEnabled(_ v: Bool)       { _expEnabled.store(v ? 1 : 0, ordering: .relaxed) }
@@ -291,6 +366,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func applyConfig(_ config: DynamicsConfig, sampleRate: Double) {
         storedSampleRate = sampleRate
 
+        stereoWidener.applyConfig(config.stereoWidener)
+        lufsProcessor.applyConfig(config.loudnessMatch)
+
         setDeEsserEnabled(config.deEsser.isEnabled)
         setDeEsserFrequencyHz(config.deEsser.frequencyHz)
         setDeEsserThresholdDB(config.deEsser.thresholdDB)
@@ -301,6 +379,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         setMBThresholdLowDB(config.multibandCompressor.thresholdLowDB)
         setMBThresholdMidDB(config.multibandCompressor.thresholdMidDB)
         setMBThresholdHighDB(config.multibandCompressor.thresholdHighDB)
+        setMBSlopeLowMid(config.multibandCompressor.slopeLowMid)
+        setMBSlopeMidHigh(config.multibandCompressor.slopeMidHigh)
 
         setCompressorEnabled(config.compressor.isEnabled)
         setCompressorThresholdDB(config.compressor.thresholdDB)
@@ -308,6 +388,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setCompressorAttackMs(config.compressor.attackMs, sampleRate: sampleRate)
         setCompressorReleaseMs(config.compressor.releaseMs, sampleRate: sampleRate)
         setCompressorMakeupGainDB(config.compressor.makeupGainDB)
+        setCompressorKneeWidthDB(config.compressor.kneeWidthDB)
 
         setExpanderEnabled(config.expander.isEnabled)
         setExpanderThresholdDB(config.expander.thresholdDB)
@@ -335,8 +416,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         lookAheadWriteIndex = 0
         lookAheadSize       = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: lookAheadMs)
         limiterGainCurrent  = 1.0
-        for i in 0..<deEsserFilterState.count { deEsserFilterState[i] = 0 }
-        for i in 0..<mbFilterState.count       { mbFilterState[i] = 0 }
+        for i in 0..<deEsserFilterState.count  { deEsserFilterState[i]  = 0 }
+        for i in 0..<mbFilterState.count        { mbFilterState[i]        = 0 }
+        for i in 0..<mbFilterStateSteep.count   { mbFilterStateSteep[i]   = 0 }
         compEnvDB   = 0.0
         expEnvDB    = 0.0
         deEsserEnvDB = 0.0
@@ -347,6 +429,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         expanderAlphaRelease = Self.computeAlpha(tauSeconds: 0.200, sampleRate: sampleRate)
         setLimiterAttackMs(attackMs, sampleRate: sampleRate)
         setLimiterReleaseMs(releaseMs, sampleRate: sampleRate)
+        stereoWidener.resetState()
+        lufsProcessor.resetState(sampleRate: sampleRate)
     }
 
     // MARK: - DSP Processing (audio thread)
@@ -359,6 +443,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         let numCh = min(channelCount, abl.count)
         guard numCh > 0 else { return }
 
+        let wideOn    = stereoWidener.isEnabled
+        let lufsOn    = lufsProcessor.isEnabled
         let deEsserOn = _deEsserEnabled.load(ordering: .relaxed) != 0
         let mbOn      = _mbEnabled.load(ordering: .relaxed) != 0
         let compOn    = _compEnabled.load(ordering: .relaxed) != 0
@@ -366,9 +452,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         let softOn    = _softClipperEnabled.load(ordering: .relaxed) != 0
         let limOn     = _limiterEnabled.load(ordering: .relaxed) != 0
 
-        guard deEsserOn || mbOn || compOn || expOn || softOn || limOn else {
+        guard wideOn || lufsOn || deEsserOn || mbOn || compOn || expOn || softOn || limOn else {
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
             return
+        }
+
+        // Stage 0a: Stereo Widener (before de-esser)
+        if wideOn { stereoWidener.process(abl: abl, numCh: numCh, count: count, sampleRate: storedSampleRate) }
+
+        // Stage 0b: LUFS gain correction, then measurement update (after widening)
+        if lufsOn {
+            lufsProcessor.applyGain(abl: abl, numCh: numCh, count: count)
+            lufsProcessor.update(abl: abl, numCh: numCh, count: count, sampleRate: storedSampleRate)
         }
 
         if deEsserOn { processDeEsser(abl: abl, numCh: numCh, count: count) }
@@ -376,6 +471,17 @@ final class DynamicsProcessor: @unchecked Sendable {
         if compOn    { processCompressor(abl: abl, numCh: numCh, count: count) }
         if expOn     { processExpander(abl: abl, numCh: numCh, count: count) }
         processSoftClipperAndLimiter(abl: abl, numCh: numCh, count: count, softOn: softOn, limOn: limOn)
+
+        // Report per-stage GR to main thread
+        _deEsserGRBits.store(floatBits(deEsserEnvDB), ordering: .relaxed)
+        let mbLowGRdB  = mbGainLow  > 1e-9 ? 20.0 * log10(mbGainLow)  : -90.0
+        let mbMidGRdB  = mbGainMid  > 1e-9 ? 20.0 * log10(mbGainMid)  : -90.0
+        let mbHighGRdB = mbGainHigh > 1e-9 ? 20.0 * log10(mbGainHigh) : -90.0
+        _mbLowGRBits.store(floatBits(mbLowGRdB),  ordering: .relaxed)
+        _mbMidGRBits.store(floatBits(mbMidGRdB),  ordering: .relaxed)
+        _mbHighGRBits.store(floatBits(mbHighGRdB), ordering: .relaxed)
+        _compGRBits.store(floatBits(compEnvDB), ordering: .relaxed)
+        _expGRBits.store(floatBits(expEnvDB),   ordering: .relaxed)
     }
 
     // MARK: - Module 1: De-Esser
@@ -387,7 +493,6 @@ final class DynamicsProcessor: @unchecked Sendable {
         let sr       = storedSampleRate
         let freqHz   = bitsToFloat(_deEsserFreqBits.load(ordering: .relaxed))
         let thresh   = bitsToFloat(_deEsserThreshBits.load(ordering: .relaxed))
-        // Fixed attack 1 ms, release 50 ms
         let alphaAtt = Self.computeAlpha(tauSeconds: 0.001, sampleRate: sr)
         let alphaRel = Self.computeAlpha(tauSeconds: 0.050, sampleRate: sr)
         let (b0, b1, b2, na1, na2) = Self.bpfCoeffs(fc: freqHz, q: 2.0, sr: sr)
@@ -410,7 +515,7 @@ final class DynamicsProcessor: @unchecked Sendable {
             env = target < env
                 ? alphaAtt * env + (1.0 - alphaAtt) * target
                 : alphaRel * env + (1.0 - alphaRel) * target
-            let gain = pow(10.0, env * 0.05)   // 10^(env/20)
+            let gain = pow(10.0, env * 0.05)
             for ch in 0..<numCh {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                 buf[frame] *= gain
@@ -431,6 +536,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         let threshL = bitsToFloat(_mbThreshLowBits.load(ordering: .relaxed))
         let threshM = bitsToFloat(_mbThreshMidBits.load(ordering: .relaxed))
         let threshH = bitsToFloat(_mbThreshHighBits.load(ordering: .relaxed))
+        let slopeLM = _mbSlopeLMBits.load(ordering: .relaxed)  // 0=gentle, 1=steep
+        let slopeMH = _mbSlopeMHBits.load(ordering: .relaxed)
 
         // Fixed per-band time constants from spec
         let aAttL = Self.computeAlpha(tauSeconds: 0.040, sampleRate: sr)
@@ -447,64 +554,112 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         let safeCount = min(count, Self.maxLookAheadSamples)
 
-        // Split into three band buffers and apply LR4 crossover filters per channel
+        // Split into three band buffers and apply LR4 crossover filters per channel.
+        // If slope == steep, run two extra cascaded stages from mbFilterStateSteep.
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             let b0 = mbBandBufs[0][ch]
             let b1 = mbBandBufs[1][ch]
             let b2 = mbBandBufs[2][ch]
-            memcpy(b0, buf, safeCount * MemoryLayout<Float>.size)
-            memcpy(b1, buf, safeCount * MemoryLayout<Float>.size)
-            memcpy(b2, buf, safeCount * MemoryLayout<Float>.size)
+            for i in 0..<safeCount { let s = buf[i]; b0[i] = s; b1[i] = s; b2[i] = s }
 
-            let base = ch * 16
+            let base  = ch * 16    // gentle state: ch*16
+            let baseS = ch * 16    // steep state (separate array): ch*16
 
-            // Band 0: LP4 @ crossLM (chain 0 — stages 0 & 1)
+            // ── Band 0: LP4 @ crossLM (chain 0, stages 0 & 1) ───────────
             for i in 0..<safeCount {
                 var s0w1 = mbFilterState[base + 0], s0w2 = mbFilterState[base + 1]
                 let y0 = Self.processBiquad(b0[i], b0: lpLMb0, b1: lpLMb1, b2: lpLMb2, na1: lpLMa1, na2: lpLMa2, w1: &s0w1, w2: &s0w2)
                 mbFilterState[base + 0] = s0w1; mbFilterState[base + 1] = s0w2
                 var s1w1 = mbFilterState[base + 2], s1w2 = mbFilterState[base + 3]
-                let y1 = Self.processBiquad(y0,    b0: lpLMb0, b1: lpLMb1, b2: lpLMb2, na1: lpLMa1, na2: lpLMa2, w1: &s1w1, w2: &s1w2)
+                let y1 = Self.processBiquad(y0, b0: lpLMb0, b1: lpLMb1, b2: lpLMb2, na1: lpLMa1, na2: lpLMa2, w1: &s1w1, w2: &s1w2)
                 mbFilterState[base + 2] = s1w1; mbFilterState[base + 3] = s1w2
                 b0[i] = y1
             }
+            // ── Steep extra stages 2 & 3 for LP@crossLM (chain 0) ───────
+            if slopeLM == 1 {
+                for i in 0..<safeCount {
+                    var w1 = mbFilterStateSteep[baseS + 0], w2 = mbFilterStateSteep[baseS + 1]
+                    let y0 = Self.processBiquad(b0[i], b0: lpLMb0, b1: lpLMb1, b2: lpLMb2, na1: lpLMa1, na2: lpLMa2, w1: &w1, w2: &w2)
+                    mbFilterStateSteep[baseS + 0] = w1; mbFilterStateSteep[baseS + 1] = w2
+                    var w3 = mbFilterStateSteep[baseS + 2], w4 = mbFilterStateSteep[baseS + 3]
+                    let y1 = Self.processBiquad(y0, b0: lpLMb0, b1: lpLMb1, b2: lpLMb2, na1: lpLMa1, na2: lpLMa2, w1: &w3, w2: &w4)
+                    mbFilterStateSteep[baseS + 2] = w3; mbFilterStateSteep[baseS + 3] = w4
+                    b0[i] = y1
+                }
+            }
 
-            // Band 1a: HP4 @ crossLM (chain 1 — stages 0 & 1)
+            // ── Band 1a: HP4 @ crossLM (chain 1, stages 0 & 1) ──────────
             for i in 0..<safeCount {
                 var s0w1 = mbFilterState[base + 4], s0w2 = mbFilterState[base + 5]
                 let y0 = Self.processBiquad(b1[i], b0: hpLMb0, b1: hpLMb1, b2: hpLMb2, na1: hpLMa1, na2: hpLMa2, w1: &s0w1, w2: &s0w2)
                 mbFilterState[base + 4] = s0w1; mbFilterState[base + 5] = s0w2
                 var s1w1 = mbFilterState[base + 6], s1w2 = mbFilterState[base + 7]
-                let y1 = Self.processBiquad(y0,    b0: hpLMb0, b1: hpLMb1, b2: hpLMb2, na1: hpLMa1, na2: hpLMa2, w1: &s1w1, w2: &s1w2)
+                let y1 = Self.processBiquad(y0, b0: hpLMb0, b1: hpLMb1, b2: hpLMb2, na1: hpLMa1, na2: hpLMa2, w1: &s1w1, w2: &s1w2)
                 mbFilterState[base + 6] = s1w1; mbFilterState[base + 7] = s1w2
                 b1[i] = y1
             }
+            // ── Steep extra stages 2 & 3 for HP@crossLM (chain 1) ───────
+            if slopeLM == 1 {
+                for i in 0..<safeCount {
+                    var w1 = mbFilterStateSteep[baseS + 4], w2 = mbFilterStateSteep[baseS + 5]
+                    let y0 = Self.processBiquad(b1[i], b0: hpLMb0, b1: hpLMb1, b2: hpLMb2, na1: hpLMa1, na2: hpLMa2, w1: &w1, w2: &w2)
+                    mbFilterStateSteep[baseS + 4] = w1; mbFilterStateSteep[baseS + 5] = w2
+                    var w3 = mbFilterStateSteep[baseS + 6], w4 = mbFilterStateSteep[baseS + 7]
+                    let y1 = Self.processBiquad(y0, b0: hpLMb0, b1: hpLMb1, b2: hpLMb2, na1: hpLMa1, na2: hpLMa2, w1: &w3, w2: &w4)
+                    mbFilterStateSteep[baseS + 6] = w3; mbFilterStateSteep[baseS + 7] = w4
+                    b1[i] = y1
+                }
+            }
 
-            // Band 1b: LP4 @ crossMH (chain 2 — stages 0 & 1)
+            // ── Band 1b: LP4 @ crossMH (chain 2, stages 0 & 1) ──────────
             for i in 0..<safeCount {
                 var s0w1 = mbFilterState[base + 8],  s0w2 = mbFilterState[base + 9]
                 let y0 = Self.processBiquad(b1[i], b0: lpMHb0, b1: lpMHb1, b2: lpMHb2, na1: lpMHa1, na2: lpMHa2, w1: &s0w1, w2: &s0w2)
                 mbFilterState[base + 8] = s0w1; mbFilterState[base + 9] = s0w2
                 var s1w1 = mbFilterState[base + 10], s1w2 = mbFilterState[base + 11]
-                let y1 = Self.processBiquad(y0,    b0: lpMHb0, b1: lpMHb1, b2: lpMHb2, na1: lpMHa1, na2: lpMHa2, w1: &s1w1, w2: &s1w2)
+                let y1 = Self.processBiquad(y0, b0: lpMHb0, b1: lpMHb1, b2: lpMHb2, na1: lpMHa1, na2: lpMHa2, w1: &s1w1, w2: &s1w2)
                 mbFilterState[base + 10] = s1w1; mbFilterState[base + 11] = s1w2
                 b1[i] = y1
             }
+            // ── Steep extra stages 2 & 3 for LP@crossMH (chain 2) ───────
+            if slopeMH == 1 {
+                for i in 0..<safeCount {
+                    var w1 = mbFilterStateSteep[baseS + 8],  w2 = mbFilterStateSteep[baseS + 9]
+                    let y0 = Self.processBiquad(b1[i], b0: lpMHb0, b1: lpMHb1, b2: lpMHb2, na1: lpMHa1, na2: lpMHa2, w1: &w1, w2: &w2)
+                    mbFilterStateSteep[baseS + 8]  = w1; mbFilterStateSteep[baseS + 9]  = w2
+                    var w3 = mbFilterStateSteep[baseS + 10], w4 = mbFilterStateSteep[baseS + 11]
+                    let y1 = Self.processBiquad(y0, b0: lpMHb0, b1: lpMHb1, b2: lpMHb2, na1: lpMHa1, na2: lpMHa2, w1: &w3, w2: &w4)
+                    mbFilterStateSteep[baseS + 10] = w3; mbFilterStateSteep[baseS + 11] = w4
+                    b1[i] = y1
+                }
+            }
 
-            // Band 2: HP4 @ crossMH (chain 3 — stages 0 & 1)
+            // ── Band 2: HP4 @ crossMH (chain 3, stages 0 & 1) ───────────
             for i in 0..<safeCount {
                 var s0w1 = mbFilterState[base + 12], s0w2 = mbFilterState[base + 13]
                 let y0 = Self.processBiquad(b2[i], b0: hpMHb0, b1: hpMHb1, b2: hpMHb2, na1: hpMHa1, na2: hpMHa2, w1: &s0w1, w2: &s0w2)
                 mbFilterState[base + 12] = s0w1; mbFilterState[base + 13] = s0w2
                 var s1w1 = mbFilterState[base + 14], s1w2 = mbFilterState[base + 15]
-                let y1 = Self.processBiquad(y0,    b0: hpMHb0, b1: hpMHb1, b2: hpMHb2, na1: hpMHa1, na2: hpMHa2, w1: &s1w1, w2: &s1w2)
+                let y1 = Self.processBiquad(y0, b0: hpMHb0, b1: hpMHb1, b2: hpMHb2, na1: hpMHa1, na2: hpMHa2, w1: &s1w1, w2: &s1w2)
                 mbFilterState[base + 14] = s1w1; mbFilterState[base + 15] = s1w2
                 b2[i] = y1
             }
+            // ── Steep extra stages 2 & 3 for HP@crossMH (chain 3) ───────
+            if slopeMH == 1 {
+                for i in 0..<safeCount {
+                    var w1 = mbFilterStateSteep[baseS + 12], w2 = mbFilterStateSteep[baseS + 13]
+                    let y0 = Self.processBiquad(b2[i], b0: hpMHb0, b1: hpMHb1, b2: hpMHb2, na1: hpMHa1, na2: hpMHa2, w1: &w1, w2: &w2)
+                    mbFilterStateSteep[baseS + 12] = w1; mbFilterStateSteep[baseS + 13] = w2
+                    var w3 = mbFilterStateSteep[baseS + 14], w4 = mbFilterStateSteep[baseS + 15]
+                    let y1 = Self.processBiquad(y0, b0: hpMHb0, b1: hpMHb1, b2: hpMHb2, na1: hpMHa1, na2: hpMHa2, w1: &w3, w2: &w4)
+                    mbFilterStateSteep[baseS + 14] = w3; mbFilterStateSteep[baseS + 15] = w4
+                    b2[i] = y1
+                }
+            }
         }
 
-        // Per-frame: detect band peaks, compute smoothed gain per band, sum bands back
+        // Per-frame: detect band peaks, compute smoothed gain per band, sum bands back.
         var gL = mbGainLow; var gM = mbGainMid; var gH = mbGainHigh
 
         for frame in 0..<safeCount {
@@ -528,15 +683,28 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
 
     /// Computes next smoothed linear gain for a single multiband compressor band.
-    /// Fixed ratio of 4.0 as specified.
+    /// Fixed ratio of 4.0 with a fixed 6 dB soft-knee.
     @inline(__always)
     private func mbSmoothedGain(
         peak: Float, threshDB: Float, gain: Float,
         alphaAtt: Float, alphaRel: Float
     ) -> Float {
-        let xDB: Float    = peak > 1e-5 ? 20.0 * log10(peak) : -100.0
-        let deltaDB: Float = xDB > threshDB ? (threshDB + (xDB - threshDB) / 4.0) - xDB : 0.0
-        let targetGain     = pow(10.0, deltaDB * 0.05)
+        let xDB: Float = peak > 1e-5 ? 20.0 * log10(peak) : -100.0
+        let ratio: Float = 4.0
+        let kneeW: Float = 6.0
+        let halfKnee = kneeW * 0.5
+
+        let deltaDB: Float
+        if xDB < threshDB - halfKnee {
+            deltaDB = 0.0
+        } else if abs(xDB - threshDB) <= halfKnee {
+            let excess = xDB - threshDB + halfKnee
+            deltaDB = (1.0 / ratio - 1.0) * excess * excess / (2.0 * kneeW)
+        } else {
+            deltaDB = (threshDB + (xDB - threshDB) / ratio) - xDB
+        }
+
+        let targetGain = pow(10.0, deltaDB * 0.05)
         return targetGain < gain
             ? alphaAtt * gain + (1.0 - alphaAtt) * targetGain
             : alphaRel * gain + (1.0 - alphaRel) * targetGain
@@ -553,6 +721,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         let alphaAtt = bitsToFloat(_compAlphaAttack.load(ordering: .relaxed))
         let alphaRel = bitsToFloat(_compAlphaRelease.load(ordering: .relaxed))
         let makeup   = bitsToFloat(_compMakeupBits.load(ordering: .relaxed))
+        let kneeW    = bitsToFloat(_compKneeWidthBits.load(ordering: .relaxed))
+        let halfKnee = kneeW * 0.5
         var env = compEnvDB
 
         for frame in 0..<count {
@@ -561,8 +731,22 @@ final class DynamicsProcessor: @unchecked Sendable {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                 let v = buf[frame]; let a = v < 0 ? -v : v; if a > peak { peak = a }
             }
-            let xDB: Float    = peak > 1e-5 ? 20.0 * log10(peak) : -100.0
-            let target: Float = xDB > thresh ? (thresh + (xDB - thresh) / ratio) - xDB : 0.0
+            let xDB: Float = peak > 1e-5 ? 20.0 * log10(peak) : -100.0
+
+            // Soft-knee gain computer (three-region polynomial)
+            let target: Float
+            if kneeW < 0.01 {
+                // Hard knee
+                target = xDB > thresh ? (thresh + (xDB - thresh) / ratio) - xDB : 0.0
+            } else if xDB < thresh - halfKnee {
+                target = 0.0
+            } else if abs(xDB - thresh) <= halfKnee {
+                let excess = xDB - thresh + halfKnee
+                target = (1.0 / ratio - 1.0) * excess * excess / (2.0 * kneeW)
+            } else {
+                target = (thresh + (xDB - thresh) / ratio) - xDB
+            }
+
             env = target < env
                 ? alphaAtt * env + (1.0 - alphaAtt) * target
                 : alphaRel * env + (1.0 - alphaRel) * target
@@ -618,6 +802,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     ) {
         guard softOn || limOn else {
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
+            _clipperGRBits.store(floatBits(0.0), ordering: .relaxed)
             return
         }
 
@@ -637,13 +822,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         var gC         = limiterGainCurrent
         var lastGC     = gC
         var clipperWasActive = false
+        var maxClipInputPeak: Float = 0.0
 
         for frame in 0..<count {
             if softOn {
                 for ch in 0..<numCh {
                     guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                     let input = buf[frame] * driveLinear
-                    if abs(input) > xLower { clipperWasActive = true }
+                    let absInput = input < 0 ? -input : input
+                    if absInput > xLower {
+                        clipperWasActive = true
+                        if absInput > maxClipInputPeak { maxClipInputPeak = absInput }
+                    }
                     buf[frame] = softClip(input, threshold: threshold,
                                           xLower: xLower, xUpper: xUpper, invTwoKnee: invTwoKnee)
                 }
@@ -680,6 +870,16 @@ final class DynamicsProcessor: @unchecked Sendable {
         _clipperActiveBits.store(softOn && clipperWasActive ? 1 : 0, ordering: .relaxed)
         let grDB = lastGC > 1e-9 ? 20.0 * log10(lastGC) : Float(-90.0)
         _gainReductionBits.store(floatBits(grDB), ordering: .relaxed)
+
+        // Clipper GR: estimate as difference between pre-clip peak and threshold
+        if softOn && clipperWasActive && maxClipInputPeak > 1e-9 {
+            let threshDB  = maxClipInputPeak > 0.0 ? 20.0 * log10(threshold) : 0.0
+            let inputDB   = 20.0 * log10(maxClipInputPeak)
+            let clipperGR = min(0.0, threshDB - inputDB)
+            _clipperGRBits.store(floatBits(clipperGR), ordering: .relaxed)
+        } else {
+            _clipperGRBits.store(floatBits(0.0), ordering: .relaxed)
+        }
     }
 
     // MARK: - Inner DSP Helpers

@@ -1,6 +1,7 @@
 // DynamicsView.swift
-// Controls for the six-stage dynamics processor:
-// De-Esser → Multiband Compressor → Compressor → Expander → Soft Clipper → Brickwall Limiter.
+// Controls for the full dynamics processor chain:
+// Stereo Widener → LUFS Loudness Match → De-Esser → Multiband Compressor
+// → Compressor → Expander → Soft Clipper → Brickwall Limiter.
 
 import AppKit
 import SwiftUI
@@ -12,7 +13,6 @@ import SwiftUI
 /// are propagated atomically to the audio thread while running.
 struct DynamicsView: View {
     @EnvironmentObject var store: EqualiserStore
-    @State private var gainReductionDB: Float = 0.0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +26,8 @@ struct DynamicsView: View {
             .padding(.bottom, 8)
 
             Form {
+                stereoWidenerSection
+                loudnessMatchSection
                 deEsserSection
                 multibandSection
                 compressorSection
@@ -36,16 +38,87 @@ struct DynamicsView: View {
             .formStyle(.grouped)
         }
         .frame(width: 550)
-        .frame(minHeight: 900)
+        .frame(minHeight: 1000)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
         }
-        .onReceive(
-            Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
-        ) { _ in
-            gainReductionDB = store.limiterGainReductionDB
+    }
+
+    // MARK: - Stereo Widener Section
+
+    private var stereoWidenerSection: some View {
+        Section {
+            Toggle("Enabled", isOn: stereoWidenerEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Low Width",
+                value: widthLow,
+                range: 0.0...1.0,
+                step: 0.05,
+                formatValue: { String(format: "%.2f", $0) },
+                leftEndLabel: "Mono",
+                rightEndLabel: "Stereo",
+                isDisabled: !store.dynamicsConfig.stereoWidener.isEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "Mid Width",
+                value: widthMid,
+                range: 1.0...2.0,
+                step: 0.05,
+                formatValue: { String(format: "%.2f", $0) },
+                leftEndLabel: "Narrow",
+                rightEndLabel: "Wide",
+                isDisabled: !store.dynamicsConfig.stereoWidener.isEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "High Width",
+                value: widthHigh,
+                range: 1.0...2.0,
+                step: 0.05,
+                formatValue: { String(format: "%.2f", $0) },
+                leftEndLabel: "Narrow",
+                rightEndLabel: "Wide",
+                isDisabled: !store.dynamicsConfig.stereoWidener.isEnabled
+            )
+        } header: {
+            Text("Stereo Widener")
+        } footer: {
+            Text("Low band (< 200 Hz) defaults to mono for tight bass. Mid and High expand stereo width.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - Loudness Match Section
+
+    private var loudnessMatchSection: some View {
+        Section {
+            Toggle("Enabled", isOn: loudnessMatchEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Target",
+                value: targetLUFS,
+                range: -24.0...(-10.0),
+                step: 0.5,
+                formatValue: { String(format: "%.1f LUFS", $0) },
+                isDisabled: !store.dynamicsConfig.loudnessMatch.isEnabled
+            )
+        } header: {
+            Text("LUFS Loudness Match")
+        } footer: {
+            Text("Continuously measures 3-second K-weighted loudness and applies a smooth gain correction to hit the target.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -98,6 +171,21 @@ struct DynamicsView: View {
                 isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
             )
 
+            HStack(spacing: 8) {
+                Text("LM Slope")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 72, alignment: .leading)
+                Picker("", selection: mbSlopeLowMid) {
+                    Text("Gentle (24 dB/oct)").tag(CrossoverSlope.gentle)
+                    Text("Steep (48 dB/oct)").tag(CrossoverSlope.steep)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .disabled(!store.dynamicsConfig.multibandCompressor.isEnabled)
+            .opacity(!store.dynamicsConfig.multibandCompressor.isEnabled ? 0.4 : 1.0)
+
             DynamicsSliderRow(
                 label: "Mid / High",
                 value: mbCrossMidHigh,
@@ -106,6 +194,21 @@ struct DynamicsView: View {
                 formatValue: { String(format: "%.0f Hz", $0) },
                 isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
             )
+
+            HStack(spacing: 8) {
+                Text("MH Slope")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 72, alignment: .leading)
+                Picker("", selection: mbSlopeMidHigh) {
+                    Text("Gentle (24 dB/oct)").tag(CrossoverSlope.gentle)
+                    Text("Steep (48 dB/oct)").tag(CrossoverSlope.steep)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .disabled(!store.dynamicsConfig.multibandCompressor.isEnabled)
+            .opacity(!store.dynamicsConfig.multibandCompressor.isEnabled ? 0.4 : 1.0)
 
             DynamicsSliderRow(
                 label: "Low Thresh",
@@ -135,6 +238,10 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Multiband Compressor")
+        } footer: {
+            Text("Gentle = LR4 (24 dB/oct). Steep = LR8 (48 dB/oct). Fixed ratio 4:1 with 6 dB soft-knee per band.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -162,6 +269,17 @@ struct DynamicsView: View {
                 range: 1.0...20.0,
                 step: 0.1,
                 formatValue: { String(format: "%.1f : 1", $0) },
+                isDisabled: !store.dynamicsConfig.compressor.isEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "Knee",
+                value: compressorKneeWidth,
+                range: 0.0...20.0,
+                step: 0.5,
+                formatValue: { String(format: "%.1f dB", $0) },
+                leftEndLabel: "Hard",
+                rightEndLabel: "Soft",
                 isDisabled: !store.dynamicsConfig.compressor.isEnabled
             )
 
@@ -324,12 +442,55 @@ struct DynamicsView: View {
                 isDisabled: !store.dynamicsConfig.limiter.isEnabled
             )
 
-            GainReductionMeterRow(gainReductionDB: gainReductionDB)
-                .opacity(store.dynamicsConfig.limiter.isEnabled ? 1.0 : 0.4)
-
         } header: {
             Text("Limiter")
         }
+    }
+
+    // MARK: - Stereo Widener Bindings
+
+    private var stereoWidenerEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.stereoWidener.isEnabled },
+            set: { v in var c = store.dynamicsConfig.stereoWidener; c.isEnabled = v; store.updateStereoWidener(c) }
+        )
+    }
+
+    private var widthLow: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.stereoWidener.widthFactorLow) },
+            set: { v in var c = store.dynamicsConfig.stereoWidener; c.widthFactorLow = Float(v); store.updateStereoWidener(c) }
+        )
+    }
+
+    private var widthMid: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.stereoWidener.widthFactorMid) },
+            set: { v in var c = store.dynamicsConfig.stereoWidener; c.widthFactorMid = Float(v); store.updateStereoWidener(c) }
+        )
+    }
+
+    private var widthHigh: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.stereoWidener.widthFactorHigh) },
+            set: { v in var c = store.dynamicsConfig.stereoWidener; c.widthFactorHigh = Float(v); store.updateStereoWidener(c) }
+        )
+    }
+
+    // MARK: - Loudness Match Bindings
+
+    private var loudnessMatchEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.loudnessMatch.isEnabled },
+            set: { v in var c = store.dynamicsConfig.loudnessMatch; c.isEnabled = v; store.updateLoudnessMatch(c) }
+        )
+    }
+
+    private var targetLUFS: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.loudnessMatch.targetLoudnessLUFS) },
+            set: { v in var c = store.dynamicsConfig.loudnessMatch; c.targetLoudnessLUFS = Float(v); store.updateLoudnessMatch(c) }
+        )
     }
 
     // MARK: - De-Esser Bindings
@@ -399,6 +560,20 @@ struct DynamicsView: View {
         )
     }
 
+    private var mbSlopeLowMid: Binding<CrossoverSlope> {
+        Binding(
+            get: { store.dynamicsConfig.multibandCompressor.slopeLowMid },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.slopeLowMid = v; store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbSlopeMidHigh: Binding<CrossoverSlope> {
+        Binding(
+            get: { store.dynamicsConfig.multibandCompressor.slopeMidHigh },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.slopeMidHigh = v; store.updateMultibandCompressor(c) }
+        )
+    }
+
     // MARK: - Compressor Bindings
 
     private var compressorEnabled: Binding<Bool> {
@@ -419,6 +594,13 @@ struct DynamicsView: View {
         Binding(
             get: { Double(store.dynamicsConfig.compressor.ratio) },
             set: { v in var c = store.dynamicsConfig.compressor; c.ratio = Float(v); store.updateCompressor(c) }
+        )
+    }
+
+    private var compressorKneeWidth: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.compressor.kneeWidthDB) },
+            set: { v in var c = store.dynamicsConfig.compressor; c.kneeWidthDB = Float(v); store.updateCompressor(c) }
         )
     }
 
@@ -478,44 +660,28 @@ struct DynamicsView: View {
     private var softClipperEnabled: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.softClipper.isEnabled },
-            set: { enabled in
-                var sc = store.dynamicsConfig.softClipper
-                sc.isEnabled = enabled
-                store.updateSoftClipper(sc)
-            }
+            set: { enabled in var sc = store.dynamicsConfig.softClipper; sc.isEnabled = enabled; store.updateSoftClipper(sc) }
         )
     }
 
     private var softClipperDrive: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.softClipper.driveDB) },
-            set: { val in
-                var sc = store.dynamicsConfig.softClipper
-                sc.driveDB = Float(val)
-                store.updateSoftClipper(sc)
-            }
+            set: { val in var sc = store.dynamicsConfig.softClipper; sc.driveDB = Float(val); store.updateSoftClipper(sc) }
         )
     }
 
     private var softClipperThreshold: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.softClipper.thresholdDB) },
-            set: { val in
-                var sc = store.dynamicsConfig.softClipper
-                sc.thresholdDB = Float(val)
-                store.updateSoftClipper(sc)
-            }
+            set: { val in var sc = store.dynamicsConfig.softClipper; sc.thresholdDB = Float(val); store.updateSoftClipper(sc) }
         )
     }
 
     private var softClipperKnee: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.softClipper.kneeSmooth) },
-            set: { val in
-                var sc = store.dynamicsConfig.softClipper
-                sc.kneeSmooth = Float(val)
-                store.updateSoftClipper(sc)
-            }
+            set: { val in var sc = store.dynamicsConfig.softClipper; sc.kneeSmooth = Float(val); store.updateSoftClipper(sc) }
         )
     }
 
@@ -524,55 +690,35 @@ struct DynamicsView: View {
     private var limiterEnabled: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.limiter.isEnabled },
-            set: { enabled in
-                var lim = store.dynamicsConfig.limiter
-                lim.isEnabled = enabled
-                store.updateLimiter(lim)
-            }
+            set: { enabled in var lim = store.dynamicsConfig.limiter; lim.isEnabled = enabled; store.updateLimiter(lim) }
         )
     }
 
     private var limiterCeiling: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.limiter.ceilingDB) },
-            set: { val in
-                var lim = store.dynamicsConfig.limiter
-                lim.ceilingDB = Float(val)
-                store.updateLimiter(lim)
-            }
+            set: { val in var lim = store.dynamicsConfig.limiter; lim.ceilingDB = Float(val); store.updateLimiter(lim) }
         )
     }
 
     private var limiterAttack: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.limiter.attackMs) },
-            set: { val in
-                var lim = store.dynamicsConfig.limiter
-                lim.attackMs = Float(val)
-                store.updateLimiter(lim)
-            }
+            set: { val in var lim = store.dynamicsConfig.limiter; lim.attackMs = Float(val); store.updateLimiter(lim) }
         )
     }
 
     private var limiterRelease: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.limiter.releaseMs) },
-            set: { val in
-                var lim = store.dynamicsConfig.limiter
-                lim.releaseMs = Float(val)
-                store.updateLimiter(lim)
-            }
+            set: { val in var lim = store.dynamicsConfig.limiter; lim.releaseMs = Float(val); store.updateLimiter(lim) }
         )
     }
 
     private var limiterLookAhead: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.limiter.lookAheadMs) },
-            set: { val in
-                var lim = store.dynamicsConfig.limiter
-                lim.lookAheadMs = Float(val)
-                store.updateLimiter(lim)
-            }
+            set: { val in var lim = store.dynamicsConfig.limiter; lim.lookAheadMs = Float(val); store.updateLimiter(lim) }
         )
     }
 }
@@ -644,9 +790,7 @@ private struct DynamicsSliderRow: View {
                     isFieldFocused = false
                 }
                 .onChange(of: value, initial: true) { _, newValue in
-                    if !isFieldFocused {
-                        textValue = formatValue(newValue)
-                    }
+                    if !isFieldFocused { textValue = formatValue(newValue) }
                 }
                 .onChange(of: isFieldFocused) { _, focused in
                     if !focused { commitText() }
@@ -670,6 +814,7 @@ private struct DynamicsSliderRow: View {
             .replacingOccurrences(of: "dB", with: "")
             .replacingOccurrences(of: "ms", with: "")
             .replacingOccurrences(of: "Hz", with: "")
+            .replacingOccurrences(of: "LUFS", with: "")
             .replacingOccurrences(of: ": 1", with: "")
             .replacingOccurrences(of: "+", with: "")
             .trimmingCharacters(in: .whitespaces)
@@ -677,164 +822,77 @@ private struct DynamicsSliderRow: View {
     }
 }
 
-// MARK: - Gain Reduction Meter
-
-/// Horizontal bar showing the brickwall limiter's current gain reduction.
-/// Polls at 30 fps via the parent view's timer. Colour shifts green → yellow → orange → red.
-private struct GainReductionMeterRow: View {
-    let gainReductionDB: Float
-
-    private var reductionMagnitude: Double {
-        Double(max(0.0, -gainReductionDB))
-    }
-
-    private static let displayRangeDB: Double = 12.0
-
-    private var fillFraction: Double {
-        min(reductionMagnitude / Self.displayRangeDB, 1.0)
-    }
-
-    private var meterColor: Color {
-        switch reductionMagnitude {
-        case ..<1.0:  return .green
-        case ..<3.0:  return .yellow
-        case ..<6.0:  return .orange
-        default:      return .red
-        }
-    }
-
-    private var isActive: Bool { reductionMagnitude > 0.05 }
-
-    var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                Text("Gain Reduction")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 72, alignment: .leading)
-
-                Spacer()
-
-                Text(String(format: "%.1f dB", gainReductionDB))
-                    .font(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(isActive ? .primary : .secondary)
-            }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color(nsColor: .separatorColor).opacity(0.4))
-                        .frame(height: 6)
-
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(meterColor)
-                        .frame(width: geo.size.width * fillFraction, height: 6)
-                        .animation(.linear(duration: 1.0 / 30.0), value: fillFraction)
-                }
-            }
-            .frame(height: 6)
-        }
-    }
-}
-
 // MARK: - Inline Header Widget
 
 /// Compact dynamics widget shown inline in the main window header.
-/// Shows indicator dots and enable toggles for all six dynamics stages,
-/// plus a tooltip `?` button that surfaces definitions for each processor.
+/// Shows 8-channel vertical LED gain-reduction meters alongside enable toggles
+/// for each dynamics stage, plus a tooltip `?` button.
 struct DynamicsInlineView: View {
     @EnvironmentObject var store: EqualiserStore
+
+    // ── Ballistic GR state (60 Hz, 50 ms release) ─────────────────────────
+    @State private var deEsserGR:  Float = 0.0
+    @State private var mbLowGR:    Float = 0.0
+    @State private var mbMidGR:    Float = 0.0
+    @State private var mbHighGR:   Float = 0.0
+    @State private var compGR:     Float = 0.0
+    @State private var expanderGR: Float = 0.0
+    @State private var clipperGR:  Float = 0.0
+    @State private var limiterGR:  Float = 0.0
+
+    // ── Peak-hold for clipper ──────────────────────────────────────────────
+    @State private var clipperPeakGR:         Float = 0.0
+    @State private var clipperPeakHoldFrames: Int   = 0
+
+    // ── Dot colour pulse state ─────────────────────────────────────────────
     @State private var clipperEngaged: Bool = false
     @State private var limiterEngaged: Bool = false
+
     @State private var showDynamicsPanel = false
-    @State private var showDefinitions = false
+    @State private var showDefinitions   = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                Text("Dynamics")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+            headerRow
 
-                Button {
-                    showDefinitions.toggle()
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showDefinitions, arrowEdge: .bottom) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            definitionEntry(
-                                title: "De-Esser",
-                                body: "Tames harsh, high-frequency sibilance ('S' and 'T' sounds) by applying frequency-selective gain reduction around a tunable centre frequency, without altering the mid-range bite."
-                            )
-                            Divider()
-                            definitionEntry(
-                                title: "Multiband Compressor",
-                                body: "Independently controls the dynamics of three separate frequency bands — Low, Mid, and High — using Linkwitz-Riley 4th-order crossovers. Prevents bass transients from choking the mix."
-                            )
-                            Divider()
-                            definitionEntry(
-                                title: "Compressor",
-                                body: "Wideband feed-forward compressor that automatically balances dynamic range. Provides a cohesive, glued sound, adds transient punch, and accepts a makeup gain to compensate for gain reduction."
-                            )
-                            Divider()
-                            definitionEntry(
-                                title: "Expander",
-                                body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals that fall below the threshold, restoring life to over-compressed tracks and gating low-level noise."
-                            )
-                            Divider()
-                            definitionEntry(
-                                title: "Clipper",
-                                body: "Analogue-style wave-shaper that gently rounds transient peaks before the limiter, reducing the harshness of subsequent limiting."
-                            )
-                            Divider()
-                            definitionEntry(
-                                title: "Limiter",
-                                body: "Look-ahead true peak limiter. Guarantees the output cannot exceed the ceiling. Enabled by default as a clipping safeguard."
-                            )
-                        }
-                        .padding(14)
-                    }
-                    .frame(width: 280, height: 380)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                inlineToggleRow(
+            VStack(alignment: .leading, spacing: 4) {
+                inlineMeterToggleRow(
+                    label: "Widener",
+                    dotColor: simpleDotColor(store.dynamicsConfig.stereoWidener.isEnabled),
+                    grDB: nil,
+                    binding: wideEnabled
+                )
+                inlineMeterToggleRow(
+                    label: "LUFS",
+                    dotColor: simpleDotColor(store.dynamicsConfig.loudnessMatch.isEnabled),
+                    grDB: nil,
+                    binding: lufsEnabled
+                )
+                inlineMeterToggleRow(
                     label: "De-Esser",
                     dotColor: simpleDotColor(store.dynamicsConfig.deEsser.isEnabled),
-                    binding: deEsserEnabled
+                    grDB: deEsserGR,
+                    binding: deEsserEnabledBinding
                 )
-                inlineToggleRow(
-                    label: "M-Band",
-                    dotColor: simpleDotColor(store.dynamicsConfig.multibandCompressor.isEnabled),
-                    binding: mbEnabled
-                )
-                inlineToggleRow(
+                mbMeterToggleRow
+                inlineMeterToggleRow(
                     label: "Comp.",
                     dotColor: simpleDotColor(store.dynamicsConfig.compressor.isEnabled),
-                    binding: compressorEnabled
+                    grDB: compGR,
+                    binding: compressorEnabledBinding
                 )
-                inlineToggleRow(
+                inlineMeterToggleRow(
                     label: "Expander",
                     dotColor: simpleDotColor(store.dynamicsConfig.expander.isEnabled),
-                    binding: expanderEnabled
+                    grDB: expanderGR,
+                    binding: expanderEnabledBinding
                 )
-                inlineToggleRow(
-                    label: "Clipper",
-                    dotColor: clipperDotColor,
-                    binding: clipperEnabled
-                )
-                inlineToggleRow(
+                clipperMeterToggleRow
+                inlineMeterToggleRow(
                     label: "Limiter",
                     dotColor: limiterDotColor,
-                    binding: limiterEnabled
+                    grDB: limiterGR,
+                    binding: limiterEnabledBinding
                 )
 
                 Button {
@@ -853,22 +911,72 @@ struct DynamicsInlineView: View {
             }
         }
         .onReceive(
-            Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+            Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
         ) { _ in
-            clipperEngaged = store.clipperEngaged
-            limiterEngaged = store.limiterGainReductionDB < -0.5
+            updateMeters()
         }
     }
 
-    // MARK: - Helper Views
+    // MARK: - Header
 
+    private var headerRow: some View {
+        HStack(spacing: 4) {
+            Text("Dynamics")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Button {
+                showDefinitions.toggle()
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showDefinitions, arrowEdge: .bottom) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        definitionEntry(title: "Stereo Widener", body: "Three-band M/S processor that independently adjusts stereo width in the Low (< 200 Hz), Mid (200 Hz – 4 kHz), and High (> 4 kHz) regions.")
+                        Divider()
+                        definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level.")
+                        Divider()
+                        definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance ('S' and 'T' sounds) by applying frequency-selective gain reduction around a tunable centre frequency.")
+                        Divider()
+                        definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers. Available in 24 dB/oct (gentle) or 48 dB/oct (steep) slope.")
+                        Divider()
+                        definitionEntry(title: "Compressor", body: "Wideband feed-forward compressor with soft-knee option that automatically balances dynamic range.")
+                        Divider()
+                        definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
+                        Divider()
+                        definitionEntry(title: "Clipper", body: "Analogue-style wave-shaper that gently rounds transient peaks before the limiter.")
+                        Divider()
+                        definitionEntry(title: "Limiter", body: "Look-ahead true peak limiter. Guarantees the output cannot exceed the ceiling.")
+                    }
+                    .padding(14)
+                }
+                .frame(width: 280, height: 420)
+            }
+        }
+    }
+
+    // MARK: - Meter + Toggle Rows
+
+    /// Standard row: [meter] [dot] [label] [toggle]
     @ViewBuilder
-    private func inlineToggleRow(
+    private func inlineMeterToggleRow(
         label: String,
         dotColor: Color,
+        grDB: Float?,
         binding: Binding<Bool>
     ) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
+            if let gr = grDB {
+                grMeter(grDB: gr, peakHold: nil)
+            } else {
+                Spacer().frame(width: 4, height: 20)
+            }
             Circle()
                 .fill(dotColor)
                 .frame(width: 6, height: 6)
@@ -884,14 +992,169 @@ struct DynamicsInlineView: View {
         }
     }
 
+    /// Multiband row: three stacked sub-meters + one M-Band toggle.
+    private var mbMeterToggleRow: some View {
+        HStack(spacing: 5) {
+            VStack(spacing: 2) {
+                miniGrMeter(grDB: mbLowGR,  label: "L")
+                miniGrMeter(grDB: mbMidGR,  label: "M")
+                miniGrMeter(grDB: mbHighGR, label: "H")
+            }
+            Circle()
+                .fill(simpleDotColor(store.dynamicsConfig.multibandCompressor.isEnabled))
+                .frame(width: 6, height: 6)
+            Text("M-Band")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            Toggle("", isOn: mbEnabledBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .fixedSize()
+        }
+    }
+
+    /// Clipper row: meter with peak-hold segment.
+    private var clipperMeterToggleRow: some View {
+        HStack(spacing: 5) {
+            grMeter(grDB: clipperGR, peakHold: clipperPeakHoldFrames > 0 ? clipperPeakGR : nil)
+            Circle()
+                .fill(clipperDotColor)
+                .frame(width: 6, height: 6)
+            Text("Clipper")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            Toggle("", isOn: clipperEnabledBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .fixedSize()
+        }
+    }
+
+    // MARK: - Meter Views
+
+    /// Full-height (20 px) vertical GR meter: fills downward from 0 dB.
+    /// Color: green → yellow → orange → red as GR increases.
+    @ViewBuilder
+    private func grMeter(grDB: Float, peakHold: Float?) -> some View {
+        let mag = Double(max(0, min(-grDB, 24.0))) / 24.0
+        let color = meterColor(grDB: grDB)
+
+        ZStack(alignment: .top) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 4, height: 20)
+
+            if mag > 0 {
+                GeometryReader { geo in
+                    Capsule()
+                        .fill(color)
+                        .frame(width: 4, height: max(1, geo.size.height * mag))
+                }
+                .frame(width: 4, height: 20)
+                .clipped()
+            }
+
+            // Peak-hold segment (1 px bright line)
+            if let peakDB = peakHold {
+                let peakFrac = Double(max(0, min(-peakDB, 24.0))) / 24.0
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.white.opacity(0.85))
+                        .frame(width: 4, height: 2)
+                        .offset(y: max(0, geo.size.height * peakFrac - 1))
+                }
+                .frame(width: 4, height: 20)
+                .clipped()
+            }
+        }
+        .frame(width: 4, height: 20)
+        .animation(.linear(duration: 1.0 / 60.0), value: mag)
+    }
+
+    /// Mini sub-meter for each MB band (6 px tall each).
+    @ViewBuilder
+    private func miniGrMeter(grDB: Float, label: String) -> some View {
+        let mag = Double(max(0, min(-grDB, 24.0))) / 24.0
+        let color = meterColor(grDB: grDB)
+
+        ZStack(alignment: .top) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 4, height: 6)
+            if mag > 0 {
+                GeometryReader { geo in
+                    Capsule()
+                        .fill(color)
+                        .frame(width: 4, height: max(1, geo.size.height * mag))
+                }
+                .frame(width: 4, height: 6)
+                .clipped()
+            }
+        }
+        .frame(width: 4, height: 6)
+        .animation(.linear(duration: 1.0 / 60.0), value: mag)
+        .help("\(label) band GR")
+    }
+
+    private func meterColor(grDB: Float) -> Color {
+        let mag = -grDB
+        switch mag {
+        case ..<4:  return .green
+        case ..<12: return .yellow
+        case ..<18: return .orange
+        default:    return .red
+        }
+    }
+
+    // MARK: - Ballistic Update
+
+    private func updateMeters() {
+        let alpha: Float = 0.72  // ≈ 50 ms release at 60 Hz
+
+        func smooth(_ state: inout Float, target: Float) {
+            // Instant attack (more GR), ballistic release (less GR)
+            if target < state {
+                state = target
+            } else {
+                state = alpha * state + (1.0 - alpha) * target
+            }
+        }
+
+        smooth(&deEsserGR,  target: store.deEsserGainReductionDB)
+        smooth(&mbLowGR,    target: store.mbLowGainReductionDB)
+        smooth(&mbMidGR,    target: store.mbMidGainReductionDB)
+        smooth(&mbHighGR,   target: store.mbHighGainReductionDB)
+        smooth(&compGR,     target: store.compressorGainReductionDB)
+        smooth(&expanderGR, target: store.expanderGainReductionDB)
+        smooth(&limiterGR,  target: store.limiterGainReductionDB)
+
+        let rawClipperGR = store.clipperGainReductionDB
+        smooth(&clipperGR, target: rawClipperGR)
+
+        // Clipper peak-hold: 2-second hold when clipper is engaged
+        if rawClipperGR < -0.5 {
+            if rawClipperGR < clipperPeakGR { clipperPeakGR = rawClipperGR }
+            clipperPeakHoldFrames = 120  // 2 s × 60 Hz
+        } else if clipperPeakHoldFrames > 0 {
+            clipperPeakHoldFrames -= 1
+            if clipperPeakHoldFrames == 0 { clipperPeakGR = 0.0 }
+        }
+
+        clipperEngaged = store.clipperEngaged
+        limiterEngaged = store.limiterGainReductionDB < -0.5
+    }
+
+    // MARK: - Helper Views
+
     @ViewBuilder
     private func definitionEntry(title: String, body: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.bold())
-            Text(body)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(title).font(.caption.bold())
+            Text(body).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -914,53 +1177,59 @@ struct DynamicsInlineView: View {
 
     // MARK: - Bindings
 
-    private var deEsserEnabled: Binding<Bool> {
+    private var wideEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.stereoWidener.isEnabled },
+            set: { v in var c = store.dynamicsConfig.stereoWidener; c.isEnabled = v; store.updateStereoWidener(c) }
+        )
+    }
+
+    private var lufsEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.loudnessMatch.isEnabled },
+            set: { v in var c = store.dynamicsConfig.loudnessMatch; c.isEnabled = v; store.updateLoudnessMatch(c) }
+        )
+    }
+
+    private var deEsserEnabledBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.deEsser.isEnabled },
             set: { v in var c = store.dynamicsConfig.deEsser; c.isEnabled = v; store.updateDeEsser(c) }
         )
     }
 
-    private var mbEnabled: Binding<Bool> {
+    private var mbEnabledBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.multibandCompressor.isEnabled },
             set: { v in var c = store.dynamicsConfig.multibandCompressor; c.isEnabled = v; store.updateMultibandCompressor(c) }
         )
     }
 
-    private var compressorEnabled: Binding<Bool> {
+    private var compressorEnabledBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.compressor.isEnabled },
             set: { v in var c = store.dynamicsConfig.compressor; c.isEnabled = v; store.updateCompressor(c) }
         )
     }
 
-    private var expanderEnabled: Binding<Bool> {
+    private var expanderEnabledBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.expander.isEnabled },
             set: { v in var c = store.dynamicsConfig.expander; c.isEnabled = v; store.updateExpander(c) }
         )
     }
 
-    private var clipperEnabled: Binding<Bool> {
+    private var clipperEnabledBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.softClipper.isEnabled },
-            set: { enabled in
-                var sc = store.dynamicsConfig.softClipper
-                sc.isEnabled = enabled
-                store.updateSoftClipper(sc)
-            }
+            set: { v in var sc = store.dynamicsConfig.softClipper; sc.isEnabled = v; store.updateSoftClipper(sc) }
         )
     }
 
-    private var limiterEnabled: Binding<Bool> {
+    private var limiterEnabledBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.limiter.isEnabled },
-            set: { enabled in
-                var lim = store.dynamicsConfig.limiter
-                lim.isEnabled = enabled
-                store.updateLimiter(lim)
-            }
+            set: { v in var lim = store.dynamicsConfig.limiter; lim.isEnabled = v; store.updateLimiter(lim) }
         )
     }
 }

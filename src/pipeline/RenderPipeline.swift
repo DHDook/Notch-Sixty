@@ -554,6 +554,28 @@ final class RenderPipeline {
         callbackContext?.dynamicsProcessor.clipperEngaged ?? false
     }
 
+    var deEsserGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.deEsserGainReductionDB ?? 0.0
+    }
+    var mbLowGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.mbLowGainReductionDB ?? 0.0
+    }
+    var mbMidGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.mbMidGainReductionDB ?? 0.0
+    }
+    var mbHighGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.mbHighGainReductionDB ?? 0.0
+    }
+    var compressorGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.compressorGainReductionDB ?? 0.0
+    }
+    var expanderGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.expanderGainReductionDB ?? 0.0
+    }
+    var clipperGainReductionDB: Float {
+        callbackContext?.dynamicsProcessor.clipperGainReductionDB ?? 0.0
+    }
+
     /// Updates the boost gain applied before input gain.
     /// Used for volume boost (>100%) when output device can't go higher.
     /// Linear scale: 1.0 = unity (no boost), 2.0 = 2x boost (6dB gain).
