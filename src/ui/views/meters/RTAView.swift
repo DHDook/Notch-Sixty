@@ -144,7 +144,7 @@ struct RTADashboardView: View {
                 HStack(spacing: 16) {
                     Text("FPS: \(analyzer.currentFps)")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(analyzer.currentFps >= 18 ? .secondary : .orange)
+                        .foregroundStyle(analyzer.currentFps >= 18 ? .secondary : Color.orange)
                     Text("Bands: \(analyzer.centerFrequencies.count)")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
