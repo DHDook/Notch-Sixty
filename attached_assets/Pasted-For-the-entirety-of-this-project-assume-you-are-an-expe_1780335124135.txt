@@ -1,0 +1,666 @@
+For the entirety of this project, assume you are an expert audio DSP engineer working on an equalizer app for macos26. Please follow the below instructions to make some enhancements and changes to this app:
+
+1. In a prior commit a series of LTI features were added, including: symmetry balance, panning gain matrix, linear denoising engine, speaker impulse response alignment, recursive crosstalk cancellation matrix, automatic room boundary early reflection cancellation, HPF Phase Linearization, multi-seat complex averaging, sub-bass phase alignment, and zero latency convolution reverb engine. Please check all of these feature (and check for any additional ones that were not listed here) and ensure each has a master bypass toggle in the Dynamics section of the main app screen, as well as an associated configuration section in the Dynamics menu.
+
+2. If the changes made in step 2 add more than 1 toggle in the dynamics section of the main screen, please extend this section to 3 or 4 columns so no more than 6 toggles exist per column. 
+
+3. On the main screen there is excessive white space between the top section which contains the peak in/out and RMS/in out meters, as well as the preamp in out and dynamics controls, and the pre and post EQ RTA graphs below. Revise this so there is a comfortable but not excessive amount of padding between these two sections.
+
+4. The waveform button to access the Dynamics menu was unintentionally shrunk in the prior commit, please increase the size by 50%.
+
+5. The system EQ and Meters controls in the top right tool bar next to the settings gear icon are check boxes. Please convert these to toggles.
+
+6. Please update the user guide to include all the information and mathematical models included below:
+
+Equaliser-Adv Premium Playback Edition: Complete Operation Manual
+This manual provides structural background, mathematical insight, and real-world calibration guidelines for every custom stage integrated into your two-column control grid dashboard. Use these operating procedures to translate high-resolution master audio and cinematic downmixes into pure, optimal analog wattage over your discrete hardware chain: Schiit Modi 5 DAC \(\rightarrow \) Denon DRA-545R Receiver (Preamp Mode) \(\rightarrow \) Pioneer SX-780 Receiver (Power Amp Mode) \(\rightarrow \) Bi-amped Klipsch RP-600M II Speakers + Tape-Out Klipsch R-101SW Subwoofer [INDEX].
+Part 1: Gain Staging: Input and Output Preamp Level Controls
+Proper gain staging is the single most critical factor when interfacing a high-resolution digital pipeline with cascaded vintage analog preamplifiers. Because your system feeds the output of the Denon preamp section into the input of a vintage Pioneer receiver, improper volume mapping will instantly clip the analog input stages of your hardware, causing severe distortion and heat stress [INDEX].
+1. Preamp Input Gain Level Control
+The Operational Architecture: This control acts as a clean digital scalar multiplier applied to the 32-bit floating-point audio blocks at Stage 0.5—immediately after the DC Offset Filter but before the audio encounters any EQ bands or dynamics modules [INDEX].
+Optimal Calibration Rule: Set this slider strictly to 0.0 dB (Unity Gain) [INDEX].
+The Technical Reason: To preserve maximum digital resolution and bit-depth from your Mac, the source streaming media output should stay un-attenuated [INDEX]. Leaving this at 0.0 dB guarantees that your threshold-dependent processors (such as the Multiband and Wideband Compressors) receive a consistent, predictable input baseline matching the target preset values in your JSON memory maps [INDEX].
+2. Preamp Output Gain Level Control & Limiter Ceiling
+The Operational Architecture: This control operates at Stage 10 alongside your brickwall safety limiter, establishing the absolute maximum digital voltage ceiling (\(0\text{ dBFS}\)) passed over the USB-C connection to your Schiit Modi 5 DAC [INDEX].
+Optimal Calibration Rule: Set your master Output Limiter Ceiling strictly to -0.5 dBFS (or -1.0 dBFS for highly dynamic Acoustic/Jazz maps) and turn True-Peak Auto-Guard ON [INDEX].
+The Technical Reason: Standard digital meters miss Inter-Sample Peaks (ISPs) that occur when a digital waveform is converted back into an analog electrical wave inside your DAC. These hidden analog overshoots can severely clip the sensitive analog input circuits of your Denon preamplifier. Restricting the output ceiling to -0.5 dBFS and engaging 4x oversampled true-peak tracking ensures your Schiit DAC outputs a pristine, un-clipped analog electrical signal, safeguarding the entire downstream vintage amplification chain [INDEX].
+3. The Master System Hardware Volume Procedure
+To achieve the highest possible audio clarity and absolute zero hardware clipping, permanently lock your system into this volume routing workflow:
+Set your Mac's system software volume slider to 100% [INDEX].
+Keep your application's Input Preamp Gain at 0.0 dB and your Limiter Ceiling at -0.5 dBFS [INDEX].
+Turn the physical volume knob on your vintage Pioneer amplifier to a fixed, baseline location (typically around 10 o'clock to 12 o'clock).
+Use the physical volume knob on the Denon preamplifier as your single master volume controller to drive the room's sound pressure level [INDEX].
+Part 2: Multi-Topology Parametric EQ Matrix
+1. Architectural Overview & Band Allocation
+The Component Network: This processor represents a high-density, real-time frequency-shaping matrix capable of instantiating anywhere from 1 to 64 independent biquad filter bands per preset map.
+Dynamic Latency Optimization Pass: To protect signal clarity and maintain an ultra-low latency processing footprint over your real-time CoreAudio thread, the engine implements a runtime short-circuit architecture. Unused bands (any band sitting at a neutral 0.0 dB gain or toggled to an inactive state) are completely bypassed. The DSP loop skips their mathematical equations entirely, saving massive CPU cycles and preserving absolute phase purity [INDEX].
+2. Core Operational Parameters
+Every active band across the 64-band matrix is fully configurable via five core parameters. Adjust them using these precision guidelines to shape your acoustic soundstage:
+A. Frequency Selection (20 Hz to 20000 Hz)
+The Parameter: Dictates the exact center frequency (for peak/notch filters) or the corner cutoff frequency (for shelving and pass filters) where the acoustic alteration occurs.
+Calibration Target: Use this to isolate distinct acoustic elements or correct room reflections. For example, setting an active band to 900 Hz on your Thrash Metal map focuses your adjustments directly onto the lower fundamental weight of heavy rhythm guitar cabinets to add raw power to your riffs [INDEX].
+B. Bandwidth / Quality Factor (Q-Value Range: 0.1 to 10.0)
+The Parameter: Controls the width or sharpness of the filter curve.
+Low \(Q\) (0.1 to 1.2): Creates a wide, sweeping, gentle curve that smooths or shapes audio across several octaves [INDEX].
+High \(Q\) (3.0 to 10.0): Sharpens the filter into a narrow, microscopic surgical spike that targets an isolated frequency pocket [INDEX].
+How to Best Use It for Clarity:
+Music Playback (Phase-Pure Focus): Stick strictly to Low-\(Q\) settings (0.5 to 1.2) [INDEX]. Bending frequencies across a wide, smooth arc minimizes localized phase shifting. This keeps the transient "snap" of drum sticks and guitar picks intact through your Klipsch horns, creating a spacious, natural soundstage.
+Media Streams (Surgical Notching): Switch to High-\(Q\) settings (3.5 to 4.0) on cuts [INDEX]. This allows you to carve out compressed web artifacts (like an annoying room echo at 400 Hz or data-compression mud at 120 Hz) like a surgical laser, lifting the digital noise off the track without thinning out the surrounding dialogue or music [INDEX].
+C. Filter Type Selection
+Changes the fundamental mathematical shape and routing topology of the biquad node. Choose between four high-utility playback profiles:
+Peak / Parametric: Boosts or cuts frequencies symmetrically around your chosen center frequency [INDEX]. Use this for general tonal adjustments (like your midrange rock push or low-mid mud scoop) [INDEX].
+High-Pass Filter (HPF): Completely rolls off all low-frequency energy below your cutoff target, allowing higher frequencies to pass through untouched [INDEX]. Use this at the very front of your maps to protect speaker mechanics [INDEX].
+Low-Shelf / High-Shelf: Applies a uniform, flat block boost or cut to all frequencies below (Low-Shelf) or above (High-Shelf) your target cutoff point [INDEX]. Use a High-Shelf (like +1.5 dB at 10 kHz on Pop/Classic Rock maps) to gently add modern "air" to old analog tape transfers.
+Notch: An extreme, near-infinite attenuation spike used exclusively to completely eliminate a single rogue frequency resonance or fixed system hum.
+D. Slope Control & Filter Orders (6 dB/oct to 96 dB/oct)
+The Parameter: Determines the steepness or roll-off rate of your High-Pass and Low-Pass filters, measured in decibels per octave (\(\text{dB/oct}\)). The steepness scales predictably based on the mathematical filter "order" configured in the code:
+1st-Order (6 dB/oct): An ultra-gentle, highly transparent slope. Use this for your Acoustic/Jazz safety cutoff at 45 Hz to preserve sub-bass translation.
+2nd-Order (12 dB/oct): The standard industry baseline slope. Excellent for general high-pass balancing.
+3rd to 4th-Order (18 dB/oct to 24 dB/oct): Sharp, aggressive slopes. Use a 24 dB/oct sharp high-pass filter at 28 Hz on your Rap/Euro Pop profile to create a protective wall that shields your speaker cones from sub-audible infrasonic strain without touching your subwoofer's low-end punch [INDEX].
+Extreme Orders (48 dB/oct up to 96 dB/oct): Brickwall crossover slopes. (Note: For multi-band frequency splitting, use your application's dedicated Linkwitz-Riley crossover selectors to maintain phase alignment, rather than stacking overlapping independent EQ bands [INDEX]).
+Part 3: Integrated Signal Telemetry: Peak and RMS Metering
+Your system includes dedicated Peak In / Peak Out and RMS In / RMS Out meters. Unlike gain reduction meters which explicitly track processor attenuation from the top down, these telemetric meters read from the bottom up to map absolute signal voltages and integrated acoustic energy [INDEX].
+1. Peak Input & Peak Output Meters
+The Metrics: Monitor the single highest absolute instantaneous voltage spike sample (\(X_{\text{peak}}\)) hitting the application input boundary (Peak In) versus the terminal digital ceiling exiting the Limiter network (Peak Out).
+How to Best Use Them:
+Tracking Transients: These meters are highly responsive and move rapidly. Use them to audibly correlate your music's snap. If your Peak In is reaching \(-2\text{ dBFS}\) but your Peak Out is pinned solidly at your Limiter ceiling of \(-0.5\text{ dBFS}\), it indicates that Stage 9 and Stage 10 are actively executing look-ahead waveform shaving to clamp incoming transient spikes [INDEX]. This baseline visualization confirms that your Schiit DAC will never receive a digitally clipped overload waveform [INDEX].
+2. RMS Input & RMS Output Meters
+The Metrics: Track the integrated average energy over time using Root-Mean-Square calculation loops (\(\text{RMS}_{\text{dB}}\)). Rather than analyzing instant speed spikes, RMS matches how the human ear actually perceives structural volume density and acoustic weight.
+How to Best Use Them:
+Calibrating Gain Staging & Compression: Compare the variance between RMS In and RMS Out to evaluate your pipeline's density. If you engage the Wideband Compressor on a thin, vintage rock track and note that your RMS Out rises by \(+2.5\text{ dB}\) relative to your RMS In while your Peak Out remains locked at \(-0.5\text{ dBFS}\), your processing is successfully narrowing the dynamic envelope [INDEX]. This increases "perceived loudness" and acoustic density without driving your analog hardware past its physical distortion clipping limits.
+Part 4: Column 1: Metered Dynamics & Transients (Left Side)
+1. De-Esser Mode & Localized Dynamic EQ
+The Control Loop: Operates as a frequency-selective compressor. In standard mode, a sidechain filter isolates the sibilance frequency spectrum (\(2\text{ kHz}\) to \(10\text{ kHz}\$)\) and attenuates the wideband signal. Engaging Dynamic EQ Mode upgrades the architecture: instead of lowering wideband volume, the linear attenuation is routed exclusively to drop the gain of a precise, targeted biquad parametric filter band centered at your choice of frequency [INDEX].
+How to Best Use It:
+Music Playback: Turn Dynamic EQ Mode ON [INDEX]. When a piercing cymbal hit or vocal sibilance event spikes past the threshold, only that frequency drops out, preserving the surrounding high-end air. For vintage rock, set to \(6.5\text{ kHz}\) [INDEX]. For acoustic picking or acoustic guitar string scrapes, sweep up to \(7.5\text{ kHz}\) [INDEX].
+Meter Feedback: Rests at \(0\text{ dB}\) (top). Drops downward to show exactly how many decibels of volatile sibilance are carved from the track. Aim for a maximum of \(-2\text{ dB}\) to \(-4\text{ dB}\) of reduction to protect strings and vocals without sucking life out of the recording.
+2. Multiband Compressor
+The Control Loop: Splits the full-bandwidth incoming stereo buffer into separate Low, Mid, and High frequency streams using linear phase-aligned Linkwitz-Riley crossover networks [INDEX]. Each band calculates independent peak tracking envelopes (\(X_{\text{band\_dB}}\)) and processes localized threshold attenuation rules without affecting adjacent frequency bands [INDEX].
+How to Best Use It:
+Thrash Metal Isolation: Set your Low/Mid crossover to \(120\text{ Hz}\) and apply a Steep (48 dB/oct) slope [INDEX]. Set the Low Band threshold to \(-4\text{ dB}\) [INDEX]. When rapid double-bass drum transients or heavy palm-muted guitar chugs ignite, the low-band clamps down strictly, containing sub-bass build-up [INDEX]. This keeps your main bi-amped speaker cones perfectly clean, un-smeared, and operating with maximum clarity in the mid frequencies.
+Home Theater Control: Set the Low/Mid crossover to \(90\text{ Hz}\) and the Low threshold to \(-8\text{ dB}\) [INDEX]. This traps heavy cinematic LFE explosions inside their own band, preventing low frequencies from drowning out dialogue frequencies [INDEX].
+Meter Feedback: Features 3 dedicated adjacent channels (Low, Mid, High) [INDEX]. They drop downward to display the reduction happening per band [INDEX]. If the Low band drops to \(-6\text{ dB}\) while Mid and High stay at \(0\text{ dB}\) [INDEX], your sub-bass energy is being controlled dynamically while keeping vocals and guitar clarity completely untouched.
+3. Wideband Compressor
+The Control Loop: Processes the entire stereo mix simultaneously, functioning as an overall leveling tool to glue elements together [INDEX]. Unlike raw compressors that cause digital clipping transitions, this contains a second-order polynomial interpolation curve parameter known as Knee Width [INDEX].
+How to Best Use It:
+The Knee Tuning: For general music, set the Knee Width between \(6.0\text{ dB}\) and \(12.0\text{ dB}\) [INDEX]. This creates a broad, rounded mathematical transition zone [INDEX]. As the signal approaches your threshold, the compression ratio scales up smoothly (e.g., transitioning gradually from \(1.1:1\) up to \(3.5:1\)), eliminating cold, clinical digital artifacts and maintaining high-fidelity transparency [INDEX]. For modern rap/pop synth loops, pull the knee down to \(4.0\text{ dB}\) for a sharper, punchier transient tracking clamp [INDEX].
+Meter Feedback: Rest at \(0\text{ dB}\) and drops downward [INDEX]. It tracks the continuous macro-envelope leveling across the master file [INDEX]. Maintain an average deflection between \(-1.5\text{ dB}\) and \(-3.0\text{ dB}\) to achieve cohesive "glue" without choking the performance.
+4. Crest Factor "Punch" Meter
+The Metric: Measures the absolute variance between the instantaneous peak decibel level (\(\text{Peak}_{\text{dB}}\)) and the continuous average Root-Mean-Square level (\(\text{RMS}_{\text{dB}}\)) over the active processing block [INDEX]. It functions in direct mathematical relation with your master Peak/RMS telemetry meters.
+How to Best Use It:
+Visual Calibration: This meter operates inversely to the others; it rests at the bottom (\(0\text{ dB}\)) and bounces upward into a \(0\text{ dB}\) to \(20\text{ dB}\) scale [INDEX].
+Decoding the Display: A high reading (\(12\text{ dB}\) to \(18\text{ dB}\), illuminating deep blue/green) indicates highly explosive, dynamic audio featuring pristine transients (ideal for jazz and live acoustic music) [INDEX]. A low reading (below \(6\text{ dB}\), illuminating amber/red) indicates a heavily limited, dynamically flat, squashed master [INDEX]. Use this meter as a diagnostic guide: if your Wideband Compressor settings force your Crest Factor down below \(6\text{ dB}\) while matching your Peak Out and RMS Out meters closer together, you are actively destroying the transient punch of your heavy rock drums and guitar riffs [INDEX].
+5. Dynamic Range Expander
+The Control Loop: Functions as the exact inverse of a compressor [INDEX]. It monitors the wideband decibel envelope and applies downward attenuation to any low-level signals falling below a target threshold floor [INDEX].
+How to Best Use It:
+Tape/Vinyl Recovery: Set Threshold to \(-35\text{ dB}\) and Ratio to \(1.5:1\) [INDEX]. During quiet passages, guitar solos, or tracks fading out, the expander gently and transparently pushes the background tape hiss, amp hum, or vinyl surface crackle down toward silence without cutting off the music abruptly like a traditional noise gate [INDEX].
+Audiophile Upward Expansion: On highly compressed, flat radio mixes, set to a gentle \(1.2:1\) ratio to expand macro dynamics, making loud hits slightly louder and restoring breathing room to flat recordings [INDEX].
+Meter Feedback: Drops downward from \(0\text{ dB}\) exclusively when sub-threshold signal attenuation is active [INDEX], letting you see exactly when background noise floor gating is actively cleaning your analog pipeline.
+6. Clipper & Waveform Asymmetry Trim
+The Control Loop: The Asymmetry Trim routes the input vector through a cascaded chain of 1st-order All-Phase filters to rotate and re-balance lopsided voltage peaks before clipping occurs [INDEX]. The Clipper then shaves off extreme microsecond peak anomalies at the sample level [INDEX].
+How to Best Use It:
+Headroom Maximization: Many tracks (especially asymmetric signals like raw acoustic brass, woodwinds, spoken vocals, and vintage rock drum recordings) possess significantly higher positive voltage peaks than negative peaks [INDEX]. Setting the Asymmetry Trim to 75%mathematically balances these lopsided waveforms symmetrically across the zero axis [INDEX]. This creates uniform headroom for both positive and negative peaks before hitting the clipper, giving your vintage Pioneer power amplifier 1 to 2 dB of completely free physical headroomwithout introducing artificial distortion [INDEX].
+Meter & Peak Hold: The Clipper meter drops downward to track shaved microsecond transients [INDEX]. It contains a 1.5-second sticky peak-hold indicator [INDEX]. If a severe transient clip triggers, a thin line locks on-screen for 1.5 seconds, providing clear visual confirmation of your clipping threshold [INDEX].
+7. Limiter & True-Peak Auto-Guard
+The Control Loop: Acts as the absolute final protection safety brickwall ceiling for your system [INDEX]. Standard digital limiters only read discrete sample points. Turning the True-Peak Auto-Guard ONengages a 4x FIR polyphase oversampling interpolation filter that continuously calculates the analog reconstruction behavior of the waveform [INDEX].
+How to Best Use It:
+DAC Overload Protection: Digital files often contain hidden inter-sample peaks (ISPs) that pass through standard meters undetected but violently distort the internal analog reconstruction filters of an external DAC [INDEX]. By enforcing True-Peak Guard, the limiter identifies these sub-sample peaks and clamps them at a safe target ceiling (set to \(-0.5\text{ dBFS}\) or \(-1.0\text{ dBFS}\) for your dual-preamp setup) [INDEX]. This guarantees your Schiit Modi DAC output stream remains clean and free of square-wave clipping [INDEX].
+Meter Feedback: The meter drops downward to show inter-sample peak limiting [INDEX]. Two red True-Peak Over-Indicator LEDs sit directly above this stack; if an overshot sample breaches \(0\text{ dBFS}\), they light solid red and hold for 2.0 seconds, signaling that you should back down your clipper ceiling slightly to protect your analog hardware components [INDEX].
+Part 5: Column 2: Spatial Imaging & System Utilities (Right Side)
+1. Global Media Transport HUD
+The Control Loop: Taps directly into the macOS system-level NowPlayingSpace and MPRemoteCommandCenter execution APIs via a background hardware bridge thread [INDEX].
+How to Best Use It: This minimal control HUD displays the live artist name and track title streaming from whatever application currently holds your Mac's default system audio output [INDEX]. Use the built-in [⏮, ⏯, ⏭] transport buttons to play, pause, or skip tracks globally across any media app without having to switch windows, transforming your equalizer application into a centralized playback command center [INDEX].
+2. Three-Band Frequency-Dependent Stereo Widener
+The Control Loop: Encodes the stereo signal into Mid (\(L+R\)) and Side (\(L-R\)) components [INDEX]. It splits the spatial calculation matrix into three independent, fixed musical frequency bands (Low below \(200\text{ Hz}\), Mid from \(200\text{ Hz}\) to \(4\text{ kHz}\), High above \(4\text{ kHz}\)), scales the Side signals, applies matching center energy volume compensation, and decodes back to Left/Right format [INDEX].
+How to Best Use It:
+The Low-End Mono Rule: Keep Low Width set strictly to 0% [INDEX]. Widening sub-bass frequencies introduces immediate phase cancellation between real-world stereo speakers, destroying low-end power [INDEX]. Forcing everything below \(200\text{ Hz}\) to pure mono keeps sub-bass synth loops and heavy kick drums focused and hitting hard.
+The Massive Guitar Soundstage: Set Mid Width between 140% and 155% [INDEX]. For thrash metal, hard rock, or action films, this flings mid-range rhythm guitar tracks and ambient cinema soundscapes far past the physical boundaries of your Klipsch speakers, engulfing your room in a massive soundstage while keeping vocals and bass locked punchy in the center [INDEX]. Set High Width to 120% to introduce premium space without high-frequency ear fatigue [INDEX].
+3. LUFS Loudness Matcher & Dialogue Gate
+The Control Loop: Measures perceived human volume over a rolling 3.0-second sliding window utilizing an international standard K-weighting frequency-dependent algorithm (filtering low sub-bass and boosting upper mid sensitivity) [INDEX]. It compares this running metric against a fixed user baseline and automatically slides a linear gain modifier up or down to eliminate tracking offsets [INDEX].
+How to Best Use It:
+Fixed Subwoofer Balancing: Because your Klipsch subwoofer is driven from the Pioneer’s Tape Rec output (which outputs a fixed line-level volume that does not react to your preamp's volume knob) [INDEX], this module is critical. Set your target level (Music: \(-16\text{ LUFS}\) [INDEX], Movies: \(-23\text{ LUFS}\) [INDEX], YouTube: \(-14\text{ LUFS}\) [INDEX]). The engine forces all tracks to a uniform average volume, ensuring your subwoofer's bass output remains perfectly balanced with your main bi-amped speakers across every single video or song change [INDEX].
+The Dialogue Gate: When watching movies, turn this ON [INDEX]. This tells the LUFS analyzer to ignore any audio blocks dropping below \(-70\text{ dB}\), preventing the engine from mistakenly interpreting quiet whisper scenes as a "quiet song" and cranking the volume up too loud during cinematic transitions [INDEX].
+4. Phase Diagnostics System (Phase Meter & X/Y Vector Plot)
+The Metrics: The Horizontal Phase Meter continuously executes dot-product covariance equations to map channel alignment from \(-1.0\) (out of phase) to \(+1.0\) (fully in phase) [INDEX]. The Square Vector Plot (Goniometer) takes Left/Right samples and transforms them onto a 45-degree rotated geometric coordinate grid [INDEX].
+How to Best Use It:
+Soundstage Assessment: Watch the vector canvas during spatial expansion adjustments. A pure mono tracking signal will draw a straight, sharp vertical line dead-center. A healthy, wide stereo mix will render a beautifully scattered, glowing cloud expanding horizontally to the left and right. If the cloud flattens completely horizontally or shifts into an upside-down V shape, your phase meter will drop toward \(-1.0\). This warns you that your width settings are introducing heavy phase cancellation, alerting you to back off the sliders before your stereo image turns hollow.
+5. De-Harsh Filter (Global High-Frequency Tilt)
+The Control Loop: Implements an analog-modeled, 1st-order phase-pure global tilt filter topology pivoting on a central musical axis fixed at exactly \(1000\text{ Hz}\) [INDEX].
+How to Best Use It:
+Taming Horn Tweeter Fatigue: Klipsch RP-600M II horn speakers possess high treble efficiency [INDEX]. When paired with bright, raw 1980s metal mixes or bright pop transfers, they can cause intense ear fatigue. Instead of turning down individual EQ bands (which introduces sharp phase shifts), slide the De-Harsh control between \(-1.0\text{ dB}\) and \(-2.5\text{ dB}\) [INDEX]. This acts as a global see-saw tone control: it smoothly slopes down the entire upper frequency spectrum from \(1\text{ kHz}\) to the edge of hearing, while applying an automated, proportional stabilizer below \(1\text{ kHz}\) [INDEX]. The total perceived RMS volume remains balanced, turning a piercing, analytical top-end into a smooth, warm, vinyl-like presentation [INDEX].
+6. Dynamic Loudness Contour
+The Control Loop: Monitored directly from the LUFS volume mapping node, this engine applies an inverted Fletcher-Munson equal-loudness curve using dynamically scaled low-shelving (\(60\text{ Hz}\)) and high-shelving (\(12\text{ kHz}\)) filters [INDEX].
+How to Best Use It:
+Late-Night Listening Alignment: Human hearing naturally loses its sensitivity to deep low-end bass and extreme high-end treble when listening to audio at quiet volumes. Turn this ON for late-night listening sessions [INDEX]. As you turn down your target volume, the app automatically and transparently lifts your sub-bass and upper air tracks in direct proportion to how quiet the playback is [INDEX]. This ensures your rock riffs retain their heavy lower weight and movies keep their cinematic rumble, completely bypassing when you turn the system up to loud thresholds [INDEX].
+7. Time/Balance Optimization Matrix
+The Control Loop: The Symmetry Balance slider applies relative gain multipliers to adjust volume discrepancies [INDEX], while the Time Alignment control maps microsecond-level fractional digital delay lines across a thread-safe FIFO ring buffer track [INDEX].
+How to Best Use It:
+Acoustic Seating Calibration: Real-world listening rooms are rarely perfectly symmetrical. If your couch sits closer to your right speaker by even a few inches, the sound waves from that channel will hit your ears first due to the psychoacoustic Precedence Effect, pulling your center vocal or movie dialogue off-axis.
+The Correction Procedure: Sit in your favorite spot on the couch and play a true mono track (or toggle Stereo Mode to True-Mono [INDEX]). Use the Symmetry Balance slider to level left/right volume blocks until the VU balance bar sits centered [INDEX]. If the image still feels smeared, adjust your Time Alignment slider by a few fractions of a millisecond to delay the closer speaker [INDEX]. The instant the acoustic wavefronts are phase-aligned to your ears, the soundstage will snap into a detailed, holographic center image [INDEX].
+8. Stream Status & Adaptive Clocking Monitor
+The Hardware Hook: Allocates an active stream listener object directly tracking the CoreAudio HAL hardware abstraction layers property configurations (kAudioDevicePropertyStreamFormat) [INDEX].
+How to Best Use It: This high-contrast status label reads out your active playback rate in real time, confirming native format support up to 384 kHz boundary limits [INDEX]. When you activate Bit-Perfect Mode, the application commands your Mac's internal operating system to entirely bypass its destructive internal sample-rate conversion mixer [INDEX]. When you switch from a standard \(44.1\text{ kHz}\) thrash metal album to a high-res \(96\text{ kHz}\) film track or an audiophile master, your external Schiit Modi DAC hardware clock instantly changes pace to track the file natively [INDEX].
+9. DC Offset Filter & Dynamic Delta Solo
+The Control Loop: The DC Filter runs a specialized biquad high-pass calculation cutting everything below \(0.5\text{ Hz}\) at the front of the track [INDEX]. The Delta Solo control executes terminal phase-inversion array matrix arithmetic [INDEX].
+How to Best Use It:
+Amplifier Protection: Many vintage recordings and amateur web streams contain hidden Direct Current (DC) offset, which shifts the audio waveform away from the center zero electrical line [INDEX]. While inaudible, it forces your vintage Pioneer power amplifier and Klipsch speaker cones to operate under constant physical tension even when no sound is playing [INDEX]. Keeping the DC Filter ON centers the waveform, lowering heat dissipation and freeing up physical headroom inside your vintage amplification blocks [INDEX].
+The Processing Sanity Check: Click Delta Solo to audit your EQ curves [INDEX]. This phase-inverts your pipeline, subtracting your processed output from the raw file input [INDEX]. It strips away the music entirely, allowing you to hear only the difference of what your software is doing [INDEX]. This gives you direct sonic verification of exactly what your De-Esser is cutting or what your wideband compressor is flattening, keeping your adjustments completely pure [INDEX].
+10. Latency Mode & Dynamic Buffer Sizing Automation
+The Driver Hook: Acts as an automated software macro system that overrides native CoreAudio device buffer frame size payloads (kAudioDevicePropertyBufferFrameSize) [INDEX].
+How to Best Use It:
+Music Selection: Toggle to Music [INDEX]. The application instantly forces a large 1024-sample hardware driver buffer, giving your Mac's CPU plenty of time to process your complex biquad filters and compressors smoothly with maximum stability [INDEX].
+Movie/Gameplay Selection: Toggle to Movie [INDEX]. The application compresses the hardware driver buffer size down to a razor-thin 64 samples and deactivates look-ahead peak tracking inside your limiter module [INDEX]. This minimizes your latency footprint to near-zero, syncing movie dialogue and competitive video game audio cues to your display panel with absolute precision [INDEX].
+11. Pause Gate & Look-Ahead Sync Buffer Engine
+The Safety Gate: Combines a look-ahead inactivity monitor with a thread-safe 1024-sample look-ahead FIFO memory ring buffer [INDEX].
+How to Best Use It: High-end external DAC hardware takes up to a full second to physically adjust its internal clock relays during a sample-rate change, meaning the first second of a new track normally gets cut off [INDEX]. Enabling the Sync Buffer solves this: the second a clock handshake is initiated, the application catches and safely caches the incoming PCM audio streams in memory while sending digital silence to your amplifiers [INDEX]. The exact microsecond the Schiit Modi DAC reports a stable clock lock status, the engine releases the cached frames [INDEX]. This permanently eliminates truncated track starts, ensuring your vintage amplifier plays the absolute first note of your favorite song cleanly and without popping artifacts [INDEX].
+
+7. Please updated the RTA visual graphs with the following specifications:
+
+System Specification: Fully Calibrated Dual 31-Band RTA Dashboard with Interactive UI and Universal Layout
+1. Architectural Blueprint Overview
+You will implement a unified vertical stack layout for the equaliser-adv application [github.com]. The layout consists of two primary functional zones:
+Top Zone (Master Meters Layout): Reconfigure the existing legacy Peak In/Out and RMS In/Out meters into horizontal progress tracks. Levels must move left-to-right (\(0\%\) to \(100\%\)). Include an interactive, glowing Hardware Clipping Indicator Light featuring a 1.5-second automated hold window and a manual click-to-clear gesture target.
+Bottom Zone (Logarithmic Spectral Graph Canvas): Implement a dual-view 31-Band Real-Time Spectrum Analyzer (RTA) reading input and output lines concurrently across the human hearing range (20 Hz to 20,000 Hz) using the ISO standard 1/3 octave scale. This area features dynamic background grid fading, an overlay of the theoretical Target EQ Filter Curve, precise grid-aligned text labels, an expandable FPS diagnostics readout panel, and a hover-activated contextual tooltip tracking live Delta Gain (\(\Delta\text{ dB}\)) differences.
+2. Audio Pipeline Thread Safety & High Sample Rates (Up to 384 kHz)
+To process audio chunks securely across high-priority threads up to 384 kHz without thread locks or audible stutters, store stereo inputs inside a pre-allocated circular array. Sum channels to mono using optimized vector utilities before executing the analyzer engine.
+swift
+import Foundation
+import Accelerate
+
+class LockFreeAudioRingBuffer {
+    private var buffer: [Float]
+    private let bufferSize = 8192
+    private var writeIndex: Int = 0
+    private var readIndex: Int = 0
+    
+    init() {
+        self.buffer = [Float](repeating: 0.0, count: bufferSize)
+    }
+    
+    /// Sums stereo buffers to mono and stores them dynamically inside the lock-free circular ring tracking data.
+    func writeStereoSamples(leftChannel: UnsafePointer<Float>, rightChannel: UnsafePointer<Float>, frameCount: Int) {
+        var monoFrames = [Float](repeating: 0.0, count: frameCount)
+        vDSP_vadd(leftChannel, 1, rightChannel, 1, &monoFrames, 1, vDSP_Length(frameCount))
+        var scale: Float = 0.5
+        vDSP_vsmul(monoFrames, 1, &scale, &monoFrames, 1, vDSP_Length(frameCount))
+        
+        for i in 0..<frameCount {
+            let targetIdx = (writeIndex + i) % bufferSize
+            buffer[targetIdx] = monoFrames[i]
+        }
+        writeIndex = (writeIndex + frameCount) % bufferSize
+    }
+    
+    /// Pulls a linear chunk of 2048 contiguous samples backward from the current write head pointer.
+    func readLatestChunk(size: Int = 2048) -> [Float]? {
+        let currentWriteIdx = writeIndex
+        var chunk = [Float](repeating: 0.0, count: size)
+        var startIdx = currentWriteIdx - size
+        if startIdx < 0 { startIdx += bufferSize }
+        
+        for i in 0..<size {
+            let sourceIdx = (startIdx + i) % bufferSize
+            chunk[i] = buffer[sourceIdx]
+        }
+        return chunk
+    }
+}
+Use code with caution.
+
+3. Calibrated DSP Engine: Mathematical Correction
+To prevent individual bars from clipping and oversaturating at low volumes, apply strict window gain corrections and configure the decibel conversion to evaluate power reference signals instead of amplitude variables. This ensures a clean 0 dBFS mapping without double decibel multiplication.
+swift
+import Accelerate
+import Foundation
+
+struct BandData {
+    var currentValue: Float = -60.0
+    var peakValue: Float = -60.0
+    var peakHoldFrames: Int = 0
+}
+
+struct BiquadCoefficients {
+    let b0: Double, b1: Double, b2: Double
+    let a1: Double, a2: Double
+}
+
+class AdvancedDualSpectrumAnalyzer: ObservableObject {
+    let minDb: Float = -60.0
+    let maxDb: Float = 12.0
+    
+    private let fftSize = 2048
+    private var fftSetup: FFTSetup
+    private var log2n: vDSP_Length
+    private var window: [Float]
+    
+    // Analog meter ballistic variables
+    private let decayConstant: Float = 0.33      // ~20 dB per second drop rate at 60 FPS
+    private let peakHoldDuration = 30           // 500ms hold at 60 FPS
+    private let peakDecayConstant: Float = 0.66  // ~40 dB per second decay once dropped
+    
+    let centerFrequencies: [Float] = [
+        20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 
+        800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000
+    ]
+    
+    @Published var inputBands = [BandData](repeating: BandData(), count: 31)
+    @Published var outputBands = [BandData](repeating: BandData(), count: 31)
+    @Published var targetLinePoints = [Float](repeating: 0.0, count: 31)
+    
+    @Published var showInputPeaks: Bool = true
+    @Published var showOutputPeaks: Bool = true
+    
+    init() {
+        self.log2n = vDSP_Length(log2(Double(fftSize)))
+        self.fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))!
+        self.window = [Float](repeating: 0, count: fftSize)
+        vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+    }
+    
+    func normalizeDb(_ db: Float) -> Float {
+        let clamped = max(minDb, min(maxDb, db))
+        return (clamped - minDb) / (maxDb - minDb)
+    }
+    
+    func updateTargetLine(activeFilters: [BiquadCoefficients], outputGainDb: Float, sampleRate: Double) {
+        let points: [Float] = centerFrequencies.map { fc in
+            var accumulatedGainDb: Double = Double(outputGainDb)
+            let omega = 2.0 * Double.pi * Double(fc) / sampleRate
+            let cosW = cos(omega), cos2W = cos(2.0 * omega)
+            let sinW = sin(omega), sin2W = sin(2.0 * omega)
+            
+            for filter in activeFilters {
+                let numReal = filter.b0 + filter.b1 * cosW + filter.b2 * cos2W
+                let numImag = -(filter.b1 * sinW + filter.b2 * sin2W)
+                let denReal = 1.0 + filter.a1 * cosW + filter.a2 * cos2W
+                let denImag = -(filter.a1 * sinW + filter.a2 * sin2W)
+                
+                let numMagSq = (numReal * numReal) + (numImag * numImag)
+                let denMagSq = (denReal * denReal) + (denImag * denImag)
+                
+                if denMagSq > 0 { accumulatedGainDb += 10.0 * log10(numMagSq / denMagSq) }
+            }
+            return normalizeDb(Float(accumulatedGainDb))
+        }
+        DispatchQueue.main.async { self.targetLinePoints = points }
+    }
+    
+    func updateSmearedSpectrums(inputSamples: [Float], inputGainDb: Float, outputSamples: [Float], outputGainDb: Float, sampleRate: Float) {
+        var rawInputDb = executeFFT(samples: inputSamples)
+        var rawOutputDb = executeFFT(samples: outputSamples)
+        
+        // Offset calibration adjustments (Includes optional -14.0 dB reference tracking tweak if desired)
+        let visualCalibration: Float = 0.0 
+        var inputOffset = inputGainDb + visualCalibration
+        var outputOffset = outputGainDb + visualCalibration
+        
+        vDSP_vsadd(&rawInputDb, 1, &inputOffset, &rawInputDb, 1, vDSP_Length(rawInputDb.count))
+        vDSP_vsadd(&rawOutputDb, 1, &outputOffset, &rawOutputDb, 1, vDSP_Length(rawOutputDb.count))
+        
+        let targetInputBands = mapBinsToBands(dbMagnitudes: rawInputDb, sampleRate: sampleRate)
+        let targetOutputBands = mapBinsToBands(dbMagnitudes: rawOutputDb, sampleRate: sampleRate)
+        
+        DispatchQueue.main.async {
+            self.applyPhysics(currentBands: &self.inputBands, targetDbValues: targetInputBands)
+            self.applyPhysics(currentBands: &self.outputBands, targetDbValues: targetOutputBands)
+        }
+    }
+    
+    private func executeFFT(samples: [Float]) -> [Float] {
+        guard samples.count >= fftSize else { return [Float](repeating: minDb, count: fftSize / 2) }
+        var windowedSamples = [Float](repeating: 0, count: fftSize)
+        vDSP_vmul(samples, 1, window, 1, &windowedSamples, 1, vDSP_Length(fftSize))
+        
+        var real = [Float](repeating: 0, count: fftSize / 2)
+        var imag = [Float](repeating: 0, count: fftSize / 2)
+        var splitComplex = DSPSplitComplex(realp: &real, imagp: &imag)
+        
+        windowedSamples.withUnsafeBytes { rawBuffer in
+            let typedBuffer = rawBuffer.bindMemory(to: DSPComplex.self)
+            vDSP_ctoz(typedBuffer.baseAddress!, 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
+        }
+        
+        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
+        var magnitudes = [Float](repeating: 0, count: fftSize / 2)
+        vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+        
+        // CRITICAL SCALING MATHEMATICAL REVISION FIXES:
+        // Divide by explicit window length scale configurations to reverse vDSP scaling multipliers.
+        let hannGainCorrection: Float = 0.5
+        var scalingFactor = Float(2.0 / (Float(fftSize) * hannGainCorrection))
+        var dbMagnitudes = [Float](repeating: 0, count: fftSize / 2)
+        
+        // Pass "0" as the final flag argument. This correctly informs vDSP_vdbcon that the data 
+        // is powered/squared. This stops the library from generating double decibel readings.
+        vDSP_vdbcon(&magnitudes, 1, &scalingFactor, &dbMagnitudes, 1, vDSP_Length(fftSize / 2), 0)
+        return dbMagnitudes
+    }
+    
+    private func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {
+        var mappedBands = [Float](repeating: minDb, count: 31)
+        let binWidth = sampleRate / Float(fftSize)
+        
+        for k in 0..<31 {
+            let fc = centerFrequencies[k]
+            let lower = fc * pow(2.0, -1.0/6.0)
+            let upper = fc * pow(2.0, 1.0/6.0)
+            
+            var sum: Float = 0.0
+            var count: Float = 0.0
+            
+            for i in 0..<(fftSize / 2) {
+                let freq = Float(i) * binWidth
+                if freq >= lower && freq <= upper {
+                    sum += dbMagnitudes[i]
+                    count += 1.0
+                }
+            }
+            mappedBands[k] = count > 0 ? (sum / count) : dbMagnitudes[max(0, min(Int(round(fc / binWidth)), (fftSize / 2) - 1))]
+        }
+        return mappedBands
+    }
+    
+    private func applyPhysics(currentBands: inout [BandData], targetDbValues: [Float]) {
+        for i in 0..<31 {
+            let target = targetDbValues[i]
+            if target > currentBands[i].currentValue {
+                currentBands[i].currentValue = target
+            } else {
+                currentBands[i].currentValue = max(target, currentBands[i].currentValue - decayConstant)
+            }
+            if target >= currentBands[i].peakValue {
+                currentBands[i].peakValue = target
+                currentBands[i].peakHoldFrames = peakHoldDuration
+            } else {
+                if currentBands[i].peakHoldFrames > 0 {
+                    currentBands[i].peakHoldFrames -= 1
+                } else {
+                    currentBands[i].peakValue = max(minDb, currentBands[i].peakValue - peakDecayConstant)
+                }
+            }
+        }
+    }
+    deinit { vDSP_destroy_fftsetup(fftSetup) }
+}
+Use code with caution.
+
+4. UI Layout, Tooltip Mechanics, and Clip-Light Hold (SwiftUI Layer)
+Implement the visual hierarchy including full interaction surfaces, precise column text footers, independent clip light models, active diagnostics panels, and the live Delta Gain contextual tooltip overlay.
+swift
+import SwiftUI
+
+class MasterMeterStore: ObservableObject {
+    @Published var inputPeakFraction: Float = 0.0
+    @Published var inputRmsFraction: Float = 0.0
+    @Published var outputPeakFraction: Float = 0.0
+    @Published var outputRmsFraction: Float = 0.0
+    
+    @Published var inputIsClipping: Bool = false
+    @Published var outputIsClipping: Bool = false
+    
+    private let clipHoldFramesThreshold = 90 // 1.5 seconds at 60 FPS
+    private var inputClipTimerCount = 0
+    private var outputClipTimerCount = 0
+    
+    @Published var showDiagnostics: Bool = false
+    @Published var currentFps: Int = 60
+    private var lastFpsTimestamp = Date()
+    private var frameCountSinceLastFpsUpdate = 0
+    
+    func processMeterFrameTick(rawInputPeak: Float, rawInputRms: Float, rawOutputPeak: Float, rawOutputRms: Float) {
+        DispatchQueue.main.async {
+            self.inputPeakFraction = rawInputPeak
+            self.inputRmsFraction = rawInputRms
+            self.outputPeakFraction = rawOutputPeak
+            self.outputRmsFraction = rawOutputRms
+            
+            if rawInputPeak >= 1.0 {
+                self.inputIsClipping = true
+                self.inputClipTimerCount = self.clipHoldFramesThreshold
+            } else if self.inputIsClipping {
+                self.inputClipTimerCount -= 1
+                if self.inputClipTimerCount <= 0 { self.inputIsClipping = false }
+            }
+            
+            if rawOutputPeak >= 1.0 {
+                self.outputIsClipping = true
+                self.outputClipTimerCount = self.clipHoldFramesThreshold
+            } else if self.outputIsClipping {
+                self.outputClipTimerCount -= 1
+                if self.outputClipTimerCount <= 0 { self.outputIsClipping = false }
+            }
+            
+            self.frameCountSinceLastFpsUpdate += 1
+            let now = Date()
+            let elapsed = now.timeIntervalSince(self.lastFpsTimestamp)
+            if elapsed >= 1.0 {
+                self.currentFps = Int(Double(self.frameCountSinceLastFpsUpdate) / elapsed)
+                self.frameCountSinceLastFpsUpdate = 0
+                self.lastFpsTimestamp = now
+            }
+        }
+    }
+    
+    func manuallyResetClips() {
+        inputIsClipping = false; inputClipTimerCount = 0
+        outputIsClipping = false; outputClipTimerCount = 0
+    }
+}
+
+struct UnifiedEqualizerDashboardView: View {
+    @ObservedObject var analyzer: AdvancedDualSpectrumAnalyzer
+    @ObservedObject var legacyMeterStore: MasterMeterStore
+    @Binding var isEqBypassed: Bool
+    
+    @State private var hoveredBandIndex: Int = -1
+    @State private var mouseLocation: CGPoint = .zero
+    
+    private let inputGradient = Gradient(colors: [.blue.opacity(0.35), .purple.opacity(0.35)])
+    private let activeOutputGradient = Gradient(colors: [.green, .green, .yellow, .orange, .red])
+    private let bypassedOutputGradient = Gradient(colors: [.gray.opacity(0.4), .white.opacity(0.2)])
+    
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 16) {
+                
+                // ZONE 1: RECONFIGURED LEGACY METERS (HORIZONTAL PROGRESS ROW)
+                VStack(spacing: 8) {
+                    HorizontalMasterMeterRow(label: "INPUT PEAK", value: legacyMeterStore.inputPeakFraction, barColor: .blue, isClipping: legacyMeterStore.inputIsClipping, onResetAction: { legacyMeterStore.manuallyResetClips() })
+                        .accessibilityLabel("Input Peak Level, \(Int(legacyMeterStore.inputPeakFraction * 100)) percent.")
+                    
+                    HorizontalMasterMeterRow(label: "INPUT RMS ", value: legacyMeterStore.inputRmsFraction, barColor: .purple, isClipping: false, onResetAction: {})
+                    
+                    HorizontalMasterMeterRow(label: "OUTPUT PEAK", value: legacyMeterStore.outputPeakFraction, barColor: isEqBypassed ? .gray : .green, isClipping: isEqBypassed ? false : legacyMeterStore.outputIsClipping, onResetAction: { legacyMeterStore.manuallyResetClips() })
+                }
+                .padding(12)
+                .background(Color(white: 0.08))
+                .cornerRadius(6)
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                // ZONE 2: SPECTRAL RTA CONTAINER AND DISPLAY WINDOW
+                VStack(spacing: 6) {
+                    HStack {
+                        HStack(spacing: 12) {
+                            Toggle("Input Peaks", isOn: $analyzer.showInputPeaks).toggleStyle(.checkbox)
+                            Toggle("Output Peaks", isOn: $analyzer.showOutputPeaks).toggleStyle(.checkbox)
+                            Toggle("Diagnostics", isOn: $legacyMeterStore.showDiagnostics).toggleStyle(.checkbox)
+                        }
+                        Spacer()
+                        Text(isEqBypassed ? "BYPASS APPLIED" : "DSP PIPELINE ACTIVE").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundColor(isEqBypassed ? .orange : .green)
+                    }.padding(.horizontal, 4)
+                    
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        let height = geo.size.height
+                        let spacing: CGFloat = 2
+                        let totalSpacing = spacing * CGFloat(30)
+                        let barWidth = (width - totalSpacing) / 31
+                        
+                        ZStack(alignment: .bottomLeading) {
+                            // Background dB Measurement Grid (Faded when bypassed)
+                            BackgroundGridLines(minDb: analyzer.minDb, maxDb: analyzer.maxDb)
+                                .opacity(isEqBypassed ? 0.25 : 1.0)
+                                .animation(.easeInOut(duration: 0.25), value: isEqBypassed)
+                            
+                            HStack(alignment: .bottom, spacing: spacing) {
+                                ForEach(0..<31, id: \.self) { i in
+                                    ZStack(alignment: .bottom) {
+                                        // Input Level Bar (Always Active Colors)
+                                        Rectangle()
+                                            .fill(LinearGradient(gradient: inputGradient, startPoint: .bottom, endPoint: .top))
+                                            .frame(width: barWidth, height: height * CGFloat(analyzer.normalizeDb(analyzer.inputBands[i].currentValue)))
+                                        
+                                        // Output Level Bar (Grays out when bypassed)
+                                        Rectangle()
+                                            .fill(LinearGradient(gradient: isEqBypassed ? bypassedOutputGradient : activeOutputGradient, startPoint: .bottom, endPoint: .top))
+                                            .frame(width: barWidth, height: height)
+                                            .mask(
+                                                VStack {
+                                                    Spacer(minLength: 0)
+                                                    Rectangle().frame(width: barWidth, height: height * CGFloat(analyzer.normalizeDb(analyzer.outputBands[i].currentValue)))
+                                                }
+                                            )
+                                    }
+                                    .frame(width: barWidth, height: height, alignment: .bottom)
+                                    .contentShape(Rectangle())
+                                    .onHover { isHovering in
+                                        if isHovering { self.hoveredBandIndex = i }
+                                        else if self.hoveredBandIndex == i { self.hoveredBandIndex = -1 }
+                                    }
+                                }
+                            }.background(
+                                GeometryReader { trackingGeo in
+                                    Color.clear.onContinuousHover { phase in
+                                        if case .active(let location) = phase { self.mouseLocation = location }
+                                    }
+                                }
+                            )
+                            
+                            // Vector Line Overlay (Flattens to 0dB axis when bypassed)
+                            Path { path in
+                                for i in 0..<31 {
+                                    let xPos = (CGFloat(i) * (barWidth + spacing)) + (barWidth / 2)
+                                    let normY = isEqBypassed ? analyzer.normalizeDb(0.0) : analyzer.targetLinePoints[i]
+                                    let yPos = height - (height * CGFloat(normY))
+                                    if i == 0 { path.move(to: CGPoint(x: xPos, y: yPos)) }
+                                    else { path.addLine(to: CGPoint(x: xPos, y: yPos)) }
+                                }
+                            }.stroke(isEqBypassed ? LinearGradient(colors: [.gray.opacity(0.4)], startPoint: .leading, endPoint: .trailing) : LinearGradient(colors: [.orange, .pink], startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: isEqBypassed ? 1.5 : 3.0, lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                    .frame(minHeight: 240)
+                    .background(Color(white: 0.04))
+                    .cornerRadius(6)
+                    
+                    // Pixel-Matched Logarithmic Frequency Text Footers
+                    FrequencyAxisLabels(frequencies: analyzer.centerFrequencies, spacing: 2, totalBars: 31)
+                        .padding(.horizontal, 1)
+                }
+            }.padding(14)
+            
+            // CONTEXTUAL DELTA GAIN TOOLTIP LAYER
+            if hoveredBandIndex != -1 && hoveredBandIndex < 31 {
+Use code with caution.
+
+let freq = analyzer.centerFrequencies[hoveredBandIndex]
+let inDb = analyzer.inputBands[hoveredBandIndex].currentValue
+let outDb = analyzer.outputBands[hoveredBandIndex].currentValue
+let deltaDb = outDb - inDb
+let deltaColor = (isEqBypassed || abs(deltaDb) < 0.05) ? Color.gray : (deltaDb > 0 ? Color.green : Color.red)
+let deltaText = isEqBypassed ? "0.0 dB (Bypassed)" : (abs(deltaDb) < 0.05 ? "0.0 dB" : String(format: "%@%.1f dB", deltaDb > 0 ? "+" : "", deltaDb))
+VStack(alignment: .leading, spacing: 4) {
+Text("Freq: (freq >= 1000 ? String(format: "%.1f kHz", freq / 1000.0) : "(Int(freq)) Hz")").fontWeight(.bold)
+Divider().background(Color.white.opacity(0.15))
+Text("Input: (inDb > analyzer.minDb ? String(format: "%.1f dB", inDb) : "-∞ dB")").foregroundColor(.blue.opacity(0.9))
+Text("Output: (outDb > analyzer.minDb ? String(format: "%.1f dB", outDb) : "-∞ dB")").foregroundColor(isEqBypassed ? .gray : .green)
+HStack(spacing: 4) {
+Text("Delta: ").foregroundColor(.white.opacity(0.6))
+Text(deltaText).foregroundColor(deltaColor).fontWeight(.bold)
+}
+}
+.font(.system(size: 9, design: .monospaced)).padding(10).background(Color(white: 0.06).opacity(0.95)).cornerRadius(6).shadow(color: .black.opacity(0.5), radius: 5, x: 0, y: 3).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.15), lineWidth: 1))
+.position(x: mouseLocation.x + 65, y: mouseLocation.y - 45)
+}
+// HUD RENDERING PROCESS MONITOR PANEL
+if legacyMeterStore.showDiagnostics {
+VStack(alignment: .leading, spacing: 4) {
+Text("UI PERF: (legacyMeterStore.currentFps) FPS").foregroundColor(legacyMeterStore.currentFps >= 58 ? .green : .red)
+Text("BUFFER SIZE: 2048 SAMPLES")
+Text("MAX THRESHOLD: 384kHz CAPABLE")
+}.font(.system(size: 8, weight: .bold, design: .monospaced)).padding(6).background(Color.black.opacity(0.85)).cornerRadius(4).padding([.top, .trailing], 24)
+}
+}
+}
+}
+struct HorizontalMasterMeterRow: View {
+let label: String
+let value: Float
+let barColor: Color
+let isClipping: Bool
+var onResetAction: () -> Void
+var body: some View {
+HStack(spacing: 8) {
+Text(label).font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.white.opacity(0.6)).frame(width: 80, alignment: .leading)
+GeometryReader { geo in
+ZStack(alignment: .leading) {
+RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.08)).frame(height: 6)
+RoundedRectangle(cornerRadius: 2).fill(barColor).frame(width: geo.size.width * CGFloat(max(0.0, min(1.0, value))), height: 6)
+}.frame(maxHeight: .infinity, alignment: .center)
+}.frame(height: 6)
+Circle()
+.fill(isClipping ? Color.red : Color(white: 0.15))
+.frame(width: 8, height: 8)
+.shadow(color: isClipping ? Color.red.opacity(0.8) : Color.clear, radius: isClipping ? 4 : 0)
+.onTapGesture { onResetAction() }
+}
+}
+}
+struct BackgroundGridLines: View {
+let minDb: Float
+let maxDb: Float
+var body: some View {
+GeometryReader { geo in
+let dbs: [Float] = [12, 0, -12, -24, -36, -48]
+ForEach(dbs, id: .self) { db in
+let normY = (db - minDb) / (maxDb - minDb)
+let yPos = geo.size.height - (geo.size.height * CGFloat(normY))
+ZStack {
+Path { p in p.move(to: CGPoint(x: 0, y: yPos)); p.addLine(to: CGPoint(x: geo.size.width, y: yPos)) }.stroke(Color.white.opacity(0.12), lineWidth: 1)
+Text("(Int(db)) dB").font(.system(size: 8, design: .monospaced)).foregroundColor(.white.opacity(0.35)).position(x: 24, y: yPos - 5)
+}
+}
+}
+}
+}
+struct FrequencyAxisLabels: View {
+let frequencies: [Float]
+let spacing: CGFloat
+let totalBars: Int
+var body: some View {
+HStack(spacing: spacing) {
+ForEach(0..<totalBars, id: .self) { i in
+let label = parseIsoMarker(frequencies[i])
+Text(label).font(.system(size: 8, weight: label.isEmpty ? .regular : .bold)).foregroundColor(.white.opacity(label.isEmpty ? 0.0 : 0.4)).frame(maxWidth: .infinity).multilineTextAlignment(.center)
+}
+}
+}
+private func parseIsoMarker(_ hz: Float) -> String {
+switch hz {
+case 20: return "20"; case 50: return "50"; case 100: return "100"; case 200: return "200"; case 500: return "500"
+case 1000: return "1k"; case 2000: return "2k"; case 5000: return "5k"; case 10000: return "10k"; case 20000: return "20k"
+default: return ""
+}
+}
+}
+
+***
+
+## 5. Execution Routine for the Agent
+1. **Locate** the current time-domain meter algorithms and intercept their output flags inside your app structure.
+2. **Inject** the `executeFFT` power-referencing modifications directly to fix the display oversaturation bugs.
+3. **Map** the new state bindings and structural layout assets onto your core app layout.
+
+***
+
+8. On the main app screen, in the preset selector section, please add a Save button to the left of the (+) button.

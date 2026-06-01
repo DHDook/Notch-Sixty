@@ -1,7 +1,8 @@
 // DynamicsView.swift
 // Controls for the full dynamics processor chain:
 // Stereo Widener → LUFS Loudness Match → De-Esser → Multiband Compressor
-// → Compressor → Expander → Soft Clipper → Brickwall Limiter.
+// → Compressor → Expander → Soft Clipper → Brickwall Limiter
+// → LTI Processing Suite.
 // Layout: two-column form to minimise scrolling.
 
 import AppKit
@@ -35,6 +36,11 @@ struct DynamicsView: View {
                         multibandSection
                         compressorSection
                         expanderSection
+                        ltiSymmetrySection
+                        ltiPanningSection
+                        ltiIRAlignmentSection
+                        ltiCrosstalkSection
+                        ltiMultiSeatSection
                     }
                     .formStyle(.grouped)
                     .frame(width: 460)
@@ -47,6 +53,11 @@ struct DynamicsView: View {
                         stereoMatrixSection
                         spectralEnhancementSection
                         systemUtilitiesSection
+                        ltiDenoisingSection
+                        ltiEarlyReflectionSection
+                        ltiHPFLinearizationSection
+                        ltiSubBassSection
+                        ltiZLReverbSection
                     }
                     .formStyle(.grouped)
                     .frame(width: 460)
@@ -355,6 +366,148 @@ struct DynamicsView: View {
         }
     }
 
+    // MARK: - LTI: Symmetry Balance Section
+
+    private var ltiSymmetrySection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiSymmetryEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Balance",
+                value: balanceBinding,
+                range: -1.0...1.0,
+                step: 0.01,
+                formatValue: { val in
+                    if val < -0.01 { return String(format: "%.0f%% L", -val * 100) }
+                    if val >  0.01 { return String(format: "%.0f%% R",  val * 100) }
+                    return "Centre"
+                },
+                leftEndLabel: "L",
+                rightEndLabel: "R",
+                isDisabled: !store.dynamicsConfig.advanced.symmetryBalanceEnabled
+            )
+        } header: {
+            Text("Symmetry Balance")
+        } footer: {
+            Text("Applies relative gain multipliers to correct listening-position asymmetry. Adjust balance until a mono source images exactly centre.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Panning Gain Matrix Section
+
+    private var ltiPanningSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiPanningEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Crossfeed",
+                value: ltiPanningCrossfeedBinding,
+                range: 0.0...1.0,
+                step: 0.01,
+                formatValue: { String(format: "%.2f", $0) },
+                leftEndLabel: "None",
+                rightEndLabel: "Full",
+                isDisabled: !store.dynamicsConfig.advanced.panningGainMatrixEnabled
+            )
+        } header: {
+            Text("Panning Gain Matrix")
+        } footer: {
+            Text("Bilinear gain matrix that blends a proportion of each channel into the opposite channel. Simulates speaker crosstalk over headphones.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Speaker IR Alignment Section
+
+    private var ltiIRAlignmentSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiIRAlignmentEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Fine Delay",
+                value: ltiIRDelayBinding,
+                range: 0.0...5.0,
+                step: 0.01,
+                formatValue: { String(format: "%.2f ms", $0) },
+                leftEndLabel: "0 ms",
+                rightEndLabel: "5 ms",
+                isDisabled: !store.dynamicsConfig.advanced.speakerIRAlignmentEnabled
+            )
+        } header: {
+            Text("Speaker IR Alignment")
+        } footer: {
+            Text("Fractional-sample delay line that time-aligns multi-driver acoustic centres. Corrects for woofer/tweeter offset in complex speaker systems.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Crosstalk Cancellation Section
+
+    private var ltiCrosstalkSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiCrosstalkEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Amount",
+                value: ltiCrosstalkAmountBinding,
+                range: 0.0...1.0,
+                step: 0.01,
+                formatValue: { String(format: "%.2f", $0) },
+                leftEndLabel: "Off",
+                rightEndLabel: "Max",
+                isDisabled: !store.dynamicsConfig.advanced.crosstalkCancellationEnabled
+            )
+        } header: {
+            Text("Crosstalk Cancellation Matrix")
+        } footer: {
+            Text("Recursive binaural inversion filter that reduces inter-channel acoustic leakage between speakers. Widens perceived stereo image at the listening position.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Multi-Seat Averaging Section
+
+    private var ltiMultiSeatSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiMultiSeatEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Seat Count",
+                value: ltiMultiSeatCountBinding,
+                range: 1.0...8.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f seats", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.multiSeatAveragingEnabled
+            )
+        } header: {
+            Text("Multi-Seat Complex Averaging")
+        } footer: {
+            Text("Combines HRTF estimates from multiple listening positions into a single composite room correction. Optimises the response across an entire sofa rather than one chair.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
     // MARK: - Loudness Match Section
 
     private var loudnessMatchSection: some View {
@@ -524,20 +677,6 @@ struct DynamicsView: View {
             }
 
             DynamicsSliderRow(
-                label: "Balance",
-                value: balanceBinding,
-                range: -1.0...1.0,
-                step: 0.01,
-                formatValue: { val in
-                    if val < -0.01 { return String(format: "%.0f%% L", -val * 100) }
-                    if val >  0.01 { return String(format: "%.0f%% R",  val * 100) }
-                    return "Centre"
-                },
-                leftEndLabel: "L",
-                rightEndLabel: "R"
-            )
-
-            DynamicsSliderRow(
                 label: "L/R Delay",
                 value: timeDelayBinding,
                 range: 0.0...20.0,
@@ -547,7 +686,7 @@ struct DynamicsView: View {
         } header: {
             Text("Stereo Matrix")
         } footer: {
-            Text("Stereo Mode folds the signal before all other stages. Balance and L/R Delay are applied after the dynamics chain as a non-destructive gain matrix.")
+            Text("Stereo Mode folds the signal before all other stages. L/R Delay is applied after the dynamics chain as a non-destructive time offset. Use Symmetry Balance (LTI section) for gain-based left/right correction.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -633,6 +772,140 @@ struct DynamicsView: View {
             Text("System Utilities")
         } footer: {
             Text("DC Offset Filter removes any DC bias before the dynamics chain. Music mode targets 128-frame I/O. Movie mode targets 512-frame I/O (better AV sync). Delta Solo is controlled via the Compare picker on the main screen.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Linear Denoising Section
+
+    private var ltiDenoisingSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiDenoisingEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Threshold",
+                value: ltiDenoisingThresholdBinding,
+                range: -80.0...(-40.0),
+                step: 1.0,
+                formatValue: { String(format: "%.0f dB", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.linearDenoisingEnabled
+            )
+        } header: {
+            Text("Linear Denoising Engine")
+        } footer: {
+            Text("Spectral subtraction noise floor reduction. Builds a running estimate of the noise power spectrum and subtracts it from each frame. Threshold sets the noise floor estimate ceiling.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Early Reflection Cancellation Section
+
+    private var ltiEarlyReflectionSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiEarlyReflectionEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Room Size",
+                value: ltiEarlyReflectionRoomSizeBinding,
+                range: 5.0...50.0,
+                step: 0.5,
+                formatValue: { String(format: "%.1f ms", $0) },
+                leftEndLabel: "Small",
+                rightEndLabel: "Large",
+                isDisabled: !store.dynamicsConfig.advanced.earlyReflectionCancellationEnabled
+            )
+        } header: {
+            Text("Early Reflection Cancellation")
+        } footer: {
+            Text("FIR comb filter targeting the first-order floor, ceiling, and wall reflection group. Room Size sets the estimated first-reflection arrival time.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: HPF Phase Linearisation Section
+
+    private var ltiHPFLinearizationSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiHPFLinearizationEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Frequency",
+                value: ltiHPFLinearizationFreqBinding,
+                range: 20.0...200.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f Hz", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.hpfPhaseLinearizationEnabled
+            )
+        } header: {
+            Text("HPF Phase Linearisation")
+        } footer: {
+            Text("All-pass FIR compensation network that linearises the group delay introduced by high-pass filter networks. Frequency sets the target cutoff where phase correction is centred.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Sub-Bass Phase Alignment Section
+
+    private var ltiSubBassSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiSubBassEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Crossover",
+                value: ltiSubBassFreqBinding,
+                range: 40.0...120.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f Hz", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.subBassPhaseAlignmentEnabled
+            )
+        } header: {
+            Text("Sub-Bass Phase Alignment")
+        } footer: {
+            Text("All-pass filter network that phase-aligns the sub-bass region with the main speaker bandwidth at the chosen crossover frequency. Eliminates destructive interference between subwoofer and main speakers.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    // MARK: - LTI: Zero-Latency Convolution Reverb Section
+
+    private var ltiZLReverbSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiZLReverbEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Dry / Wet",
+                value: ltiZLReverbMixBinding,
+                range: 0.0...1.0,
+                step: 0.01,
+                formatValue: { String(format: "%.2f", $0) },
+                leftEndLabel: "Dry",
+                rightEndLabel: "Wet",
+                isDisabled: !store.dynamicsConfig.advanced.zlConvolutionReverbEnabled
+            )
+        } header: {
+            Text("ZL Convolution Reverb")
+        } footer: {
+            Text("Uniformly-partitioned FFT convolution applying a room impulse response with zero added latency. Dry/Wet controls the blend between the direct signal and the convolved room response.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -1005,6 +1278,123 @@ struct DynamicsView: View {
             set: { val in var adv = store.dynamicsConfig.advanced; adv.hardwareSyncBufferEnabled = val; store.updateAdvancedProcessing(adv) }
         )
     }
+
+    // MARK: - LTI Bindings
+
+    private var ltiSymmetryEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.symmetryBalanceEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.symmetryBalanceEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiPanningEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.panningGainMatrixEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.panningGainMatrixEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiPanningCrossfeedBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.panningCrossfeedAmount) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.panningCrossfeedAmount = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiDenoisingEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.linearDenoisingEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiDenoisingThresholdBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.linearDenoisingThresholdDB) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingThresholdDB = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiIRAlignmentEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.speakerIRAlignmentEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.speakerIRAlignmentEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiIRDelayBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.speakerIRDelayMs) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.speakerIRDelayMs = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiCrosstalkEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.crosstalkCancellationEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.crosstalkCancellationEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiCrosstalkAmountBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.crosstalkCancellationAmount) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.crosstalkCancellationAmount = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiEarlyReflectionEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.earlyReflectionCancellationEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.earlyReflectionCancellationEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiEarlyReflectionRoomSizeBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.earlyReflectionRoomSizeMs) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.earlyReflectionRoomSizeMs = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiHPFLinearizationEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.hpfPhaseLinearizationEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.hpfPhaseLinearizationEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiHPFLinearizationFreqBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.hpfPhaseLinearizationFrequencyHz) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.hpfPhaseLinearizationFrequencyHz = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiMultiSeatEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.multiSeatAveragingEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.multiSeatAveragingEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiMultiSeatCountBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.multiSeatCount) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.multiSeatCount = Int(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiSubBassEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.subBassPhaseAlignmentEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.subBassPhaseAlignmentEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiSubBassFreqBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.subBassAlignmentFrequencyHz) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.subBassAlignmentFrequencyHz = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiZLReverbEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.zlConvolutionReverbEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.zlConvolutionReverbEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiZLReverbMixBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.zlConvolutionReverbMix) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.zlConvolutionReverbMix = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
 }
 
 // MARK: - Slider Row
@@ -1076,6 +1466,7 @@ private struct DynamicsSliderRow: View {
             .replacingOccurrences(of: " : 1", with: "")
             .replacingOccurrences(of: "% L", with: "")
             .replacingOccurrences(of: "% R", with: "")
+            .replacingOccurrences(of: " seats", with: "")
             .replacingOccurrences(of: "+", with: "")
             .trimmingCharacters(in: .whitespaces)
         if let parsed = Double(cleaned) {
@@ -1088,9 +1479,11 @@ private struct DynamicsSliderRow: View {
 // MARK: - Inline Header Widget
 
 /// Compact dynamics widget shown inline in the main window header.
-/// Two-column layout:
-///   Left  — metered GR for each dynamics stage with enable toggles.
-///   Right — spatial and utility controls with phase/balance meters.
+/// Four-column layout (max 6 toggles per column):
+///   Col 1 — core dynamics chain stages
+///   Col 2 — spectral/spatial utilities
+///   Col 3 — LTI spatial processing
+///   Col 4 — LTI linear processing
 struct DynamicsInlineView: View {
     @EnvironmentObject var store: EqualiserStore
 
@@ -1101,10 +1494,14 @@ struct DynamicsInlineView: View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
 
-            HStack(alignment: .top, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
                 column1
                 Divider()
                 column2
+                Divider()
+                column3
+                Divider()
+                column4
             }
         }
     }
@@ -1134,13 +1531,11 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level.")
                         Divider()
-                        definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance ('S' and 'T' sounds) by applying frequency-selective gain reduction around a tunable centre frequency.")
+                        definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance by applying frequency-selective gain reduction around a tunable centre frequency.")
                         Divider()
-                        definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers. Available in 24 dB/oct (gentle) or 48 dB/oct (steep) slope.")
+                        definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers.")
                         Divider()
                         definitionEntry(title: "Compressor", body: "Wideband feed-forward compressor with soft-knee option that automatically balances dynamic range.")
-                        Divider()
-                        definitionEntry(title: "Crest Factor", body: "Displays the difference between instantaneous peak and RMS level (in dB). Higher values indicate more transient content.")
                         Divider()
                         definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
                         Divider()
@@ -1148,20 +1543,34 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Limiter", body: "Look-ahead true peak limiter. Guarantees the output cannot exceed the ceiling.")
                         Divider()
-                        definitionEntry(title: "Phase Meter", body: "Shows stereo phase correlation: right end (+1) = fully mono/in-phase, centre (0) = uncorrelated, left end (−1) = out of phase.")
+                        definitionEntry(title: "Symmetry Balance", body: "Gain-matrix correction for asymmetric listening positions. Aligns L/R loudness at the ear.")
                         Divider()
-                        definitionEntry(title: "Balance Meter", body: "Shows real-time channel energy difference (L−R in dB). Centre = equal levels. Deflects toward the louder channel.")
+                        definitionEntry(title: "Panning Gain Matrix", body: "Bilinear crossfeed matrix blending a proportion of each channel into the opposite channel.")
+                        Divider()
+                        definitionEntry(title: "IR Alignment", body: "Fractional-sample delay compensation for multi-driver speaker acoustic centres.")
+                        Divider()
+                        definitionEntry(title: "Crosstalk Cancel.", body: "Recursive binaural inversion filter reducing inter-channel acoustic leakage between speakers.")
+                        Divider()
+                        definitionEntry(title: "Early Reflection", body: "FIR comb filter targeting first-order room boundary reflections.")
+                        Divider()
+                        definitionEntry(title: "HPF Linearise", body: "All-pass FIR network linearising group delay introduced by high-pass filter networks.")
+                        Divider()
+                        definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions.")
+                        Divider()
+                        definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
+                        Divider()
+                        definitionEntry(title: "ZL Reverb", body: "Uniformly-partitioned FFT convolution reverb with zero added processing latency.")
                     }
                     .padding(14)
                 }
-                .frame(width: 290, height: 480)
+                .frame(width: 290, height: 520)
             }
 
             Button {
                 showDynamicsPanel.toggle()
             } label: {
                 Image(systemName: "waveform.path")
-                    .font(.system(size: 14))
+                    .font(.system(size: 21))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -1173,7 +1582,7 @@ struct DynamicsInlineView: View {
         }
     }
 
-    // MARK: - Column 1: Metered Dynamics
+    // MARK: - Column 1: Core Dynamics (6 toggles)
 
     private var column1: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1186,19 +1595,43 @@ struct DynamicsInlineView: View {
         }
     }
 
-    // MARK: - Column 2: Spatial & Utility
+    // MARK: - Column 2: Spectral / Spatial Utilities (6 toggles)
 
     private var column2: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             col2Toggle(label: "Widener",   isOn: inlineWideEnabled)
             col2Toggle(label: "LUFS",      isOn: inlineLufsEnabled)
             col2Toggle(label: "De-Harsh",  isOn: inlineDeharshEnabled)
             col2Toggle(label: "Contour",   isOn: inlineLoudnessContourEnabled)
             col2Toggle(label: "DC Filter", isOn: inlineDcOffsetEnabled)
+            col2Toggle(label: "Sym. Bal.", isOn: inlineSymmetryBalanceEnabled)
         }
     }
 
-    // MARK: - Column 2 Helpers
+    // MARK: - Column 3: LTI Spatial (6 toggles)
+
+    private var column3: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            col2Toggle(label: "Pan Matrix", isOn: inlinePanningEnabled)
+            col2Toggle(label: "Denoiser",   isOn: inlineDenoisingEnabled)
+            col2Toggle(label: "IR Align",   isOn: inlineIRAlignmentEnabled)
+            col2Toggle(label: "Crosstalk",  isOn: inlineCrosstalkEnabled)
+            col2Toggle(label: "Early Refl", isOn: inlineEarlyReflectionEnabled)
+            col2Toggle(label: "HPF Lin.",   isOn: inlineHPFLinearizationEnabled)
+        }
+    }
+
+    // MARK: - Column 4: LTI Linear (3 toggles)
+
+    private var column4: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            col2Toggle(label: "Multi-Seat", isOn: inlineMultiSeatEnabled)
+            col2Toggle(label: "Sub Align",  isOn: inlineSubBassEnabled)
+            col2Toggle(label: "ZL Reverb",  isOn: inlineZLReverbEnabled)
+        }
+    }
+
+    // MARK: - Toggle Helper
 
     @ViewBuilder
     private func col2Toggle(label: String, isOn: Binding<Bool>) -> some View {
@@ -1206,7 +1639,7 @@ struct DynamicsInlineView: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 62, alignment: .leading)
+                .frame(width: 68, alignment: .leading)
             Toggle("", isOn: isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -1300,20 +1733,6 @@ struct DynamicsInlineView: View {
         )
     }
 
-    private var inlineBalance: Binding<Double> {
-        Binding(
-            get: { Double(store.dynamicsConfig.advanced.stereoBalancePosition) },
-            set: { v in var adv = store.dynamicsConfig.advanced; adv.stereoBalancePosition = Float(v); store.updateAdvancedProcessing(adv) }
-        )
-    }
-
-    private var inlineTimeDelay: Binding<Double> {
-        Binding(
-            get: { Double(store.dynamicsConfig.advanced.stereoTimeDelayMS) },
-            set: { v in var adv = store.dynamicsConfig.advanced; adv.stereoTimeDelayMS = Float(v); store.updateAdvancedProcessing(adv) }
-        )
-    }
-
     private var inlineDcOffsetEnabled: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.advanced.dcOffsetFilterEnabled },
@@ -1321,31 +1740,77 @@ struct DynamicsInlineView: View {
         )
     }
 
-    private var inlineLatencyMode: Binding<LatencyMode> {
+    private var inlineSymmetryBalanceEnabled: Binding<Bool> {
         Binding(
-            get: { store.dynamicsConfig.advanced.latencyMode },
-            set: { v in var adv = store.dynamicsConfig.advanced; adv.latencyMode = v; store.updateAdvancedProcessing(adv) }
+            get: { store.dynamicsConfig.advanced.symmetryBalanceEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.symmetryBalanceEnabled = v; store.updateAdvancedProcessing(adv) }
         )
     }
 
-    private var inlinePauseGate: Binding<Bool> {
+    // MARK: - Column 3 Bindings
+
+    private var inlinePanningEnabled: Binding<Bool> {
         Binding(
-            get: { store.dynamicsConfig.advanced.pauseGateEnabled },
-            set: { v in var adv = store.dynamicsConfig.advanced; adv.pauseGateEnabled = v; store.updateAdvancedProcessing(adv) }
+            get: { store.dynamicsConfig.advanced.panningGainMatrixEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.panningGainMatrixEnabled = v; store.updateAdvancedProcessing(adv) }
         )
     }
 
-    private var inlineSyncBuffer: Binding<Bool> {
+    private var inlineDenoisingEnabled: Binding<Bool> {
         Binding(
-            get: { store.dynamicsConfig.advanced.hardwareSyncBufferEnabled },
-            set: { v in var adv = store.dynamicsConfig.advanced; adv.hardwareSyncBufferEnabled = v; store.updateAdvancedProcessing(adv) }
+            get: { store.dynamicsConfig.advanced.linearDenoisingEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingEnabled = v; store.updateAdvancedProcessing(adv) }
         )
     }
 
-    private var inlineDitherMode: Binding<DitherMode> {
+    private var inlineIRAlignmentEnabled: Binding<Bool> {
         Binding(
-            get: { store.dynamicsConfig.advanced.ditherMode },
-            set: { v in var adv = store.dynamicsConfig.advanced; adv.ditherMode = v; store.updateAdvancedProcessing(adv) }
+            get: { store.dynamicsConfig.advanced.speakerIRAlignmentEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.speakerIRAlignmentEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlineCrosstalkEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.crosstalkCancellationEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.crosstalkCancellationEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlineEarlyReflectionEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.earlyReflectionCancellationEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.earlyReflectionCancellationEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlineHPFLinearizationEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.hpfPhaseLinearizationEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.hpfPhaseLinearizationEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    // MARK: - Column 4 Bindings
+
+    private var inlineMultiSeatEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.multiSeatAveragingEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.multiSeatAveragingEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlineSubBassEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.subBassPhaseAlignmentEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.subBassPhaseAlignmentEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlineZLReverbEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.zlConvolutionReverbEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.zlConvolutionReverbEnabled = v; store.updateAdvancedProcessing(adv) }
         )
     }
 }

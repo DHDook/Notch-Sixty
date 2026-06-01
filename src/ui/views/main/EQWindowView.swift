@@ -32,7 +32,7 @@ struct EQWindowView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 6) {
             // Level meters + control panel
             HStack(alignment: .top, spacing: 0) {
                 LevelMetersView(meterStore: store.meterStore)
@@ -200,12 +200,12 @@ struct EQWindowView: View {
                 )) {
                     Text("System EQ")
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch)
                 .controlSize(.small)
                 .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
 
                 Toggle("Meters", isOn: $metersEnabledUI)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(.switch)
                     .controlSize(.small)
                     .help("Level meters add slight CPU overhead. Disable here to reduce CPU while the window is open.")
 

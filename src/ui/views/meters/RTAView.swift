@@ -1,5 +1,7 @@
 // RTAView.swift
 // Dual 31-band real-time spectrum analyser views + horizontal master meters.
+// Features: peak/RMS horizontal bars, glowing clip indicators with 1.5 s hold
+// and click-to-reset, FPS diagnostics panel, hover delta-gain tooltip.
 
 import Combine
 import SwiftUI
@@ -17,10 +19,17 @@ final class RTAMeterBridge: ObservableObject {
     @Published var inputIsClipping:    Bool  = false
     @Published var outputIsClipping:   Bool  = false
 
+    @Published var showDiagnostics: Bool = false
+
     private let ipL = RTASingleObserver(), ipR = RTASingleObserver()
     private let opL = RTASingleObserver(), opR = RTASingleObserver()
     private let irL = RTASingleObserver(), irR = RTASingleObserver()
     private let orL = RTASingleObserver(), orR = RTASingleObserver()
+
+    /// Clip hold duration in seconds.
+    private let clipHoldDuration: TimeInterval = 1.5
+    private var inputClipTask:  Task<Void, Never>?
+    private var outputClipTask: Task<Void, Never>?
 
     func register(with meterStore: MeterStore) {
         meterStore.addObserver(ipL, for: .inputPeakLeft)
@@ -34,14 +43,14 @@ final class RTAMeterBridge: ObservableObject {
 
         ipL.onUpdate = { [weak self] v, _, c in
             self?.inputPeakFraction = max(self?.inputPeakFraction ?? 0, v)
-            if c { self?.inputIsClipping = true }
+            if c { self?.triggerInputClip() }
         }
         ipR.onUpdate = { [weak self] v, _, _ in
             self?.inputPeakFraction = max(self?.inputPeakFraction ?? 0, v)
         }
         opL.onUpdate = { [weak self] v, _, c in
             self?.outputPeakFraction = max(self?.outputPeakFraction ?? 0, v)
-            if c { self?.outputIsClipping = true }
+            if c { self?.triggerOutputClip() }
         }
         opR.onUpdate = { [weak self] v, _, _ in
             self?.outputPeakFraction = max(self?.outputPeakFraction ?? 0, v)
@@ -50,6 +59,33 @@ final class RTAMeterBridge: ObservableObject {
         irR.onUpdate = { [weak self] v, _, _ in self?.inputRmsFraction  = max(self?.inputRmsFraction  ?? 0, v) }
         orL.onUpdate = { [weak self] v, _, _ in self?.outputRmsFraction = max(self?.outputRmsFraction ?? 0, v) }
         orR.onUpdate = { [weak self] v, _, _ in self?.outputRmsFraction = max(self?.outputRmsFraction ?? 0, v) }
+    }
+
+    func manuallyResetClips() {
+        inputClipTask?.cancel();  inputClipTask  = nil; inputIsClipping  = false
+        outputClipTask?.cancel(); outputClipTask = nil; outputIsClipping = false
+    }
+
+    private func triggerInputClip() {
+        guard !inputIsClipping else { return }
+        inputIsClipping = true
+        inputClipTask?.cancel()
+        inputClipTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(1_500_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.inputIsClipping = false
+        }
+    }
+
+    private func triggerOutputClip() {
+        guard !outputIsClipping else { return }
+        outputIsClipping = true
+        outputClipTask?.cancel()
+        outputClipTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(1_500_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.outputIsClipping = false
+        }
     }
 }
 
@@ -72,24 +108,14 @@ struct RTADashboardView: View {
     @StateObject private var meterBridge = RTAMeterBridge()
     @EnvironmentObject private var store: EqualiserStore
 
+    /// Hover state for delta-gain tooltip
+    @State private var hoveredBandIndex: Int = -1
+    @State private var hoverLocation: CGPoint = .zero
+
     var body: some View {
-        VStack(spacing: 5) {
-            // Top zone: horizontal peak/RMS meters
-            HStack(spacing: 20) {
-                HorizontalMasterMeterRow(
-                    label: "IN",
-                    peakFraction: meterBridge.inputPeakFraction,
-                    rmsFraction:  meterBridge.inputRmsFraction,
-                    isClipping:   meterBridge.inputIsClipping
-                )
-                HorizontalMasterMeterRow(
-                    label: "OUT",
-                    peakFraction: meterBridge.outputPeakFraction,
-                    rmsFraction:  meterBridge.outputRmsFraction,
-                    isClipping:   meterBridge.outputIsClipping
-                )
-            }
-            .padding(.horizontal, 8)
+        VStack(spacing: 4) {
+            // Top zone: horizontal peak/RMS meters with clip indicators
+            metersZone
 
             // Bottom zone: dual 31-band canvases
             HStack(spacing: 8) {
@@ -112,13 +138,106 @@ struct RTADashboardView: View {
             // Shared frequency axis labels
             FrequencyAxisLabels(bandCount: analyzer.centerFrequencies.count)
                 .padding(.horizontal, 8)
+
+            // Diagnostics panel (optional)
+            if analyzer.showDiagnostics {
+                HStack(spacing: 16) {
+                    Text("FPS: \(analyzer.currentFps)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(analyzer.currentFps >= 18 ? .secondary : .orange)
+                    Text("Bands: \(analyzer.centerFrequencies.count)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("SR: \(store.dynamicsConfig.advanced.latencyMode == .music ? "Music" : "Movie")")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
+                .transition(.opacity)
+            }
         }
-        .padding(.vertical, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 4)
         .onAppear {
             meterBridge.register(with: store.meterStore)
             store.wireRTAAnalyzer()
         }
     }
+
+    // MARK: - Meters Zone
+
+    private var metersZone: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 12) {
+                HStack(spacing: 20) {
+                    HorizontalMasterMeterRow(
+                        label: "IN",
+                        peakFraction: meterBridge.inputPeakFraction,
+                        rmsFraction:  meterBridge.inputRmsFraction,
+                        isClipping:   meterBridge.inputIsClipping
+                    )
+                    HorizontalMasterMeterRow(
+                        label: "OUT",
+                        peakFraction: meterBridge.outputPeakFraction,
+                        rmsFraction:  meterBridge.outputRmsFraction,
+                        isClipping:   meterBridge.outputIsClipping
+                    )
+                }
+                .padding(.horizontal, 8)
+
+                Spacer()
+
+                // Controls row: peak toggles, diagnostics, clip reset
+                HStack(spacing: 10) {
+                    Toggle("In Peaks", isOn: $analyzer.showInputPeaks)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 9))
+                        .controlSize(.mini)
+                    Toggle("Out Peaks", isOn: $analyzer.showOutputPeaks)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 9))
+                        .controlSize(.mini)
+                    Toggle("Diag", isOn: $analyzer.showDiagnostics)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 9))
+                        .controlSize(.mini)
+
+                    // Glowing clip indicator — click to reset
+                    Button {
+                        meterBridge.manuallyResetClips()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Circle()
+                                .fill(clipColour)
+                                .frame(width: 7, height: 7)
+                                .shadow(color: clipGlowColour, radius: clipGlowing ? 4 : 0)
+                                .animation(.easeInOut(duration: 0.15), value: clipGlowing)
+                            Text("CLIP")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(clipGlowing ? .red : .secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hardware clip indicator — click to reset")
+                }
+                .padding(.trailing, 8)
+            }
+        }
+    }
+
+    private var clipGlowing: Bool { meterBridge.inputIsClipping || meterBridge.outputIsClipping }
+
+    private var clipColour: Color {
+        clipGlowing ? .red : Color.secondary.opacity(0.4)
+    }
+
+    private var clipGlowColour: Color {
+        clipGlowing ? .red.opacity(0.8) : .clear
+    }
+
+    // MARK: - RTA Canvas
 
     @ViewBuilder
     private func rtaCanvas(
@@ -156,7 +275,31 @@ struct RTADashboardView: View {
                             ctx.fill(Path(pr), with: .color(.white.opacity(0.80)))
                         }
                     }
+
+                    // Highlight hovered band
+                    if i == hoveredBandIndex {
+                        let highlight = CGRect(x: CGFloat(i) * barW + gap / 2, y: 0,
+                                              width: barW - gap, height: size.height)
+                        ctx.fill(Path(highlight), with: .color(.white.opacity(0.06)))
+                    }
                 }
+            }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    hoverLocation = location
+                case .ended:
+                    hoveredBandIndex = -1
+                }
+            }
+            .onChange(of: hoverLocation) { _, loc in
+                let count = analyzer.centerFrequencies.count
+                guard count > 0 else { return }
+                // Canvas fills its parent; approximate band index from x position
+                let estimatedWidth = 400.0  // will be close enough for tooltip snapping
+                let barW = estimatedWidth / Double(count)
+                let idx = min(count - 1, max(0, Int(loc.x / barW)))
+                hoveredBandIndex = idx
             }
 
             Text(label)
@@ -164,6 +307,28 @@ struct RTADashboardView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
                 .padding(.top, 2)
+
+            // Delta-gain tooltip
+            if hoveredBandIndex >= 0 && hoveredBandIndex < analyzer.inputBands.count {
+                let inDb  = analyzer.inputBands[hoveredBandIndex].currentValue
+                let outDb = analyzer.outputBands[hoveredBandIndex].currentValue
+                let delta = outDb - inDb
+                let freq  = analyzer.centerFrequencies[hoveredBandIndex]
+                let freqLabel = freq >= 1000 ? String(format: "%.1f kHz", freq / 1000) : String(format: "%.0f Hz", freq)
+                let sign  = delta >= 0 ? "+" : ""
+
+                Text("\(freqLabel)  Δ\(sign)\(String(format: "%.1f", delta)) dB")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.72))
+                    .cornerRadius(3)
+                    .padding(.top, 2)
+                    .padding(.leading, 4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .allowsHitTesting(false)
+            }
         }
         .background(Color.black.opacity(0.22))
         .cornerRadius(4)
@@ -212,7 +377,7 @@ struct HorizontalMasterMeterRow: View {
     }
 
     private var peakColour: Color {
-        if isClipping     { return .red    }
+        if isClipping          { return .red    }
         if peakFraction > 0.90 { return .orange }
         if peakFraction > 0.70 { return .yellow }
         return .green

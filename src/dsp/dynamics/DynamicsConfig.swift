@@ -333,7 +333,7 @@ enum DitherMode: Int, Codable, Equatable, Sendable {
 
 // MARK: - Advanced Processing Configuration
 
-/// Extended processing parameters covering spatial, spectral, and system features.
+/// Extended processing parameters covering spatial, spectral, system, and LTI features.
 ///
 /// All parameters default to neutral / bypassed values and use `decodeIfPresent`
 /// so presets saved before this struct existed load cleanly.
@@ -347,72 +347,109 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     var highResDecouplingActive: Bool = false
 
     // ── B. Loudness Dialogue Gate ─────────────────────────────────────
-    /// Raises the LUFS gating floor from −70 dBFS to −60 dBFS, excluding
-    /// low-level ambience from the loudness measurement.
     var loudnessDialogueGateEnabled: Bool = false
 
     // ── C. Clipper Phase Asymmetry Trim ───────────────────────────────
-    /// Applies an asymmetric gain offset (dB) at the soft clipper output
-    /// to compensate for transient waveform asymmetry. Range: −3 to +3 dB.
     var clipperAsymmetryTrimDB: Float = 0.0
 
     // ── D. Dynamic EQ Mode (De-Esser) ─────────────────────────────────
-    /// When enabled the de-esser operates as a frequency-selective dynamic
-    /// EQ, attenuating only the sibilant band rather than the full signal.
     var deesserDynamicModeEnabled: Bool = false
 
     // ── D. De-Harsh Tilt Filter ───────────────────────────────────────
     var deharshFilterEnabled: Bool = false
-    /// High-frequency attenuation amount. Range: −6 to 0 dB. Default: −1.5 dB.
     var deharshTiltAmountDB: Float = -1.5
 
     // ── D. Stereo Balance Matrix ───────────────────────────────────────
-    /// Channel balance. −1.0 = full left, 0.0 = centre, +1.0 = full right.
     var stereoBalancePosition: Float = 0.0
 
     // ── E. Loudness Contouring ────────────────────────────────────────
-    /// Applies a gentle Fletcher-Munson compensation curve, boosting bass
-    /// and treble to counteract reduced sensitivity at quiet listening levels.
     var loudnessContourEnabled: Bool = false
 
     // ── E. True-Peak Auto-Guard ───────────────────────────────────────
-    /// Enables inter-sample peak detection in the limiter, applying an
-    /// additional −1.5 dBFS safety margin below the configured ceiling.
     var limiterTruePeakGuardEnabled: Bool = false
 
     // ── E. Inter-Channel Time Delay ───────────────────────────────────
-    /// Delays the right channel relative to left (positive = right delayed).
-    /// Range: 0 to 20 ms. Default: 0 ms.
     var stereoTimeDelayMS: Float = 0.0
 
     // ── F. DC Offset Filter ───────────────────────────────────────────
-    /// Inserts a 0.5 Hz single-pole high-pass filter at the very start of
-    /// the chain to eliminate any DC component in the signal.
     var dcOffsetFilterEnabled: Bool = false
 
     // ── F. Delta Solo Monitoring ──────────────────────────────────────
-    /// Outputs the difference between processed and unprocessed signal so
-    /// the contribution of the dynamics chain can be monitored in isolation.
     var deltaSoloActive: Bool = false
 
     // ── F. Latency Mode ───────────────────────────────────────────────
     var latencyMode: LatencyMode = .music
 
     // ── G. Dynamic Pause Gate ─────────────────────────────────────────
-    /// Smoothly silences output during extended near-silence, preventing
-    /// amplifier noise and click artefacts on audio resume.
     var pauseGateEnabled: Bool = false
 
     // ── G. Stereo Mode Fold-Down ──────────────────────────────────────
     var stereoMode: StereoModeSelection = .stereo
 
     // ── H. Hardware Sync / Pre-Buffer Engine ──────────────────────────
-    /// Aligns the CoreAudio I/O buffer size to the Latency Mode setting
-    /// (128 frames for Music, 512 frames for Movie).
     var hardwareSyncBufferEnabled: Bool = false
 
     // ── I. TPDF Dither Matrix ─────────────────────────────────────────
     var ditherMode: DitherMode = .bypass
+
+    // ── J. LTI Processing Suite ──────────────────────────────────────
+    /// Symmetry Balance — applies relative gain offsets to correct asymmetric
+    /// listening positions. Uses the stereoBalancePosition slider for control.
+    var symmetryBalanceEnabled: Bool = false
+
+    /// Panning Gain Matrix — crossfeed matrix blending left/right channels
+    /// by a configurable amount to simulate speaker crosstalk.
+    var panningGainMatrixEnabled: Bool = false
+    /// Crossfeed blend amount. Range: 0.0 (none) – 1.0 (full blend). Default: 0.3.
+    var panningCrossfeedAmount: Float = 0.3
+
+    /// Linear Denoising Engine — spectral subtraction noise floor reduction
+    /// using a running estimate of the noise power spectrum.
+    var linearDenoisingEnabled: Bool = false
+    /// Noise floor threshold in dBFS. Range: −80 to −40. Default: −60 dB.
+    var linearDenoisingThresholdDB: Float = -60.0
+
+    /// Speaker Impulse Response Alignment — applies fractional-sample delay
+    /// compensation to time-align the acoustic centres of multi-driver systems.
+    var speakerIRAlignmentEnabled: Bool = false
+    /// Fine-delay offset in milliseconds. Range: 0 – 5 ms. Default: 0 ms.
+    var speakerIRDelayMs: Float = 0.0
+
+    /// Recursive Crosstalk Cancellation Matrix — iterative binaural inversion
+    /// filter reducing inter-channel acoustic leakage.
+    var crosstalkCancellationEnabled: Bool = false
+    /// Cancellation depth. Range: 0.0 – 1.0. Default: 0.5.
+    var crosstalkCancellationAmount: Float = 0.5
+
+    /// Automatic Room Boundary Early Reflection Cancellation — FIR comb filter
+    /// targeting the first-order floor/ceiling/wall reflection group.
+    var earlyReflectionCancellationEnabled: Bool = false
+    /// Estimated first reflection arrival time in milliseconds. Range: 5 – 50 ms. Default: 20 ms.
+    var earlyReflectionRoomSizeMs: Float = 20.0
+
+    /// HPF Phase Linearisation — all-pass FIR compensation network that linearises
+    /// the group delay introduced by high-pass filter networks.
+    var hpfPhaseLinearizationEnabled: Bool = false
+    /// Target cutoff frequency for phase correction. Range: 20 – 200 Hz. Default: 80 Hz.
+    var hpfPhaseLinearizationFrequencyHz: Float = 80.0
+
+    /// Multi-Seat Complex Averaging — combines head-related transfer function
+    /// estimates from multiple listening positions into a composite correction.
+    var multiSeatAveragingEnabled: Bool = false
+    /// Number of listening positions to average. Range: 1 – 8. Default: 2.
+    var multiSeatCount: Int = 2
+
+    /// Sub-Bass Phase Alignment — all-pass filter network that phase-aligns
+    /// the sub-bass frequency region with the main speaker bandwidth.
+    var subBassPhaseAlignmentEnabled: Bool = false
+    /// Sub-bass crossover target. Range: 40 – 120 Hz. Default: 80 Hz.
+    var subBassAlignmentFrequencyHz: Float = 80.0
+
+    /// Zero-Latency Convolution Reverb Engine — uniformly-partitioned FFT convolution
+    /// applying a room impulse response with zero added latency.
+    var zlConvolutionReverbEnabled: Bool = false
+    /// Dry/wet mix ratio. Range: 0.0 (dry) – 1.0 (full wet). Default: 0.1.
+    var zlConvolutionReverbMix: Float = 0.1
 
     // MARK: - Codable
 
@@ -434,6 +471,17 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case stereoMode
         case hardwareSyncBufferEnabled
         case ditherMode
+        // LTI Suite
+        case symmetryBalanceEnabled
+        case panningGainMatrixEnabled, panningCrossfeedAmount
+        case linearDenoisingEnabled, linearDenoisingThresholdDB
+        case speakerIRAlignmentEnabled, speakerIRDelayMs
+        case crosstalkCancellationEnabled, crosstalkCancellationAmount
+        case earlyReflectionCancellationEnabled, earlyReflectionRoomSizeMs
+        case hpfPhaseLinearizationEnabled, hpfPhaseLinearizationFrequencyHz
+        case multiSeatAveragingEnabled, multiSeatCount
+        case subBassPhaseAlignmentEnabled, subBassAlignmentFrequencyHz
+        case zlConvolutionReverbEnabled, zlConvolutionReverbMix
         // highResDecouplingActive is not persisted (runtime-computed)
     }
 
@@ -454,66 +502,142 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         pauseGateEnabled: Bool = false,
         stereoMode: StereoModeSelection = .stereo,
         hardwareSyncBufferEnabled: Bool = false,
-        ditherMode: DitherMode = .bypass
+        ditherMode: DitherMode = .bypass,
+        symmetryBalanceEnabled: Bool = false,
+        panningGainMatrixEnabled: Bool = false,
+        panningCrossfeedAmount: Float = 0.3,
+        linearDenoisingEnabled: Bool = false,
+        linearDenoisingThresholdDB: Float = -60.0,
+        speakerIRAlignmentEnabled: Bool = false,
+        speakerIRDelayMs: Float = 0.0,
+        crosstalkCancellationEnabled: Bool = false,
+        crosstalkCancellationAmount: Float = 0.5,
+        earlyReflectionCancellationEnabled: Bool = false,
+        earlyReflectionRoomSizeMs: Float = 20.0,
+        hpfPhaseLinearizationEnabled: Bool = false,
+        hpfPhaseLinearizationFrequencyHz: Float = 80.0,
+        multiSeatAveragingEnabled: Bool = false,
+        multiSeatCount: Int = 2,
+        subBassPhaseAlignmentEnabled: Bool = false,
+        subBassAlignmentFrequencyHz: Float = 80.0,
+        zlConvolutionReverbEnabled: Bool = false,
+        zlConvolutionReverbMix: Float = 0.1
     ) {
-        self.highResDecouplingActive     = highResDecouplingActive
-        self.loudnessDialogueGateEnabled = loudnessDialogueGateEnabled
-        self.clipperAsymmetryTrimDB      = clipperAsymmetryTrimDB
-        self.deesserDynamicModeEnabled   = deesserDynamicModeEnabled
-        self.deharshFilterEnabled        = deharshFilterEnabled
-        self.deharshTiltAmountDB         = deharshTiltAmountDB
-        self.stereoBalancePosition       = stereoBalancePosition
-        self.loudnessContourEnabled      = loudnessContourEnabled
-        self.limiterTruePeakGuardEnabled = limiterTruePeakGuardEnabled
-        self.stereoTimeDelayMS           = stereoTimeDelayMS
-        self.dcOffsetFilterEnabled       = dcOffsetFilterEnabled
-        self.deltaSoloActive             = deltaSoloActive
-        self.latencyMode                 = latencyMode
-        self.pauseGateEnabled            = pauseGateEnabled
-        self.stereoMode                  = stereoMode
-        self.hardwareSyncBufferEnabled   = hardwareSyncBufferEnabled
-        self.ditherMode                  = ditherMode
+        self.highResDecouplingActive          = highResDecouplingActive
+        self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
+        self.clipperAsymmetryTrimDB           = clipperAsymmetryTrimDB
+        self.deesserDynamicModeEnabled        = deesserDynamicModeEnabled
+        self.deharshFilterEnabled             = deharshFilterEnabled
+        self.deharshTiltAmountDB              = deharshTiltAmountDB
+        self.stereoBalancePosition            = stereoBalancePosition
+        self.loudnessContourEnabled           = loudnessContourEnabled
+        self.limiterTruePeakGuardEnabled      = limiterTruePeakGuardEnabled
+        self.stereoTimeDelayMS                = stereoTimeDelayMS
+        self.dcOffsetFilterEnabled            = dcOffsetFilterEnabled
+        self.deltaSoloActive                  = deltaSoloActive
+        self.latencyMode                      = latencyMode
+        self.pauseGateEnabled                 = pauseGateEnabled
+        self.stereoMode                       = stereoMode
+        self.hardwareSyncBufferEnabled        = hardwareSyncBufferEnabled
+        self.ditherMode                       = ditherMode
+        self.symmetryBalanceEnabled           = symmetryBalanceEnabled
+        self.panningGainMatrixEnabled         = panningGainMatrixEnabled
+        self.panningCrossfeedAmount           = panningCrossfeedAmount
+        self.linearDenoisingEnabled           = linearDenoisingEnabled
+        self.linearDenoisingThresholdDB       = linearDenoisingThresholdDB
+        self.speakerIRAlignmentEnabled        = speakerIRAlignmentEnabled
+        self.speakerIRDelayMs                 = speakerIRDelayMs
+        self.crosstalkCancellationEnabled     = crosstalkCancellationEnabled
+        self.crosstalkCancellationAmount      = crosstalkCancellationAmount
+        self.earlyReflectionCancellationEnabled = earlyReflectionCancellationEnabled
+        self.earlyReflectionRoomSizeMs        = earlyReflectionRoomSizeMs
+        self.hpfPhaseLinearizationEnabled     = hpfPhaseLinearizationEnabled
+        self.hpfPhaseLinearizationFrequencyHz = hpfPhaseLinearizationFrequencyHz
+        self.multiSeatAveragingEnabled        = multiSeatAveragingEnabled
+        self.multiSeatCount                   = multiSeatCount
+        self.subBassPhaseAlignmentEnabled     = subBassPhaseAlignmentEnabled
+        self.subBassAlignmentFrequencyHz      = subBassAlignmentFrequencyHz
+        self.zlConvolutionReverbEnabled       = zlConvolutionReverbEnabled
+        self.zlConvolutionReverbMix           = zlConvolutionReverbMix
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        loudnessDialogueGateEnabled = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessDialogueGateEnabled) ?? false
-        clipperAsymmetryTrimDB      = try c.decodeIfPresent(Float.self,                 forKey: .clipperAsymmetryTrimDB)      ?? 0.0
-        deesserDynamicModeEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .deesserDynamicModeEnabled)   ?? false
-        deharshFilterEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .deharshFilterEnabled)        ?? false
-        deharshTiltAmountDB         = try c.decodeIfPresent(Float.self,                 forKey: .deharshTiltAmountDB)         ?? -1.5
-        stereoBalancePosition       = try c.decodeIfPresent(Float.self,                 forKey: .stereoBalancePosition)       ?? 0.0
-        loudnessContourEnabled      = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessContourEnabled)      ?? false
-        limiterTruePeakGuardEnabled = try c.decodeIfPresent(Bool.self,                  forKey: .limiterTruePeakGuardEnabled) ?? false
-        stereoTimeDelayMS           = try c.decodeIfPresent(Float.self,                 forKey: .stereoTimeDelayMS)           ?? 0.0
-        dcOffsetFilterEnabled       = try c.decodeIfPresent(Bool.self,                  forKey: .dcOffsetFilterEnabled)       ?? false
-        deltaSoloActive             = try c.decodeIfPresent(Bool.self,                  forKey: .deltaSoloActive)             ?? false
-        latencyMode                 = try c.decodeIfPresent(LatencyMode.self,           forKey: .latencyMode)                 ?? .music
-        pauseGateEnabled            = try c.decodeIfPresent(Bool.self,                  forKey: .pauseGateEnabled)            ?? false
-        stereoMode                  = try c.decodeIfPresent(StereoModeSelection.self,   forKey: .stereoMode)                  ?? .stereo
-        hardwareSyncBufferEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .hardwareSyncBufferEnabled)   ?? false
-        ditherMode                  = try c.decodeIfPresent(DitherMode.self,            forKey: .ditherMode)                  ?? .bypass
-        highResDecouplingActive     = false  // always computed at runtime
+        loudnessDialogueGateEnabled      = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessDialogueGateEnabled)      ?? false
+        clipperAsymmetryTrimDB           = try c.decodeIfPresent(Float.self,                 forKey: .clipperAsymmetryTrimDB)           ?? 0.0
+        deesserDynamicModeEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .deesserDynamicModeEnabled)        ?? false
+        deharshFilterEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .deharshFilterEnabled)             ?? false
+        deharshTiltAmountDB              = try c.decodeIfPresent(Float.self,                 forKey: .deharshTiltAmountDB)              ?? -1.5
+        stereoBalancePosition            = try c.decodeIfPresent(Float.self,                 forKey: .stereoBalancePosition)            ?? 0.0
+        loudnessContourEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessContourEnabled)           ?? false
+        limiterTruePeakGuardEnabled      = try c.decodeIfPresent(Bool.self,                  forKey: .limiterTruePeakGuardEnabled)      ?? false
+        stereoTimeDelayMS                = try c.decodeIfPresent(Float.self,                 forKey: .stereoTimeDelayMS)                ?? 0.0
+        dcOffsetFilterEnabled            = try c.decodeIfPresent(Bool.self,                  forKey: .dcOffsetFilterEnabled)            ?? false
+        deltaSoloActive                  = try c.decodeIfPresent(Bool.self,                  forKey: .deltaSoloActive)                  ?? false
+        latencyMode                      = try c.decodeIfPresent(LatencyMode.self,           forKey: .latencyMode)                      ?? .music
+        pauseGateEnabled                 = try c.decodeIfPresent(Bool.self,                  forKey: .pauseGateEnabled)                 ?? false
+        stereoMode                       = try c.decodeIfPresent(StereoModeSelection.self,   forKey: .stereoMode)                       ?? .stereo
+        hardwareSyncBufferEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .hardwareSyncBufferEnabled)        ?? false
+        ditherMode                       = try c.decodeIfPresent(DitherMode.self,            forKey: .ditherMode)                       ?? .bypass
+        symmetryBalanceEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .symmetryBalanceEnabled)           ?? false
+        panningGainMatrixEnabled         = try c.decodeIfPresent(Bool.self,                  forKey: .panningGainMatrixEnabled)         ?? false
+        panningCrossfeedAmount           = try c.decodeIfPresent(Float.self,                 forKey: .panningCrossfeedAmount)           ?? 0.3
+        linearDenoisingEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .linearDenoisingEnabled)           ?? false
+        linearDenoisingThresholdDB       = try c.decodeIfPresent(Float.self,                 forKey: .linearDenoisingThresholdDB)       ?? -60.0
+        speakerIRAlignmentEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .speakerIRAlignmentEnabled)        ?? false
+        speakerIRDelayMs                 = try c.decodeIfPresent(Float.self,                 forKey: .speakerIRDelayMs)                 ?? 0.0
+        crosstalkCancellationEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .crosstalkCancellationEnabled)     ?? false
+        crosstalkCancellationAmount      = try c.decodeIfPresent(Float.self,                 forKey: .crosstalkCancellationAmount)      ?? 0.5
+        earlyReflectionCancellationEnabled = try c.decodeIfPresent(Bool.self,                forKey: .earlyReflectionCancellationEnabled) ?? false
+        earlyReflectionRoomSizeMs        = try c.decodeIfPresent(Float.self,                 forKey: .earlyReflectionRoomSizeMs)        ?? 20.0
+        hpfPhaseLinearizationEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .hpfPhaseLinearizationEnabled)     ?? false
+        hpfPhaseLinearizationFrequencyHz = try c.decodeIfPresent(Float.self,                 forKey: .hpfPhaseLinearizationFrequencyHz) ?? 80.0
+        multiSeatAveragingEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .multiSeatAveragingEnabled)        ?? false
+        multiSeatCount                   = try c.decodeIfPresent(Int.self,                   forKey: .multiSeatCount)                   ?? 2
+        subBassPhaseAlignmentEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .subBassPhaseAlignmentEnabled)     ?? false
+        subBassAlignmentFrequencyHz      = try c.decodeIfPresent(Float.self,                 forKey: .subBassAlignmentFrequencyHz)      ?? 80.0
+        zlConvolutionReverbEnabled       = try c.decodeIfPresent(Bool.self,                  forKey: .zlConvolutionReverbEnabled)       ?? false
+        zlConvolutionReverbMix           = try c.decodeIfPresent(Float.self,                 forKey: .zlConvolutionReverbMix)           ?? 0.1
+        highResDecouplingActive          = false  // always computed at runtime
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(loudnessDialogueGateEnabled,   forKey: .loudnessDialogueGateEnabled)
-        try c.encode(clipperAsymmetryTrimDB,        forKey: .clipperAsymmetryTrimDB)
-        try c.encode(deesserDynamicModeEnabled,     forKey: .deesserDynamicModeEnabled)
-        try c.encode(deharshFilterEnabled,          forKey: .deharshFilterEnabled)
-        try c.encode(deharshTiltAmountDB,           forKey: .deharshTiltAmountDB)
-        try c.encode(stereoBalancePosition,         forKey: .stereoBalancePosition)
-        try c.encode(loudnessContourEnabled,        forKey: .loudnessContourEnabled)
-        try c.encode(limiterTruePeakGuardEnabled,   forKey: .limiterTruePeakGuardEnabled)
-        try c.encode(stereoTimeDelayMS,             forKey: .stereoTimeDelayMS)
-        try c.encode(dcOffsetFilterEnabled,         forKey: .dcOffsetFilterEnabled)
-        try c.encode(deltaSoloActive,               forKey: .deltaSoloActive)
-        try c.encode(latencyMode,                   forKey: .latencyMode)
-        try c.encode(pauseGateEnabled,              forKey: .pauseGateEnabled)
-        try c.encode(stereoMode,                    forKey: .stereoMode)
-        try c.encode(hardwareSyncBufferEnabled,     forKey: .hardwareSyncBufferEnabled)
-        try c.encode(ditherMode,                    forKey: .ditherMode)
+        try c.encode(loudnessDialogueGateEnabled,        forKey: .loudnessDialogueGateEnabled)
+        try c.encode(clipperAsymmetryTrimDB,             forKey: .clipperAsymmetryTrimDB)
+        try c.encode(deesserDynamicModeEnabled,          forKey: .deesserDynamicModeEnabled)
+        try c.encode(deharshFilterEnabled,               forKey: .deharshFilterEnabled)
+        try c.encode(deharshTiltAmountDB,                forKey: .deharshTiltAmountDB)
+        try c.encode(stereoBalancePosition,              forKey: .stereoBalancePosition)
+        try c.encode(loudnessContourEnabled,             forKey: .loudnessContourEnabled)
+        try c.encode(limiterTruePeakGuardEnabled,        forKey: .limiterTruePeakGuardEnabled)
+        try c.encode(stereoTimeDelayMS,                  forKey: .stereoTimeDelayMS)
+        try c.encode(dcOffsetFilterEnabled,              forKey: .dcOffsetFilterEnabled)
+        try c.encode(deltaSoloActive,                    forKey: .deltaSoloActive)
+        try c.encode(latencyMode,                        forKey: .latencyMode)
+        try c.encode(pauseGateEnabled,                   forKey: .pauseGateEnabled)
+        try c.encode(stereoMode,                         forKey: .stereoMode)
+        try c.encode(hardwareSyncBufferEnabled,          forKey: .hardwareSyncBufferEnabled)
+        try c.encode(ditherMode,                         forKey: .ditherMode)
+        try c.encode(symmetryBalanceEnabled,             forKey: .symmetryBalanceEnabled)
+        try c.encode(panningGainMatrixEnabled,           forKey: .panningGainMatrixEnabled)
+        try c.encode(panningCrossfeedAmount,             forKey: .panningCrossfeedAmount)
+        try c.encode(linearDenoisingEnabled,             forKey: .linearDenoisingEnabled)
+        try c.encode(linearDenoisingThresholdDB,         forKey: .linearDenoisingThresholdDB)
+        try c.encode(speakerIRAlignmentEnabled,          forKey: .speakerIRAlignmentEnabled)
+        try c.encode(speakerIRDelayMs,                   forKey: .speakerIRDelayMs)
+        try c.encode(crosstalkCancellationEnabled,       forKey: .crosstalkCancellationEnabled)
+        try c.encode(crosstalkCancellationAmount,        forKey: .crosstalkCancellationAmount)
+        try c.encode(earlyReflectionCancellationEnabled, forKey: .earlyReflectionCancellationEnabled)
+        try c.encode(earlyReflectionRoomSizeMs,          forKey: .earlyReflectionRoomSizeMs)
+        try c.encode(hpfPhaseLinearizationEnabled,       forKey: .hpfPhaseLinearizationEnabled)
+        try c.encode(hpfPhaseLinearizationFrequencyHz,   forKey: .hpfPhaseLinearizationFrequencyHz)
+        try c.encode(multiSeatAveragingEnabled,          forKey: .multiSeatAveragingEnabled)
+        try c.encode(multiSeatCount,                     forKey: .multiSeatCount)
+        try c.encode(subBassPhaseAlignmentEnabled,       forKey: .subBassPhaseAlignmentEnabled)
+        try c.encode(subBassAlignmentFrequencyHz,        forKey: .subBassAlignmentFrequencyHz)
+        try c.encode(zlConvolutionReverbEnabled,         forKey: .zlConvolutionReverbEnabled)
+        try c.encode(zlConvolutionReverbMix,             forKey: .zlConvolutionReverbMix)
     }
 }
 
@@ -525,7 +649,10 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
 /// [Stereo Fold-Down] → [DC Offset Filter] → Stereo Widener → Loudness Match
 /// → [Loudness Contour] → De-Esser → Multiband Compressor → Compressor
 /// → Expander → Soft Clipper → [De-Harsh] → Brickwall Limiter
-/// → [Balance + Time Delay] → [Pause Gate] → [TPDF Dither] → [Delta Solo].
+/// → [Balance + Time Delay] → [Pause Gate] → [TPDF Dither] → [Delta Solo]
+/// → [LTI Suite: Symmetry Balance | Panning Matrix | Denoiser | IR Alignment
+///    | Crosstalk Cancellation | Early Reflection | HPF Linearisation
+///    | Multi-Seat Averaging | Sub-Bass Alignment | ZL Convolution Reverb].
 ///
 /// All fields use `decodeIfPresent` so presets saved before a field was introduced
 /// load cleanly and fall back to the safe neutral default for that stage.
@@ -538,7 +665,7 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
     var expander:            ExpanderConfig             = .default
     var softClipper:         SoftClipperConfig          = .default
     var limiter:             BrickwallLimiterConfig      = .default
-    /// Advanced / extended processing parameters (sections A–J).
+    /// Advanced / extended processing parameters (sections A–J including LTI suite).
     var advanced:            AdvancedProcessingConfig   = .default
 
     static let `default` = DynamicsConfig()
