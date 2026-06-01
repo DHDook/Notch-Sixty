@@ -1,8 +1,5 @@
 # Equaliser — Full Operational Manual
 
-> **Hardware reference chain used throughout this guide:**
-> Schiit Modi 5 DAC → Denon DRA-545R Preamplifier → Pioneer SX-780 Power Amplifier → Klipsch RP-600M II Bookshelf Speakers + Klipsch R-101SW Subwoofer
-
 ---
 
 ## Part 1 — Getting Started
@@ -77,13 +74,13 @@ Above the band sliders, switch between **Linked** (both L/R channels share the s
 The full chain from your Mac to your speakers is:
 
 ```
-Equaliser (digital) → Schiit Modi 5 DAC (digital-to-analogue)
-  → Denon DRA-545R (preamplifier / volume control)
-    → Pioneer SX-780 (power amplifier)
-      → Klipsch RP-600M II + R-101SW (loudspeakers)
+Equaliser (digital) → DAC (digital-to-analogue)
+  → Preamplifier / volume control
+    → Power amplifier
+      → Loudspeakers
 ```
 
-Every stage introduces gain. Keeping levels appropriate at each digital handoff prevents clipping and noise. The golden rule is: **gain stage earlier, not later** — set the Equaliser output so it never clips the DAC input, then use the analogue volume control on the Denon for your listening level.
+Every stage introduces gain. Keeping levels appropriate at each digital handoff prevents clipping and noise. The golden rule is: **gain stage earlier, not later** — set the Equaliser output so it never clips the DAC input, then use the analogue volume control on your preamplifier for your listening level.
 
 ### Input Gain
 
@@ -91,11 +88,11 @@ Applies a linear gain multiplier **before** any EQ or dynamics processing. Use i
 
 ### Output Gain
 
-Applies gain **after** all EQ and dynamics, but before the DAC. Think of this as a master trim to compensate for level changes introduced by EQ boosts. If you have applied several large boosts, reduce the output gain to recover headroom before the Schiit Modi 5.
+Applies gain **after** all EQ and dynamics, but before the DAC. Think of this as a master trim to compensate for level changes introduced by EQ boosts. If you have applied several large boosts, reduce the output gain to recover headroom before the DAC.
 
 ### Practical Headroom Recommendation
 
-Keep the **Peak OUT** meter below **−0.5 dBFS** continuously. The Limiter (Stage 10 in the dynamics chain) enforces a configurable ceiling; set it to **−0.5 dB** and engage **True-Peak Guard** to prevent inter-sample overs (hidden analogue peaks that occur between digital samples during DAC reconstruction). This guarantees a clean electrical signal out of the Modi 5 into the Denon preamplifier's sensitive analogue input stage.
+Keep the **Peak OUT** meter below **−0.5 dBFS** continuously. The Limiter (Stage 10 in the dynamics chain) enforces a configurable ceiling; set it to **−0.5 dB** and engage **True-Peak Guard** to prevent inter-sample overs (hidden analogue peaks that occur between digital samples during DAC reconstruction). This guarantees a clean electrical signal out of the DAC into your preamplifier's analogue input stage.
 
 ---
 
@@ -123,19 +120,19 @@ Keep the **Peak OUT** meter below **−0.5 dBFS** continuously. The Limiter (Sta
 | 4 – 10 | Narrow | ~0.25 octave |
 | 10 – 100 | Very narrow / surgical | Individual resonances |
 
-### Tuning for the Klipsch RP-600M II
+### General Speaker Tuning Guidance
 
-The RP-600M II uses a 6.5″ Tractrix woofer and a 1″ titanium tweeter with a 90°×90° Tractrix horn. Typical correction targets:
+Common correction targets for typical bookshelf and floor-standing speakers:
 
-- **40–80 Hz** — Slight cut (−1 to −3 dB, broad Q 0.5) to reduce mid-bass warmth from the bass reflex port, which peaks around 50–60 Hz in most rooms.
-- **2–4 kHz** — Klipsch horn-loaded tweeters can sound forward here; a small cut (−1 to −2 dB, Q 2) may improve long-term listenability.
-- **10–16 kHz** — Gentle boost (+1 to +2 dB, low Q 0.5) restores air that analogue-chain high-frequency loss can reduce.
-- **High Pass at 80 Hz** — If using the R-101SW subwoofer, apply a high-pass filter at 80 Hz (LR4 slope) to the main speakers to prevent them from straining below their useful bandwidth.
+- **40–80 Hz** — Slight cut (−1 to −3 dB, broad Q 0.5) to reduce mid-bass warmth from bass reflex ports, which peak in most rooms.
+- **2–4 kHz** — Horn-loaded or forward-sounding tweeters may benefit from a small cut (−1 to −2 dB, Q 2) to improve long-term listenability.
+- **10–16 kHz** — Gentle boost (+1 to +2 dB, low Q 0.5) can restore air that analogue-chain high-frequency loss reduces.
+- **High Pass** — If using a subwoofer, apply a high-pass filter at your chosen crossover frequency (e.g., 80 Hz, LR4 slope) to the main speakers to prevent them straining below their useful bandwidth.
 
 ### Subwoofer Integration
 
-- Set the **R-101SW crossover** to 80 Hz on the subwoofer itself.
-- Apply a **Low Pass filter at 80 Hz** in Equaliser on a separate channel (if routing sub separately), or rely on the subwoofer's built-in crossover.
+- Set the subwoofer's built-in crossover to match your chosen crossover frequency (typically 80 Hz).
+- Apply a **Low Pass filter** in Equaliser on a separate channel (if routing the sub separately), or rely on the subwoofer's built-in crossover.
 - Use the **Sub-Bass Phase Alignment** (LTI section in the Dynamics panel) to correct phase mismatches at the crossover point between the sub and main speakers.
 
 ---
@@ -166,7 +163,7 @@ The **CLIP** light in the RTA header turns red and holds for 1.5 seconds wheneve
 
 ### Tracking Transients
 
-The meters are highly responsive. If **Peak IN** reaches −2 dBFS while **Peak OUT** is pinned solidly at your Limiter ceiling (e.g., −0.5 dBFS), the look-ahead limiter is actively shaving transient spikes. This is the correct behaviour — it confirms that the Schiit Modi 5 will never receive a clipped overload signal.
+The meters are highly responsive. If **Peak IN** reaches −2 dBFS while **Peak OUT** is pinned solidly at your Limiter ceiling (e.g., −0.5 dBFS), the look-ahead limiter is actively shaving transient spikes. This is the correct behaviour — it confirms that the DAC will never receive a clipped overload signal.
 
 ---
 
@@ -211,7 +208,7 @@ Controls the stereo format of the signal before all other processing.
 
 #### Stage 2 — DC Offset Filter
 
-A 0.5 Hz single-pole high-pass filter that removes any DC component in the signal. Many vintage recordings and internet streams carry a hidden DC offset. While inaudible, DC offset shifts the audio waveform away from the electrical zero line, forcing amplifier output stages (including the Pioneer SX-780's output transistors) to dissipate energy even during silence. **Recommendation: leave this ON** to protect your amplifier and free up headroom.
+A 0.5 Hz single-pole high-pass filter that removes any DC component in the signal. Many vintage recordings and internet streams carry a hidden DC offset. While inaudible, DC offset shifts the audio waveform away from the electrical zero line, forcing amplifier output stages to dissipate energy even during silence. **Recommendation: leave this ON** to protect your amplifier and free up headroom.
 
 #### Stage 3 — Stereo Widener
 
@@ -276,7 +273,7 @@ A downward dynamic-range expander that attenuates signals below a threshold, wid
 
 An analogue-style wave-shaper that gently rounds transient peaks before the limiter. Rather than hard-clipping, it progressively saturates the signal above the threshold using a smooth sigmoid curve. This reduces the amount of work the limiter must do on sharp transients.
 
-**Asymmetry Trim:** Many recordings have asymmetric waveforms (higher positive peaks than negative, or vice versa). The trim applies a fractional gain offset to one half of the waveform, balancing it symmetrically across zero. This frees 1–2 dB of headroom in the downstream Pioneer SX-780 without introducing distortion. Recommended value: **+0.5 to +1.5 dB** for acoustic and vintage rock material.
+**Asymmetry Trim:** Many recordings have asymmetric waveforms (higher positive peaks than negative, or vice versa). The trim applies a fractional gain offset to one half of the waveform, balancing it symmetrically across zero. This frees 1–2 dB of headroom in the downstream amplifier without introducing distortion. Recommended value: **+0.5 to +1.5 dB** for acoustic and vintage rock material.
 
 #### Brickwall Limiter
 
@@ -288,9 +285,9 @@ The final protection stage. A look-ahead limiter with a configurable ceiling tha
 | Attack | 0 – 10 ms | 0.1 ms (transparent — the limiter should be heard as little as possible) |
 | Release | 5 – 250 ms | 20 ms |
 | Look-ahead | 0.5 – 10 ms | 2.0 ms |
-| True-Peak Guard | ON / OFF | **Always ON** — engages 4x polyphase oversampling to catch inter-sample peaks. Prevents hidden analogue overshoots from clipping the Modi 5's DAC output buffer. |
+| True-Peak Guard | ON / OFF | **Always ON** — engages 4x polyphase oversampling to catch inter-sample peaks and prevent hidden analogue overshoots from clipping the DAC output buffer. |
 
-**Why −0.5 dBFS?** Standard digital limiters operate on discrete sample values. When the DAC performs digital-to-analogue reconstruction, the continuous analogue waveform can peak higher between samples (an inter-sample peak). A −0.5 dBFS ceiling combined with True-Peak Guard provides a mathematically guaranteed safety margin so the analogue signal entering the Denon preamplifier's input never exceeds 0 dBV. This is especially important because the Denon DRA-545R is a vintage receiver with a fixed-gain preamplifier stage that has no internal overload protection at the analogue input.
+**Why −0.5 dBFS?** Standard digital limiters operate on discrete sample values. When the DAC performs digital-to-analogue reconstruction, the continuous analogue waveform can peak higher between samples (an inter-sample peak). A −0.5 dBFS ceiling combined with True-Peak Guard provides a mathematically guaranteed safety margin so the analogue signal entering the preamplifier's input never exceeds 0 dBV.
 
 ---
 
@@ -298,7 +295,7 @@ The final protection stage. A look-ahead limiter with a configurable ceiling tha
 
 ### De-Harsh Filter
 
-A high-frequency tilt filter applied after the soft clipper. Gently attenuates frequencies above ~3.5 kHz by a configurable amount (typically −1.5 dB). Use when the Klipsch RP-600M II's titanium tweeter sounds fatiguing after long listening sessions — the horn loading can make the top end appear forward in a bright room.
+A high-frequency tilt filter applied after the soft clipper. Gently attenuates frequencies above ~3.5 kHz by a configurable amount (typically −1.5 dB). Use when your tweeter sounds fatiguing after long listening sessions — certain tweeter designs and room acoustics can make the top end appear forward.
 
 ### Stereo Balance (Advanced)
 
@@ -322,7 +319,7 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** Applies relative gain multipliers to the L and R channels to correct for listening-position asymmetry. Unlike the simple L/R Balance trim, Symmetry Balance is specifically designed for use with a room correction workflow.
 
-**How to calibrate:** Play a mono test tone. Adjust the Balance slider until the tone images perfectly in the centre of the soundstage between the Klipsch speakers. Lock the setting and enable the toggle.
+**How to calibrate:** Play a mono test tone. Adjust the Balance slider until the tone images perfectly in the centre of the soundstage between your speakers. Lock the setting and enable the toggle.
 
 ### Panning Gain Matrix
 
@@ -340,7 +337,7 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** Applies a fractional-sample delay compensation (sub-millisecond resolution) to time-align the acoustic centres of multi-driver speaker systems.
 
-**Use case:** The Klipsch RP-600M II uses a separate woofer and tweeter. The Tractrix horn tweeter and the woofer cone have physically different acoustic centres. Adjusting the fine delay aligns their impulse responses at the listening position, improving phase coherence in the crossover region (around 1.8 kHz on the RP-600M II).
+**Use case:** Most speakers with separate woofers and tweeters have physically different acoustic centres. Adjusting the fine delay aligns their impulse responses at the listening position, improving phase coherence in the crossover region.
 
 **Setup:** Use Room EQ Wizard (REW) with a calibrated measurement microphone to measure the impulse response of each driver separately. Enter the time difference in milliseconds into the Fine Delay field.
 
@@ -348,7 +345,7 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** An iterative binaural inversion filter that actively reduces inter-channel acoustic leakage — the contamination of the left channel by the right speaker's output and vice versa.
 
-**Use case:** Widens the perceived stereo image at the listening position beyond what the speakers' physical placement provides. Effective with the RP-600M II at typical room listening distances of 2–3 metres.
+**Use case:** Widens the perceived stereo image at the listening position beyond what the speakers' physical placement provides. Effective at typical room listening distances of 2–3 metres.
 
 ### Room Boundary Early Reflection Cancellation
 
@@ -358,7 +355,7 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 ### HPF Phase Linearisation
 
-**What it does:** An all-pass FIR compensation network that linearises the group delay introduced by high-pass filter networks. When you apply a high-pass filter (e.g., 80 Hz for the Klipsch speakers to hand off bass to the R-101SW subwoofer), the HPF introduces phase shift in the transition band. This correction removes that phase shift, maintaining time-domain accuracy.
+**What it does:** An all-pass FIR compensation network that linearises the group delay introduced by high-pass filter networks. When you apply a high-pass filter (e.g., 80 Hz to hand off bass to a subwoofer), the HPF introduces phase shift in the transition band. This correction removes that phase shift, maintaining time-domain accuracy.
 
 **Recommended setting:** Match the Frequency parameter to your high-pass filter's −3 dB frequency (e.g., 80 Hz).
 
@@ -366,11 +363,11 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** Combines head-related transfer function (HRTF) estimates from multiple listening positions into a single composite room correction. Rather than optimising for one chair, the correction targets all seats simultaneously.
 
-**Use case:** When multiple listeners regularly use the system from different positions — for example, a sofa with two or three seats in front of the Klipsch speakers.
+**Use case:** When multiple listeners regularly use the system from different positions — for example, a sofa with two or three seats in front of the speakers.
 
 ### Sub-Bass Phase Alignment
 
-**What it does:** An all-pass filter network that phase-aligns the sub-bass region (below the crossover frequency) with the main speaker bandwidth. Corrects the acoustic phase relationship between the R-101SW subwoofer and the RP-600M II main speakers at the crossover point.
+**What it does:** An all-pass filter network that phase-aligns the sub-bass region (below the crossover frequency) with the main speaker bandwidth. Corrects the acoustic phase relationship between the subwoofer and the main speakers at the crossover point.
 
 **Setup:** Set Crossover to match the subwoofer's crossover frequency (typically 80 Hz). With this engaged, the summation of sub and main speakers at the crossover should be +3 dB coherent (constructive) rather than cancelling. Verify with an RTA measurement of the combined response.
 
@@ -408,7 +405,7 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 3. Presets store the full EQ band configuration, dynamics chain settings, and channel mode.
 
 **Recommended workflow:** Keep separate presets for:
-- Klipsch RP-600M II (with subwoofer, crossover at 80 Hz)
+- Main speakers (with subwoofer configuration if applicable)
 - Headphone listening (typically different EQ signature)
 - Critical mixing reference (flat EQ, dynamics OFF)
 
@@ -472,7 +469,7 @@ The Equaliser virtual audio driver (a fork of BlackHole) intercepts the system a
 
 | Setting | Recommendation | Reason |
 |---------|---------------|--------|
-| DC Offset Filter | ON | Protects the Pioneer SX-780's output stage from constant DC stress |
+| DC Offset Filter | ON | Protects your amplifier's output stage from constant DC stress |
 | Latency Mode | Music | 128-frame I/O for the lowest possible latency |
 | Dither | TPDF | Adds a small amount of shaped noise at 24-bit resolution to prevent quantisation distortion at low levels |
 | Pause Gate | ON | Silences amplifier hiss during silence between tracks |
@@ -488,19 +485,19 @@ Click the **Diag** checkbox in the RTA bar to display:
 
 ---
 
-## Appendix A — Quick-Reference Settings for This System
+## Appendix A — Recommended Default Settings
 
 | Stage | Recommended Setting | Reason |
 |-------|--------------------|----|
-| Output Gain | 0 dB | Set with Input Gain; use analogue volume on Denon |
-| Limiter Ceiling | −0.5 dBFS | Prevents inter-sample overs into the Modi 5 |
+| Output Gain | 0 dB | Unity; use analogue volume on your amplifier for listening level |
+| Limiter Ceiling | −0.5 dBFS | Prevents inter-sample overs at the DAC output |
 | True-Peak Guard | ON | 4x oversampling inter-sample peak detection |
-| DC Offset Filter | ON | Protects Pioneer SX-780 output transistors |
-| High Pass (main ch) | 80 Hz, LR4 | Prevents RP-600M II from straining below bass bandwidth |
-| Sub-Bass Phase Align | 80 Hz | Phase-aligns R-101SW sub with RP-600M II at crossover |
+| DC Offset Filter | ON | Protects your amplifier from constant DC stress |
+| High Pass (if using sub) | 80 Hz, LR4 | Prevents main speakers from straining below their useful bandwidth |
+| Sub-Bass Phase Align | Match sub crossover | Phase-aligns subwoofer with main speakers at crossover |
 | Stereo Widener Low | 0.0 (mono) | Mono bass for correct subwoofer integration |
 | Dither | TPDF | 24-bit noise floor dither |
-| Pause Gate | ON | Reduces hiss from vintage amplification chain during silence |
+| Pause Gate | ON | Silences amplifier hiss during silence between tracks |
 
 ---
 

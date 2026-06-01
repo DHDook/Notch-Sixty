@@ -32,7 +32,7 @@ struct EQWindowView: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
             // Level meters + control panel
             HStack(alignment: .top, spacing: 0) {
                 LevelMetersView(meterStore: store.meterStore)
@@ -191,30 +191,45 @@ struct EQWindowView: View {
             EQBandGridView()
         }
         .padding(12)
-        .frame(minWidth: 1060, minHeight: 660)
+        .frame(minWidth: 1280, minHeight: 700)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Toggle(isOn: Binding(
-                    get: { !store.isBypassed },
-                    set: { store.isBypassed = !$0 }
-                )) {
-                    Text("System EQ")
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
-
-                Toggle("Meters", isOn: $metersEnabledUI)
+                VStack(spacing: 2) {
+                    Toggle("", isOn: Binding(
+                        get: { !store.isBypassed },
+                        set: { store.isBypassed = !$0 }
+                    ))
+                    .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .help("Level meters add slight CPU overhead. Disable here to reduce CPU while the window is open.")
-
-                Button {
-                    openSettings()
-                } label: {
-                    Image(systemName: "gearshape")
+                    .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
+                    Text("System EQ")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-                .help("Settings (⌘,)")
+
+                VStack(spacing: 2) {
+                    Toggle("", isOn: $metersEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .help("Level meters add slight CPU overhead. Disable here to reduce CPU while the window is open.")
+                    Text("Meters")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(spacing: 2) {
+                    Button {
+                        openSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .help("Settings (⌘,)")
+                    Text("Settings")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .background(

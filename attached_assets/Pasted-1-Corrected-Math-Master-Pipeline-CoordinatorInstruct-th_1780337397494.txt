@@ -1,0 +1,161 @@
+1. Corrected Math & Master Pipeline CoordinatorInstruct the agent to replace the SystemSpectrumPipelineCoordinator and normalizeDb functions with this architecture to fix the inverse scaling and enforce zero processing during bypass:swiftclass AdvancedDualSpectrumAnalyzer: ObservableObject {
+    let minDb: Float = -60.0
+    let maxDb: Float = 12.0
+    
+    // ... (Keep existing properties, array setups, and executeFFT identical) ...
+
+    /// FIXED NORMALIZATION: Ensures silence (-60dB) maps to 0.0 (bottom) and loud signals (+12dB) map to 1.0 (top)
+    func normalizeDb(_ db: Float) -> Float {
+        let clamped = max(minDb, min(maxDb, db))
+        // Linear interpolation formula mapping the negative dB scale safely to positive 0.0 -> 1.0 heights
+        return (clamped - minDb) / (maxDb - minDb)
+    }
+}
+
+class SystemSpectrumPipelineCoordinator {
+    let inputRingBuffer = LockFreeAudioRingBuffer()
+    let outputRingBuffer = LockFreeAudioRingBuffer()
+    let analyzer = AdvancedDualSpectrumAnalyzer()
+    
+    var currentSystemSampleRate: Float = 44100.0
+    
+    /// Triggered by the main frame clock loop at 60 FPS
+    func renderFrameTick(currentInputGain: Float, currentOutputGain: Float, activeFilters: [BiquadCoefficients], isEqBypassed: Bool) {
+        
+        // FIX: If the global bypass is enabled, forcefully supply flat minimum floor silence (-60 dB) to the arrays
+        if isEqBypassed {
+            DispatchQueue.main.async {
+                for i in 0..<31 {
+                    // Input remains active per user specification instruction
+                    self.analyzer.outputBands[i].currentValue = self.analyzer.minDb
+                    self.analyzer.outputBands[i].peakValue = self.analyzer.minDb
+                }
+                // Flatten target vector representation
+                self.analyzer.targetLinePoints = [Float](repeating: self.analyzer.normalizeDb(0.0), count: 31)
+            }
+            
+            // Still process input buffer independently if available
+            if let inputBlock = inputRingBuffer.readLatestChunk(size: 2048) {
+                let rawInputDb = analyzer.executeFFT(samples: inputBlock)
+                var inputOffset = currentInputGain
+                var calibratedInput = rawInputDb
+                vDSP_vsadd(&calibratedInput, 1, &inputOffset, &calibratedInput, 1, vDSP_Length(calibratedInput.count))
+                let mappedInput = analyzer.mapBinsToBands(dbMagnitudes: calibratedInput, sampleRate: currentSystemSampleRate)
+                
+                DispatchQueue.main.async {
+                    self.analyzer.applyPhysics(currentBands: &self.analyzer.inputBands, targetDbValues: mappedInput)
+                }
+            }
+            return
+        }
+        
+        // Standard non-bypassed synchronous execution processing block
+        guard let inputBlock = inputRingBuffer.readLatestChunk(size: 2048),
+              let outputBlock = outputRingBuffer.readLatestChunk(size: 2048) else { return }
+        
+        analyzer.updateSmearedSpectrums(
+            inputSamples: inputBlock,
+            inputGainDb: currentInputGain,
+            outputSamples: outputBlock,
+            outputGainDb: currentOutputGain,
+            sampleRate: currentSystemSampleRate
+        )
+        
+        analyzer.updateTargetLine(
+            activeFilters: activeFilters,
+            outputGainDb: currentOutputGain,
+            sampleRate: Double(currentSystemSampleRate)
+        )
+    }
+}
+Use code with caution.2. Updated Responsive Multi-Color Gradient UI LayoutProvide this updated view component to your agent. It replaces the old rigid colors with dynamic color gradients mapped precisely to changing volume decibel levels:swiftstruct UnifiedEqualizerDashboardView: View {
+    @ObservedObject var analyzer: AdvancedDualSpectrumAnalyzer
+    @ObservedObject var legacyMeterStore: MasterMeterStore
+    @Binding var isEqBypassed: Bool
+    
+    // Dynamic color palettes that scale logically across vertical heights
+    private let liveSpectrumGradient = Gradient(stops: [
+        .init(color: .green, location: 0.0),
+        .init(color: .green, location: 0.65),  // Green floor mapping safety zone
+        .init(color: .yellow, location: 0.82), // Warning zone threshold crossing
+        .init(color: .orange, location: 0.92),
+        .init(color: .red, location: 1.0)     // Clipping ceiling limit
+    ])
+    
+    private let bypassedOutputGradient = Gradient(colors: [.gray.opacity(0.35), .white.opacity(0.15)])
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            // ... (Keep Zone 1 Master Meter layouts completely identical) ...
+            
+            // ZONE 2: RECALIBRATED 31-BAND SPECTRAL CANVASES
+            GeometryReader { geo in
+                let width = geo.size.width
+                let height = geo.size.height
+                let spacing: CGFloat = 2
+                let totalSpacing = spacing * CGFloat(30)
+                let barWidth = (width - totalSpacing) / 31
+                
+                ZStack(alignment: .bottomLeading) {
+                    BackgroundGridLines(minDb: analyzer.minDb, maxDb: analyzer.maxDb)
+                        .opacity(isEqBypassed ? 0.2 : 1.0)
+                    
+                    HStack(alignment: .bottom, spacing: spacing) {
+                        ForEach(0..<31, id: \.self) { i in
+                            ZStack(alignment: .bottom) {
+                                
+                                // LAYER A: INPUT REAL-TIME BARS
+                                Rectangle()
+                                    .fill(LinearGradient(gradient: liveSpectrumGradient, startPoint: .bottom, endPoint: .top))
+                                    .frame(width: barWidth, height: height * CGFloat(analyzer.normalizeDb(analyzer.inputBands[i].currentValue)))
+                                    .opacity(0.4) // Kept slightly transparent to show layering separation behind outputs
+                                
+                                // LAYER B: OUTPUT REAL-TIME BARS (Grays out completely on bypass toggle)
+                                Rectangle()
+                                    .fill(LinearGradient(
+                                        gradient: isEqBypassed ? bypassedOutputGradient : liveSpectrumGradient, 
+                                        startPoint: .bottom, 
+                                        endPoint: .top
+                                    ))
+                                    .frame(width: barWidth, height: height * CGFloat(analyzer.normalizeDb(analyzer.outputBands[i].currentValue)))
+                                
+                                // LAYER C: FLOATING PEAK INDICATORS
+                                if analyzer.showOutputPeaks && !isEqBypassed {
+                                    let peakY = height * CGFloat(analyzer.normalizeDb(analyzer.outputBands[i].peakValue))
+                                    RoundedRectangle(cornerRadius: 1)
+                                        .fill(analyzer.outputBands[i].peakValue >= 0.0 ? Color.red : Color.yellow)
+                                        .frame(width: barWidth, height: 2)
+                                        .offset(y: -peakY + 2)
+                                }
+                            }
+                            .frame(width: barWidth, height: height, alignment: .bottom)
+                        }
+                    }
+                    
+                    // LAYER D: IDEAL EQ COEFFICIENT TARGET PATH
+                    Path { path in
+                        for i in 0..<31 {
+                            let xPos = (CGFloat(i) * (barWidth + spacing)) + (barWidth / 2)
+                            let normY = isEqBypassed ? analyzer.normalizeDb(0.0) : analyzer.targetLinePoints[i]
+                            let yPos = height - (height * CGFloat(normY))
+                            
+                            if i == 0 { path.move(to: CGPoint(x: xPos, y: yPos)) }
+                            else { path.addLine(to: CGPoint(x: xPos, y: yPos)) }
+                        }
+                    }
+                    .stroke(
+                        isEqBypassed ? LinearGradient(colors: [.gray.opacity(0.4)], startPoint: .leading, endPoint: .trailing) :
+                                       LinearGradient(colors: [.orange, .pink], startPoint: .leading, endPoint: .trailing),
+                        style: StrokeStyle(lineWidth: isEqBypassed ? 1.5 : 3.0, lineCap: .round, lineJoin: .round)
+                    )
+                }
+            }
+            .frame(minHeight: 240)
+            .background(Color(white: 0.03))
+            .cornerRadius(6)
+            
+            FrequencyAxisLabels(frequencies: analyzer.centerFrequencies, spacing: 2, totalBars: 31)
+        }
+    }
+}
+Use code with caution.3. Action Plan for the AgentApply the inverted math corrections to normalizeDb to set silence tracking to the bottom baseline.Implement the isEqBypassed flag handling inside renderFrameTick to forcefully clear out output data matrices during active system bypass events.Swap the color models out for the custom liveSpectrumGradient stops array profile to deploy dynamic warning highlight conversions automatically.

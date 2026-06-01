@@ -501,6 +501,26 @@ struct PresetToolbar: View {
             HStack(spacing: 8) {
                 PresetPicker()
 
+                // Save button
+                Button {
+                    if store.presetManager.selectedPresetName != nil && store.presetManager.isModified {
+                        do {
+                            try store.updateCurrentPreset()
+                        } catch {
+                            showingSaveSheet = true
+                        }
+                    } else {
+                        showingSaveSheet = true
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 24, height: 16)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Save preset")
+
                 // New preset button
                 Button {
                     store.createNewPreset()

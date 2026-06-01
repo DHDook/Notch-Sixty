@@ -183,9 +183,14 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // MARK: - Public API
 
-    /// Maps a raw dB value to a 0-1 normalised position for display.
+    /// Maps a raw dB value to a 0–1 normalised position for display.
     func normaliseDb(_ db: Float) -> Float {
         (max(minDb, min(maxDb, db)) - minDb) / (maxDb - minDb)
+    }
+
+    /// Static version — safe to call from Canvas closures without capturing `self`.
+    static func normaliseDbStatic(_ db: Float, min minDb: Float, max maxDb: Float) -> Float {
+        (Swift.max(minDb, Swift.min(maxDb, db)) - minDb) / (maxDb - minDb)
     }
 
     /// Computes theoretical frequency-response overlay from a set of biquad filters.
