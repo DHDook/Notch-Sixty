@@ -258,9 +258,27 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
         var real = [Float](repeating: 0, count: half)
         var imag = [Float](repeating: 0, count: half)
-        
         var resultDb = [Float](repeating: 0, count: half)
         
+        // Extract FFT processing to helper function to work around Swift compiler issues
+        executeFFTProcessing(
+            windowed: windowed,
+            real: &real,
+            imag: &imag,
+            resultDb: &resultDb,
+            half: half
+        )
+        
+        return resultDb
+    }
+    
+    private func executeFFTProcessing(
+        windowed: [Float],
+        real: inout [Float],
+        imag: inout [Float],
+        resultDb: inout [Float],
+        half: Int
+    ) {
         real.withUnsafeMutableBufferPointer { rp in
             imag.withUnsafeMutableBufferPointer { ip in
                 var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
@@ -289,7 +307,6 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
                 vDSP_vclip(&clipped, 1, &floorVal, &ceilVal, &resultDb, 1, vDSP_Length(half))
             }
         }
-        return resultDb
     }
 
     private func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {
