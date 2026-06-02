@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import SwiftUI
 
 /// Tab identifier for Settings window.
@@ -531,6 +532,10 @@ struct RoomCalibrationTab: View {
     @State private var measuredSeats: Set<Int> = []   // indices of measured positions
     @State private var statusMessage  = "Ambient shield active — monitoring room silence."
 
+    // Microphone selection
+    @State private var selectedMicID: AudioDeviceID? = nil
+    @State private var availableMics: [(id: AudioDeviceID, name: String)] = []
+
     private let positionLabels = ["Centre", "Left", "Right"]
 
     var body: some View {
@@ -543,6 +548,35 @@ struct RoomCalibrationTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("About Room Calibration")
+            }
+
+            // ── Microphone ────────────────────────────────────────────────
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Select the microphone used to capture room reflections during the sweep.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if availableMics.isEmpty {
+                        Text("No input devices found.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Picker("Input Microphone", selection: $selectedMicID) {
+                            Text("None selected").tag(Optional<AudioDeviceID>.none)
+                            ForEach(availableMics, id: \.id) { mic in
+                                Text(mic.name).tag(Optional(mic.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .controlSize(.small)
+                        .frame(maxWidth: 320, alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Microphone")
             }
 
             // ── Configuration ─────────────────────────────────────────────
@@ -577,10 +611,6 @@ struct RoomCalibrationTab: View {
                                 .frame(width: 200)
                             }
                         }
-                    }
-
-                    if acousticMode == 1 {
-                        seatProgressRow
                     }
                 }
                 .padding(.vertical, 4)
@@ -683,25 +713,52 @@ struct RoomCalibrationTab: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear { availableMics = Self.listInputDevices() }
     }
 
-    // MARK: - Seat Progress Row
+    // MARK: - Input Device Enumeration
 
-    private var seatProgressRow: some View {
-        HStack(spacing: 12) {
-            ForEach(positionLabels.indices, id: \.self) { i in
-                HStack(spacing: 5) {
-                    Image(systemName: measuredSeats.contains(i)
-                          ? "checkmark.circle.fill"
-                          : "circle")
-                        .foregroundStyle(measuredSeats.contains(i) ? .green : .secondary)
-                        .font(.caption)
-                    Text(positionLabels[i])
-                        .font(.caption)
-                        .foregroundStyle(measuredSeats.contains(i) ? .primary : .secondary)
-                }
-            }
-            Spacer()
+    /// Returns all CoreAudio devices that have at least one input stream.
+    private static func listInputDevices() -> [(id: AudioDeviceID, name: String)] {
+        var propSize: UInt32 = 0
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope:    kAudioObjectPropertyScopeGlobal,
+            mElement:  kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &propSize
+        ) == noErr else { return [] }
+
+        let count = Int(propSize) / MemoryLayout<AudioDeviceID>.size
+        var ids   = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &propSize, &ids
+        ) == noErr else { return [] }
+
+        return ids.compactMap { deviceID in
+            // Filter to devices with input streams.
+            var inputAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreams,
+                mScope:    kAudioDevicePropertyScopeInput,
+                mElement:  kAudioObjectPropertyElementMain
+            )
+            var streamSize: UInt32 = 0
+            AudioObjectGetPropertyDataSize(deviceID, &inputAddr, 0, nil, &streamSize)
+            guard streamSize > 0 else { return nil }
+
+            // Get the device name.
+            var nameAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioObjectPropertyName,
+                mScope:    kAudioObjectPropertyScopeGlobal,
+                mElement:  kAudioObjectPropertyElementMain
+            )
+            var cfName: CFString = "" as CFString
+            var nameSize = UInt32(MemoryLayout<CFString>.stride)
+            AudioObjectGetPropertyData(deviceID, &nameAddr, 0, nil, &nameSize, &cfName)
+            let nameStr = cfName as String
+            guard !nameStr.isEmpty else { return nil }
+            return (id: deviceID, name: nameStr)
         }
     }
 }

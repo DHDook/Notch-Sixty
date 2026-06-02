@@ -1,0 +1,533 @@
+System Specification: Fully Calibrated Dynamic 31-Band RTA Dashboard with Threshold Color Shifting & Adaptive Theme Support
+1. Architectural Blueprint Overview
+You will implement a unified vertical stack layout for the equaliser-adv application [github.com]. The layout consists of two primary functional zones:
+Top Zone (Master Meters Layout): Reconfigure the existing legacy Peak In/Out and RMS In/Out meters into horizontal progress tracks. Levels must move left-to-right (\(0\%\) to \(100\%\)). Include an interactive, glowing Hardware Clipping Indicator Light featuring a 1.5-second automated hold window and a manual click-to-clear gesture target.
+Bottom Zone (Logarithmic Spectral Graph Canvas): Implement a dual-view 31-Band Real-Time Spectrum Analyzer (RTA) reading input and output lines concurrently across the human hearing range (20 Hz to 20,000 Hz) using the ISO standard 1/3 octave scale. This area features dynamic background grid fading, an overlay of the theoretical Target EQ Filter Curve, precise grid-aligned text labels, an expandable FPS diagnostics readout panel, and a hover-activated contextual tooltip tracking live Delta Gain (\(\Delta\text{ dB}\)) differences.
+Layout, Bypass, and Color Behaviors:
+Adaptive Theme Support: The graph container background must utilize native macOS semantic tokens (Color(.controlBackgroundColor)), and all text/grid labels must use Color(.labelColor) to dynamically switch colors between Light Mode (medium-gray canvas with dark text) and Dark Mode (charcoal canvas with white text).
+Solid Color Threshold Shifting: Bars must not feature an internal top-to-bottom color gradient. Instead, each individual vertical column must be painted a single, solid uniform color that shifts dynamically as its current decibel level crosses fixed boundary markers:
+Green: Safe operational level (Below \(-18\text{ dB}\)).
+Yellow: Caution zone threshold crossing (Between \(-18\text{ dB}\) and \(-6\text{ dB}\)).
+Orange: Hot signal saturation headroom (Between \(-6\text{ dB}\) and \(0\text{ dB}\)).
+Red: Maximum ceiling/Clipping warning (At or exceeding \(0\text{ dB}\)).
+Bypass Isolation Rule: When the master isEqBypassed flag is enabled, the background dB measurement grid lines and text markers inside the canvas must drop in opacity (fade out). Only the Output RTA bars, Output Peak Ticks, and the Target EQ Line will gray out or flatten to a \(0\text{ dB}\) state. The Input RTA bars and Input Peak Ticks must continue rendering normally.
+2. Audio Pipeline Thread Safety & High Sample Rates (Up to 384 kHz)
+To process audio chunks securely across high-priority threads up to 384 kHz without thread locks or audible stutters, store stereo inputs inside a pre-allocated circular array. Sum channels to mono using optimized vector utilities before executing the analyzer engine.
+swift
+import Foundation
+import Accelerate
+
+class LockFreeAudioRingBuffer {
+    private var buffer: [Float]
+    private let bufferSize = 16384 // Expanded for 384kHz headroom stability
+    private var writeIndex: Int = 0
+    
+    init() {
+        self.buffer = [Float](repeating: -60.0, count: bufferSize)
+    }
+    
+    /// Sums stereo buffers to mono and stores them dynamically inside the lock-free circular ring tracking data.
+    func writeStereoSamples(leftChannel: UnsafePointer<Float>, rightChannel: UnsafePointer<Float>, frameCount: Int) {
+        var monoFrames = [Float](repeating: 0.0, count: frameCount)
+        vDSP_vadd(leftChannel, 1, rightChannel, 1, &monoFrames, 1, vDSP_Length(frameCount))
+        var scale: Float = 0.5
+        vDSP_vsmul(monoFrames, 1, &scale, &monoFrames, 1, vDSP_Length(frameCount))
+        
+        for i in 0..<frameCount {
+            let targetIdx = (writeIndex + i) % bufferSize
+            buffer[targetIdx] = monoFrames[i]
+        }
+        writeIndex = (writeIndex + frameCount) % bufferSize
+    }
+    
+    /// Pulls a linear chunk of 2048 contiguous samples backward from the current write head pointer.
+    func readLatestChunk(size: Int = 
+2048) -> [Float] {
+        var chunk = [Float](repeating: 0.0, count: size)
+        var startIdx = writeIndex - size
+        if startIdx < 0 { startIdx += bufferSize }
+        
+        for i in 0..<size {
+            let sourceIdx = (startIdx + i) % bufferSize
+            chunk[i] = buffer[sourceIdx]
+        }
+        return chunk
+    }
+}
+
+class SystemSpectrumPipelineCoordinator: ObservableObject {
+    let inputRingBuffer = LockFreeAudioRingBuffer()
+    let outputRingBuffer = LockFreeAudioRingBuffer()
+    let analyzer = AdvancedDualSpectrumAnalyzer()
+    
+    var currentSystemSampleRate: Float = 44100.0
+    
+    func renderFrameTick(currentInputGain: Float, currentOutputGain: Float, activeFilters: [BiquadCoefficients], isEqBypassed: Bool) {
+        // Process input calculations independently
+        let inputBlock = inputRingBuffer.readLatestChunk(size: 2048)
+        let rawInputDb = analyzer.executeFFT(samples: inputBlock)
+        var inputOffset = currentInputGain
+        var calibratedInput = rawInputDb
+        vDSP_vsadd(&calibratedInput, 1, &inputOffset, &calibratedInput, 1, vDSP_Length(calibratedInput.count))
+        let mappedInput = analyzer.mapBinsToBands(dbMagnitudes: calibratedInput, sampleRate: currentSystemSampleRate)
+        
+        if isEqBypassed {
+            // Forcefully zero-out output structures during system bypass events
+            DispatchQueue.main.async {
+                for i in 0..<31 {
+                    self.analyzer.inputBands[i].currentValue = mappedInput[i]
+                    self.analyzer.outputBands[i].currentValue = self.analyzer.minDb
+                    self.analyzer.outputBands[i].peakValue = self.analyzer.minDb
+                }
+                self.analyzer.targetLinePoints = [Float](repeating: self.analyzer.normalizeDb(0.0), count: 31)
+            }
+            return
+        }
+        
+        // Standard Processing Run
+        let outputBlock = outputRingBuffer.readLatestChunk(size: 2048)
+        analyzer.updateSmearedSpectrums(
+            inputSamples: inputBlock,
+            inputGainDb: currentInputGain,
+            outputSamples: outputBlock,
+            outputGainDb: currentOutputGain,
+            sampleRate: currentSystemSampleRate
+        )
+        
+        analyzer.updateTargetLine(
+            activeFilters: activeFilters,
+            outputGainDb: currentOutputGain,
+            sampleRate: Double(currentSystemSampleRate)
+        )
+    }
+}
+Use code with caution.
+
+3. Calibrated DSP Engine: Mathematical Correction
+To prevent individual bars from clipping and oversaturating at low volumes, apply strict window gain corrections and configure the decibel conversion to evaluate power reference signals instead of amplitude variables. This ensures a clean 0 dBFS mapping without double decibel multiplication.
+swift
+import Accelerate
+import Foundation
+
+struct BandData {
+    var currentValue: Float = -60.0
+    var peakValue: Float = -60.0
+    var peakHoldFrames: Int = 0
+}
+
+struct BiquadCoefficients {
+    let b0: Double, b1: Double, b2: Double
+    let a1: Double, a2: Double
+}
+
+class AdvancedDualSpectrumAnalyzer: ObservableObject {
+    let minDb: Float = -60.0
+    let maxDb: Float = 12.0
+    
+    private let fftSize = 2048
+    private var fftSetup: FFTSetup
+    private var log2n: vDSP_Length
+    private var window: [Float]
+    
+    // Analog meter ballistic variables
+    private let decayConstant: Float = 0.33      // ~20 dB per second drop rate at 60 FPS
+    private let peakHoldDuration = 30           // 500ms hold at 60 FPS
+    private let peakDecayConstant: Float = 0.66  // ~40 dB per second decay once dropped
+    
+    let centerFrequencies: [Float] = [
+        20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 
+        800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000
+    ]
+    
+    @Published var inputBands = [BandData](repeating: BandData(), count: 31)
+    @Published var outputBands = [BandData](repeating: BandData(), count: 31)
+    @Published var targetLinePoints = [Float](repeating: 0.0, count: 31)
+    
+    @Published var showInputPeaks: Bool = true
+    @Published var showOutputPeaks: Bool = true
+    
+    init() {
+        self.log2n = vDSP_Length(log2(Double(fftSize)))
+        self.fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))!
+        self.window = [Float](repeating: 0, count: fftSize)
+        vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+    }
+    
+    /// FIXED NORMALIZATION: Ensures silence (-60dB) maps to 0.0 (bottom) and loud signals (+12dB) map to 1.0 (top)
+    func normalizeDb(_ db: Float) -> Float {
+        let clamped = max(minDb, min(maxDb, db))
+        return (clamped - minDb) / (maxDb - minDb)
+    }
+    
+    func updateTargetLine(activeFilters: [BiquadCoefficients], outputGainDb: Float, sampleRate: Double) {
+        let points: [Float] = centerFrequencies.map { fc in
+            var accumulatedGainDb: Double = Double(outputGainDb)
+            let omega = 2.0 * Double.pi * Double(fc) / sampleRate
+            let cosW = cos(omega), cos2W = cos(2.0 * omega)
+            let sinW = sin(omega), sin2W = sin(2.0 * omega)
+            
+            for filter in activeFilters {
+                let numReal = filter.b0 + filter.b1 * cosW + filter.b2 * cos2W
+                let numImag = -(filter.b1 * sinW + filter.b2 * sin2W)
+                let denReal = 1.0 + filter.a1 * cosW + filter.a2 * cos2W
+                let denImag = -(filter.a1 * sinW + filter.a2 * sin2W)
+                
+                let numMagSq = (numReal * numReal) + (numImag * numImag)
+                let denMagSq = (denReal * denReal) + (denImag * denImag)
+                
+                if denMagSq > 0 { accumulatedGainDb += 10.0 * log10(numMagSq / denMagSq) }
+            }
+            return normalizeDb(Float(accumulatedGainDb))
+        }
+        DispatchQueue.main.async { self.targetLinePoints = points }
+    }
+    
+    func updateSmearedSpectrums(inputSamples: [Float], inputGainDb: Float, outputSamples: [Float], outputGainDb: Float, sampleRate: Float) {
+        var rawInputDb = executeFFT(samples: inputSamples)
+        var rawOutputDb = executeFFT(samples: outputSamples)
+        
+        let visualCalibration: Float = 0.0 
+        var inputOffset = inputGainDb + visualCalibration
+        var outputOffset = outputGainDb + visualCalibration
+        
+        vDSP_vsadd(&rawInputDb, 1, &inputOffset, &rawInputDb, 1, vDSP_Length(rawInputDb.count))
+        vDSP_vsadd(&rawOutputDb, 1, &outputOffset, &rawOutputDb, 1, vDSP_Length(rawOutputDb.count))
+        
+        let targetInputBands = mapBinsToBands(dbMagnitudes: rawInputDb, sampleRate: sampleRate)
+        let targetOutputBands = mapBinsToBands(dbMagnitudes: rawOutputDb, sampleRate: sampleRate)
+        
+        DispatchQueue.main.async {
+            self.applyPhysics(currentBands: &self.inputBands, targetDbValues: targetInputBands)
+            self.applyPhysics(currentBands: &self.outputBands, targetDbValues: targetOutputBands)
+        }
+    }
+    
+    func executeFFT(samples: [Float]) -> [Float] {
+        guard samples.count >= fftSize else { return [Float](repeating: minDb, count: fftSize / 2) }
+        var windowedSamples = [Float](repeating: 0, count: fftSize)
+        vDSP_vmul(samples, 1, window, 1, &windowedSamples, 1, vDSP_Length(fftSize))
+        
+        var real = [Float](repeating: 0, count: fftSize / 2)
+        var imag = [Float](repeating: 0, count: fftSize / 2)
+        var splitComplex = DSPSplitComplex(realp: &real, imagp: &imag)
+        
+        windowedSamples.withUnsafeBytes { rawBuffer in
+            let typedBuffer = rawBuffer.bindMemory(to: DSPComplex.self)
+            vDSP_ctoz(typedBuffer.baseAddress!, 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
+        }
+        
+        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
+        var magnitudes = [Float](repeating: 0, count: fftSize / 2)
+        vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+        
+        // CRITICAL SCALING MATHEMATICAL REVISION FIXES:
+        let hannGainCorrection: Float = 0.5
+        var scalingFactor = Float(2.0 / (Float(fftSize) * hannGainCorrection))
+        var dbMagnitudes = [Float](repeating: 0, count: fftSize / 2)
+        
+        // Pass "0" as the final flag argument. This correctly informs vDSP_vdbcon that the data 
+        // is powered/squared. This stops the library from generating double decibel readings.
+        vDSP_vdbcon(&magnitudes, 1, &scalingFactor, &dbMagnitudes, 1, vDSP_Length(fftSize / 2), 0)
+        return dbMagnitudes
+    }
+    
+    func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {
+        var mappedBands = [Float](repeating: minDb, count: 31)
+        let binWidth = sampleRate / Float(fftSize)
+        
+        for k in 0..<31 {
+            let fc = centerFrequencies[k]
+            let lower = fc * pow(2.0, -1.0/6.0)
+            let upper = fc * pow(2.0, 1.0/6.0)
+            
+            var sum: Float = 0.0
+            var count: Float = 0.0
+            
+            for i in 0..<(fftSize / 2) {
+                let freq = Float(i) * binWidth
+                if freq >= lower && freq <= upper {
+                    sum += dbMagnitudes[i]
+                    count += 1.0
+                }
+            }
+            mappedBands[k] = count > 0 ? (sum / count) : dbMagnitudes[max(0, min(Int(round(fc / binWidth)), (fftSize / 2) - 1))]
+        }
+        return mappedBands
+    }
+    
+    func applyPhysics(currentBands: inout [BandData], targetDbValues: [Float]) {
+        for i in 0..<31 {
+            let target = targetDbValues[i]
+            if target > currentBands[i].currentValue {
+                currentBands[i].currentValue = target
+            } else {
+                currentBands[i].currentValue = max(target, currentBands[i].currentValue - decayConstant)
+            }
+            if target >= currentBands[i].peakValue {
+                currentBands[i].peakValue = target
+                currentBands[i].peakHoldFrames = peakHoldDuration
+            } else {
+                if currentBands[i].peakHoldFrames > 0 {
+                    currentBands[i].peakHoldFrames -= 1
+                } else {
+                    currentBands[i].peakValue = max(minDb, currentBands[i].peakValue - peakDecayConstant)
+                }
+            }
+        }
+    }
+    deinit { vDSP_destroy_fftsetup(fftSetup) }
+}
+Use code with caution.
+
+4. Master Complete User Interface UI Layer (SwiftUI)
+This dashboard unifies adaptive coloring, explicit layout framework boundaries to prevent the zero-height bug, and the solid threshold-shifting logic.
+swift
+import SwiftUI
+
+class MasterMeterStore: ObservableObject {
+    @Published var inputPeakFraction: Float = 0.0
+    @Published var inputRmsFraction: Float = 0.0
+    @Published var outputPeakFraction: Float = 0.0
+    @Published var outputRmsFraction: Float = 0.0
+    
+    @Published var inputIsClipping: Bool = false
+    @Published var outputIsClipping: Bool = false
+    
+    private let clipHoldFramesThreshold = 90 // 1.5 seconds at 60 FPS
+    private var inputClipTimerCount = 0
+    private var outputClipTimerCount = 0
+    
+    @Published var showDiagnostics: Bool = false
+    @Published var currentFps: Int = 60
+    private var lastFpsTimestamp = Date()
+    private var frameCountSinceLastFpsUpdate = 0
+    
+    func processMeterFrameTick(rawInputPeak: Float, rawInputRms: Float, rawOutputPeak: Float, rawOutputRms: Float) {
+        DispatchQueue.main.async {
+            self.inputPeakFraction = rawInputPeak
+            self.inputRmsFraction = rawInputRms
+            self.outputPeakFraction = rawOutputPeak
+            self.outputRmsFraction = rawOutputRms
+            
+            if rawInputPeak >= 1.0 {
+                self.inputIsClipping = true
+                self.inputClipTimerCount = self.clipHoldFramesThreshold
+            } else if self.inputIsClipping {
+                self.inputClipTimerCount -= 1
+                if self.inputClipTimerCount <= 0 { self.inputIsClipping = false }
+            }
+            
+            if rawOutputPeak >= 1.0 {
+                self.outputIsClipping = true
+                self.outputClipTimerCount = self.clipHoldFramesThreshold
+            } else if self.outputIsClipping {
+                self.outputClipTimerCount -= 1
+                if self.outputClipTimerCount <= 0 { self.outputIsClipping = false }
+            }
+            
+            self.frameCountSinceLastFpsUpdate += 1
+            let now = Date()
+            let elapsed = now.timeIntervalSince(self.lastFpsTimestamp)
+            if elapsed >= 1.0 {
+                self.currentFps = Int(Double(self.frameCountSinceLastFpsUpdate) / elapsed)
+                self.frameCountSinceLastFpsUpdate = 0
+                self.lastFpsTimestamp = now
+            }
+        }
+    }
+    
+    func manuallyResetClips() {
+        inputIsClipping = false; inputClipTimerCount = 0
+        outputIsClipping = false; outputClipTimerCount = 0
+    }
+}
+
+struct UnifiedEqualizerDashboardView: View {
+    @ObservedObject var analyzer: AdvancedDualSpectrumAnalyzer
+    @ObservedObject var legacyMeterStore: MasterMeterStore
+    @Binding var isEqBypassed: Bool
+    
+    @State private var hoveredBandIndex: Int = -1
+    @State private var mouseLocation: CGPoint = .zero
+    
+    /// SOLID THRESHOLD COLOR EVALUATOR: Checks amplitude context and returns a single, solid color
+    private func getColorForLevel(_ db: Float) -> Color {
+        if db < -18.0 { return .green }
+        if db < -6.0  { return .yellow }
+        if db < 0.0   { return .orange }
+        return .red // Red indicator hits exclusively if the band causes clipping over 0 dBFS
+    }
+    
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 16) {
+                
+                // ZONE 1: MASTER METERS LAYOUT
+                VStack(spacing: 8) {
+                    HorizontalMasterMeterRow(label: "INPUT PEAK", value: legacyMeterStore.inputPeakFraction, barColor: .blue, isClipping: legacyMeterStore.inputIsClipping, onResetAction: { legacyMeterStore.manuallyResetClips() })
+                    HorizontalMasterMeterRow(label: "INPUT RMS ", value: legacyMeterStore.inputRmsFraction, barColor: .purple, isClipping: false, onResetAction: {})
+                    HorizontalMasterMeterRow(label: "OUTPUT PEAK", value: legacyMeterStore.outputPeakFraction, barColor: isEqBypassed ? .gray : .green, isClipping: isEqBypassed ? false : legacyMeterStore.outputIsClipping, onResetAction: { legacyMeterStore.manuallyResetClips() })
+                }
+                .padding(12)
+                .background(Color(.controlBackgroundColor).opacity(0.5))
+                .cornerRadius(6)
+                
+                Divider().background(Color(.labelColor).opacity(0.1))
+                
+                // ZONE 2: LOGARITHMIC SPECTRAL RTA CONTAINER
+                VStack(spacing: 6) {
+                    HStack {
+                        HStack(spacing: 12) {
+                            Toggle("Input Peaks", isOn: $analyzer.showInputPeaks).toggleStyle(.checkbox)
+                            Toggle("Output Peaks", isOn: $analyzer.showOutputPeaks).toggleStyle(.checkbox)
+                            Toggle("Diagnostics", isOn: $legacyMeterStore.showDiagnostics).toggleStyle(.checkbox)
+                        }
+                        Spacer()
+                        Text(isEqBypassed ? "BYPASS APPLIED" : "DSP PIPELINE ACTIVE")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(isEqBypassed ? .orange : .green)
+                    }.padding(.horizontal, 4)
+                    
+                    GeometryReader { geo in
+                        let width = geo.size.width
+                        let height = geo.size.height
+                        let spacing: CGFloat = 2
+                        let totalSpacing = spacing * CGFloat(30)
+                        let barWidth = (width - totalSpacing) / 31
+                        
+                        ZStack(alignment: .bottomLeading) {
+                            // Grid line opacity fades on active system bypass
+                            BackgroundGridLines(minDb: analyzer.minDb, maxDb: analyzer.maxDb)
+                                .opacity(isEqBypassed ? 0.2 : 1.0)
+                            
+                            HStack(alignment: .bottom, spacing: spacing) {
+                                ForEach(0..<31, id: \.self) { i in
+                                    ZStack(alignment: .bottom) {
+                                        // Input Level Bar (Solid uniform color shifting, lowered opacity)
+                                        Rectangle()
+                                            .fill(getColorForLevel(analyzer.inputBands[i].currentValue))
+                                            .frame(width: barWidth, height: max(0, height * CGFloat(analyzer.normalizeDb(analyzer.inputBands[i].currentValue))))
+                                            .opacity(0.25)
+                                        
+                                        // Output Level Bar (Solid uniform color shifting, turns gray if bypassed)
+                                        Rectangle()
+                                            .fill(isEqBypassed ? Color.gray.opacity(0.4) : getColorForLevel(analyzer.outputBands[i].currentValue))
+                                            .frame(width: barWidth, height: max(0, height * CGFloat(analyzer.normalizeDb(analyzer.outputBands[i].currentValue))))
+                                        
+                                        // Floating Peak Highlights
+                                        if analyzer.showOutputPeaks && !isEqBypassed {
+                                            let peakY = height * CGFloat(analyzer.normalizeDb(analyzer.outputBands[i].peakValue))
+                                            RoundedRectangle(cornerRadius: 1)
+                                                .fill(analyzer.outputBands[i].peakValue >= 0.0 ? Color.red : Color.yellow)
+                                                .frame(width: barWidth, height: 2)
+                                                .offset(y: -peakY + 2)
+                                        }
+                                    }
+                                    .frame(width: barWidth, height: height, alignment: .bottom)
+                                    .contentShape(Rectangle())
+                                    .onHover { isHovering in
+                                        if isHovering { self.hoveredBandIndex = i }
+                                        else if self.hoveredBandIndex == i { self.hoveredBandIndex = -1 }
+                                    }
+                                }
+                            }.background(
+                                GeometryReader { trackingGeo in
+                                    Color.clear.onContinuousHover { phase in
+                                        if case .active(let location) = phase { self.mouseLocation = location }
+                                    }
+                                }
+                            )
+                            
+                            // Vector Target EQ Curve
+                            Path { path in
+                                for i in 0..<31 {
+                                    let xPos = (CGFloat(i) * (barWidth + spacing)) + (barWidth / 2)
+                                    let normY = isEqBypassed ? analyzer.normalizeDb(0.0) : analyzer.targetLinePoints[i]
+                                    let yPos = height - (height * CGFloat(normY))
+                                    if i == 0 { path.move(to: CGPoint(x: xPos, y: yPos)) }
+                                    else { path.addLine(to: CGPoint(x: xPos, y: yPos)) }
+                                }
+                            }.stroke(isEqBypassed ? LinearGradient(colors: [.gray.opacity(0.4)], startPoint: .leading, endPoint: .trailing) : LinearGradient(colors: [.orange, .pink], startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: isEqBypassed ? 1.5 : 3.0, lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                    .frame(height: 240) // FIXED FRAME: Stops drawing elements from collapsing
+                    .background(Color(.controlBackgroundColor)) // Adaptive medium gray background token
+                    .cornerRadius(6)
+                    
+Use code with caution.
+
+FrequencyAxisLabels(frequencies: analyzer.centerFrequencies, spacing: 2, totalBars: 31)
+}
+}.padding(14)
+// ZONE 3: INTERACTIVE TOOLTIP HOVER ACCESSIBILITY OVERLAY
+if hoveredBandIndex != -1 && hoveredBandIndex < 31 {
+let freq = analyzer.centerFrequencies[hoveredBandIndex]
+let inDb = analyzer.inputBands[hoveredBandIndex].currentValue
+let outDb = analyzer.outputBands[hoveredBandIndex].currentValue
+let deltaDb = outDb - inDb
+let deltaColor = (isEqBypassed || abs(deltaDb) < 0.05) ? Color.gray : (deltaDb > 0 ? Color.green : Color.red)
+let deltaText = isEqBypassed ? "0.0 dB (Bypassed)" : (abs(deltaDb) < 0.05 ? "0.0 dB" : String(format: "%@%.1f dB", deltaDb > 0 ? "+" : "", deltaDb))
+VStack(alignment: .leading, spacing: 4) {
+Text("Freq: (freq >= 1000 ? String(format: "%.1f kHz", freq / 1000.0) : "(Int(freq)) Hz")").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundColor(Color(.labelColor))
+Divider().background(Color(.labelColor).opacity(0.15))
+Text("Input: (inDb > analyzer.minDb ? String(format: "%.1f dB", inDb) : "-∞ dB")").foregroundColor(.blue.opacity(0.9))
+Text("Output: (outDb > analyzer.minDb ? String(format: "%.1f dB", outDb) : "-∞ dB")").foregroundColor(isEqBypassed ? .gray : .green)
+HStack(spacing: 4) {
+Text("Delta: ").foregroundColor(Color(.labelColor).opacity(0.6))
+Text(deltaText).foregroundColor(deltaColor).fontWeight(.bold)
+}
+}
+.font(.system(size: 9, design: .monospaced)).padding(10).background(Color(.windowBackgroundColor).opacity(0.95)).cornerRadius(6).shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(.labelColor).opacity(0.1), lineWidth: 1))
+.position(x: mouseLocation.x + 65, y: mouseLocation.y - 45)
+}
+// HUD PROCESS MONITOR PANEL
+if legacyMeterStore.showDiagnostics {
+VStack(alignment: .leading, spacing: 4) {
+Text("UI PERF: (legacyMeterStore.currentFps) FPS").foregroundColor(legacyMeterStore.currentFps >= 58 ? .green : .red)
+Text("BUFFER SIZE: 2048 SAMPLES")
+Text("MAX THRESHOLD: 384kHz CAPABLE")
+}.font(.system(size: 8, weight: .bold, design: .monospaced)).padding(6).background(Color.black.opacity(0.85)).foregroundColor(.white).cornerRadius(4).padding([.top, .trailing], 24)
+}
+}
+}
+}
+struct HorizontalMasterMeterRow: View {
+let label: String
+let value: Float
+let barColor: Color
+let isClipping: Bool
+var onResetAction: () -> Void
+var body: some View {
+HStack(spacing: 8) {
+Text(label).font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(Color(.labelColor).opacity(0.6)).frame(width: 80, alignment: .leading)
+GeometryReader { geo in
+ZStack(alignment: .leading) {
+RoundedRectangle(cornerRadius: 2).fill(Color(.labelColor).opacity(0.08)).frame(height: 6)
+RoundedRectangle(cornerRadius: 2).fill(barColor).frame(width: geo.size.width * CGFloat(max(0.0, min(1.0, value))), height: 6)
+}.frame(maxHeight: .infinity, alignment: .center)
+}.frame(height: 6)
+Circle()
+.fill(isClipping ? Color.red : Color(.labelColor).opacity(0.15))
+.frame(width: 8, height: 8)
+.shadow(color: isClipping ? Color.red.opacity(0.8) : Color.clear, radius: isClipping ? 4 : 0)
+.onTapGesture { onResetAction() }
+}
+}
+}
+struct BackgroundGridLines: View {
+let minDb: Float
+let maxDb: Float
+var body: some View {
+GeometryReader { geo in
+let dbs: [Float] = [12, 0, -12, -24, -36, -48]
+ForEach(dbs, id: .self) { db in
+let normY = (db - minDb) / (maxDb - minDb)
+let yPos = geo.size.height - (geo.size.height * CGFloat(normY))
+ZStack {
+Path { p in p.move(to: CGPoint(x: 0, y: yPos)); p.addLine(to: CGPoint(x: geo.size.width, y: yPos)) }.stroke(Color(.labelColor).opacity(0.12), lineWidth: 1)
+Text("(Int(db)) dB").font(.system(size: 8, design: .monospaced)).foregroundColor(Color(.labelColor).opacity(0.4)).position(x: 24, y: yPos - 5)
+}
+}
+}
+}
+}

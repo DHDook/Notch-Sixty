@@ -850,6 +850,9 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// Post-dynamics mono ring buffer. `nil` = RTA not active. Written exclusively from the audio thread.
     nonisolated(unsafe) var rtaOutputBuffer: LockFreeAudioRingBuffer? = nil
 
+    /// Stereo goniometer engine. `nil` = goniometer not wired. Written exclusively from the audio thread.
+    nonisolated(unsafe) var goniometerEngine: GoniometerBufferEngine? = nil
+
     /// Writes pre-EQ stereo audio (from processingBuffers) to the RTA input ring buffer.
     /// Call from the audio render thread immediately after `provideFrames()`.
     @inline(__always)
@@ -859,6 +862,18 @@ final class RenderCallbackContext: @unchecked Sendable {
             leftChannel:  processingBuffers[0],
             rightChannel: channelCount > 1 ? processingBuffers[1] : processingBuffers[0],
             frameCount: frameCount
+        )
+    }
+
+    /// Writes pre-EQ stereo audio to the goniometer circular buffer.
+    /// Call from the audio render thread alongside `writeRTAInput()`.
+    @inline(__always)
+    func writeGoniometer(frameCount: Int) {
+        guard let eng = goniometerEngine, frameCount > 0, channelCount >= 1 else { return }
+        eng.writeStereoInterleaved(
+            left:   processingBuffers[0],
+            right:  channelCount > 1 ? processingBuffers[1] : processingBuffers[0],
+            frames: frameCount
         )
     }
 

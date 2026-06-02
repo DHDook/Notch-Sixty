@@ -1,0 +1,58 @@
+Technical Extension: Live Bit Rate Status Display1. Architectural Layout IntegrationWe will position this component directly beside the 24-Bit Stream Monitor in Zone 1. It will appear as a crisp, mono-spaced digital readout text block that dynamically tracks total data bandwidth.2. Advanced Analytics DSP Core Engine ExpansionInstruct your agent to add the currentBitRateKbps field to your state model and implement the real-time throughput logic inside your coordinator calculations:swiftimport Foundation
+
+struct FullyExtendedMetricsData {
+    // ... (Keep existing ISP latches, bitmasks, and DR factor tracking properties) ...
+    var currentBitRateKbps: Double = 1411.2 // Baseline standard CD tracking speed (16-bit / 44.1kHz / Stereo)
+}
+
+class AdvancedAnalyticsCoordinator: ObservableObject {
+    @Published var metrics = FullyExtendedMetricsData()
+    
+    /// Updates the text status output string based on active hardware profiles
+    func calculateLiveThroughput(sampleRate: Double, bitDepth: Int, channelCount: Int) {
+        // Bit Rate Formula: Sample Rate (Hz) * Bit Depth (bits) * Channel Count
+        // Example: 44100 * 16 * 2 = 1,411,200 bits per second = 1411.2 kbps
+        let rawBitsPerSecond = sampleRate * Double(bitDepth) * Double(channelCount)
+        let calculatedKbps = rawBitsPerSecond / 1000.0
+        
+        DispatchQueue.main.async {
+            self.metrics.currentBitRateKbps = calculatedKbps
+        }
+    }
+}
+Use code with caution.3. High-Performance Adaptive SwiftUI Layout ComponentAdd this subview module right into your analytics container setup to handle text formatting and display rendering cleanly across varying layout widths:swiftstruct BitRateStatusDisplayView: View {
+    @ObservedObject var metricsEngine: AdvancedAnalyticsCoordinator
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            // Label Header
+            Text("BIT RATE")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(Color(.labelColor).opacity(0.6))
+                .frame(width: 80, alignment: .leading)
+            
+            Spacer()
+            
+            // ─── DYNAMIC FORMATTED DATA DISPLAY READOUT ───
+            Text(formatBitRateString(metricsEngine.metrics.currentBitRateKbps))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(Color(.labelColor).opacity(0.85))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color(.labelColor).opacity(0.04))
+                .cornerRadius(4)
+        }
+    }
+    
+    /// Formats the raw numeric data into standard clean audiophile milestones (kbps vs Mbps)
+    private func formatBitRateString(_ kbps: Double) -> String {
+        if kbps >= 10000.0 {
+            // High-resolution outputs (e.g., 384kHz / 24-bit / Stereo matches 18,432 kbps -> 18.43 Mbps)
+            return String(format: "%.2f Mbps", kbps / 1000.0)
+        } else {
+            // Standard audio tracking limits (e.g., 1411.2 kbps)
+            return String(format: "%.1f kbps", kbps)
+        }
+    }
+}
+Use code with caution.4. Action Plan for the AgentNest the BitRateStatusDisplayView right beneath your 24-Bit Stream Monitor inside the layout container wrapper.Bind your active CoreAudio device notification listener properties to trigger calculateLiveThroughput instantly whenever a hardware device configuration profile shift or sample rate adjustment is made by macOS.Confirm the formatted conversion matches system audio buffer properties up to your 384 kHz ceiling layout targets.

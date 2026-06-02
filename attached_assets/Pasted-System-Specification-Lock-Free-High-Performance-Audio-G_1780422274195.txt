@@ -1,0 +1,197 @@
+System Specification: Lock-Free High-Performance Audio Goniometer
+1. Architectural Overview & UI Layout Realignment
+A Goniometer (X-Y Stereo Phase Scope) plots the Left vs. Right channel relationship onto a two-dimensional grid, giving the user a real-time visualization of the audio's stereo width and phase alignment.
+Layout Integration
+Where to Place: Place the Goniometer widget directly beside the 31-Band RTA Graph Canvas inside a flexible horizontal container (HStack). This splits Zone 2 into side-by-side spectral and spatial windows.
+Aesthetics: The Goniometer background container must share the exact same adaptive color scheme (Color(.controlBackgroundColor)), corner radius, and border styling as the RTA canvas. It must naturally adapt to light and dark modes.
+2. Lock-Free Data Collection & Math Transformation
+To process high-sample-rate audio streams (up to 384 kHz) without causing stalls or dropouts on the CoreAudio thread, the agent must implement a dedicated goniometer frame tap that copies incoming sample pairs into a circular buffer and performs an optimized \(45^{\circ }\) coordinate rotation.
+The Mathematical Formula (Stereo to Lissajous Space)
+Standard stereo samples represent Left (\(L\)) and Right (\(R\)) coordinates. To match hardware audio vectorscopes—where pure mono signals form a sharp, straight vertical line pointing upward—the coordinates must be rotated by \(45^{\circ }\) using this translation matrix:
+\(\text{Horizontal\ }(X)=\frac{L-R}{\sqrt{2}}\)
+\(\text{Vertical\ }(Y)=\frac{L+R}{\sqrt{2}}\)
+X (Side Component): Dictates the width or deviation of the signal from the center phantom image.
+Y (Mid Component): Dictates the true center mono power. In the UI canvas coordinate system, remember to subtract the calculated \(Y\) value from the maximum height to invert the line direction so it points upward.
+swift
+import Foundation
+import Accelerate
+import SwiftUI
+
+struct StereoFrameSample {
+    var x: Float = 0.0 // Lateral / Side energy component
+    var y: Float = 0.0 // Vertical / Mid energy component
+}
+
+class GoniometerBufferEngine: ObservableObject {
+    private let maxBufferCapacity = 8192
+    private var circularStorage: [Float]
+    private var writeHeadPointer = 0
+    
+    // Performance Downsampling Configuration
+    // To support up to 384 kHz smoothly, we limit the UI vector loop rendering size to a crisp 512 points
+    let renderWindowSampleSize = 512
+    
+    @Published var processedVectorPoints: [StereoFrameSample] = []
+    
+    init() {
+        self.circularStorage = [Float](repeating: 0.0, count: 8192 * 2) // Interleaved layout space
+    }
+    
+    /// Non-blocking insertion tap called by real-time hardware audio threads.
+    func writeStereoInterleaved(left: UnsafePointer<Float>, right: UnsafePointer<Float>, frames: Int) {
+        for i in 0..<frames {
+            let storageIndex = (writeHeadPointer + (i * 2)) % (maxBufferCapacity * 2)
+            circularStorage[storageIndex] = left[i]
+            circularStorage[storageIndex + 1] = right[i]
+        }
+        writeHeadPointer = (writeHeadPointer + (frames * 2)) % (maxBufferCapacity * 2)
+    }
+    
+    /// Asynchronously gathers and processes the latest audio coordinates on a 60 FPS clock cycle.
+    func executeCoordinateTransformation() {
+        var localOutputPoints = [StereoFrameSample](repeating: StereoFrameSample(), count: renderWindowSampleSize)
+        let currentWriteHead = writeHeadPointer
+        
+        // Step backward from write head to fetch the freshest sample window block
+        var startingReadOffset = currentWriteHead - (renderWindowSampleSize * 2)
+        if startingReadOffset < 0 { startingReadOffset += (maxBufferCapacity * 2) }
+        
+        var rawL = [Float](repeating: 0.0, count: renderWindowSampleSize)
+        var rawR = [Float](repeating: 0.0, count: renderWindowSampleSize)
+        
+        for i in 0..<renderWindowSampleSize {
+            let offsetIndex = (startingReadOffset + (i * 2)) % (maxBufferCapacity * 2)
+            rawL[i] = circularStorage[offsetIndex]
+            rawR[i] = circularStorage[offsetIndex + 1]
+        }
+        
+        // ─── ACCELERATED MASS VECTOR TRANSFORMATION MATRIX ───
+        var sideVectorDiff = [Float](repeating: 0.0, count: renderWindowSampleSize)
+        var midVectorSum = [Float](repeating: 0.0, count: renderWindowSampleSize)
+        
+        // sideVectorDiff = Left - Right
+        vDSP_vsub(rawR, 1, rawL, 1, &sideVectorDiff, 1, vDSP_Length(renderWindowSampleSize))
+        // midVectorSum = Left + Right
+        vDSP_vadd(rawL, 1, rawR, 1, &midVectorSum, 1, vDSP_Length(renderWindowSampleSize))
+        
+        var matrixScalingDivisor = Float(1.0 / sqrt(2.0))
+        
+        // Scale values inline to finalize 45-degree conversion space
+        vDSP_vsmul(sideVectorDiff, 1, &matrixScalingDivisor, &sideVectorDiff, 1, vDSP_Length(renderWindowSampleSize))
+        vDSP_vsmul(midVectorSum, 1, &matrixScalingDivisor, &midVectorSum, 1, vDSP_Length(renderWindowSampleSize))
+        
+        for i in 0..<renderWindowSampleSize {
+            localOutputPoints[i].x = sideVectorDiff[i]
+            localOutputPoints[i].y = midVectorSum[i]
+        }
+        
+        DispatchQueue.main.async {
+            self.processedVectorPoints = localOutputPoints
+        }
+    }
+}
+Use code with caution.
+
+3. High-Performance Adaptive SwiftUI Layout View
+This layout script handles adaptive drawing operations. It renders the Lissajous scope coordinates with a hardware-style neon phosphorus glow that works across both light and dark systems.
+swift
+struct StereoGoniometerView: View {
+    @ObservedObject var bufferEngine: GoniometerBufferEngine
+    @Binding var isEqBypassed: Bool
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            GeometryReader { geo in
+                let halfW = geo.size.width / 2
+                let halfH = geo.size.height / 2
+                let operationalRadius = min(halfW, halfH) - 10
+                
+                ZStack {
+                    // ─── BACKGROUND NAVIGATION SCOPE GUIDES ───
+                    Group {
+                        // Center Vertical Line (Mono Axis / Mid)
+                        Path { p in
+                            p.move(to: CGPoint(x: halfW, y: halfH - operationalRadius))
+                            p.addLine(to: CGPoint(x: halfW, y: halfH + operationalRadius))
+                        }
+                        .stroke(Color(.labelColor).opacity(0.1), lineWidth: 1)
+                        
+                        // Horizontal Line (Stereo Axis / Out-of-Phase / Side)
+                        Path { p in
+                            p.move(to: CGPoint(x: halfW - operationalRadius, y: halfH))
+                            p.addLine(to: CGPoint(x: halfW + operationalRadius, y: halfH))
+                        }
+                        .stroke(Color(.labelColor).opacity(0.1), lineWidth: 1)
+                        
+                        // Outer Boundary Target Circle Ring
+                        Circle()
+                            .stroke(Color(.labelColor).opacity(0.08), lineWidth: 1)
+                            .frame(width: operationalRadius * 2, height: operationalRadius * 2)
+                    }
+                    
+                    // ─── REAL-TIME GRAPHICS VECTOR LAYER PATH ───
+                    Path { path in
+                        guard !bufferEngine.processedVectorPoints.isEmpty else { return }
+                        
+                        // Begin line drawing sequence from first point coordinates
+                        let firstPt = bufferEngine.processedVectorPoints[0]
+                        let startX = halfW + (CGFloat(firstPt.x) * operationalRadius)
+                        let startY = halfH - (CGFloat(firstPt.y) * operationalRadius)
+                        path.move(to: CGPoint(x: startX, y: startY))
+                        
+                        for i in 1..<bufferEngine.renderWindowSampleSize {
+                            let pt = bufferEngine.processedVectorPoints[i]
+                            
+                            // Map values into canvas space boundary sizes
+                            let drawX = halfW + (CGFloat(pt.x) * operationalRadius)
+                            let drawY = halfH - (CGFloat(pt.y) * operationalRadius)
+                            
+                            path.addLine(to: CGPoint(x: drawX, y: drawY))
+                        }
+                    }
+                    // Dynamic color switching: uses an unshaded gray trace when bypassed, 
+                    // and a neon green trace during active processing.
+                    .stroke(
+                        isEqBypassed ? Color.gray.opacity(0.4) : Color.green.opacity(0.85),
+                        style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
+                    )
+                    // High-performance hardware style glow
+                    .shadow(color: isEqBypassed ? .clear : .green.opacity(0.4), radius: 3)
+                    .animation(.none, value: bufferEngine.processedVectorPoints.map { $0.x })
+                }
+                .position(x: halfW, y: halfH)
+            }
+            .frame(height: 240)
+            .background(Color(.controlBackgroundColor)) // Adaptive medium gray window wrapper
+            .cornerRadius(6)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Audio Goniometer Stereo Vectorscope. Visualizes real-time phase alignment and spatial width.")
+            
+            // Grid Label Footer Metadata
+            HStack {
+                Text("L").font(.system(size: 8, weight: .bold, design: .monospaced))
+                Spacer()
+                Text("M").font(.system(size: 8, weight: .bold, design: .monospaced))
+                Spacer()
+                Text("R").font(.system(size: 8, weight: .bold, design: .monospaced))
+            }
+            .foregroundColor(Color(.labelColor).opacity(0.4))
+            .padding(.horizontal, 6)
+        }
+    }
+}
+Use code with caution.
+
+4. Integration Blueprint Rules for the Agent
+Audio Engine Tapping: Locate the custom core audio device capture output callback structure. Directly push the split channel streams (Float* pointers) straight into goniometerBufferEngine.writeStereoInterleaved(left:right:frames:).
+Clock Loop Refresh Execution: Tie the executeCoordinateTransformation() worker function directly into your active 60 FPS clock cycle loop runner alongside the existing RTA screen tick commands.
+UI Assembly Configuration: Modify the primary dashboard container layout, placing the StereoGoniometerView directly inside an HStack aligned side-by-side with the 31-Band equalizer matrix:
+swift
+HStack(alignment: .top, spacing: 12) {
+    ComprehensiveSpectrumAnalyzerView(analyzer: analyzer, isEqBypassed: $isEqBypassed)
+        .frame(weight: .infinity)
+    StereoGoniometerView(bufferEngine: goniometerEngine, isEqBypassed: $isEqBypassed)
+        .frame(width: 240) // Fixed square ratio layout
+}
+Use code with caution.
+

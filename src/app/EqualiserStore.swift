@@ -201,7 +201,8 @@ final class EqualiserStore: ObservableObject {
     let presetManager: PresetManager
     let meterStore: MeterStore
     let updateService = UpdateCheckService()
-    let rtaAnalyzer   = AdvancedDualSpectrumAnalyzer()
+    let rtaAnalyzer        = AdvancedDualSpectrumAnalyzer()
+    let goniometerEngine   = GoniometerBufferEngine()
 
     // MARK: - Coordinators
     
@@ -795,6 +796,7 @@ final class EqualiserStore: ObservableObject {
             input:  rtaAnalyzer.inputRingBuffer,
             output: rtaAnalyzer.outputRingBuffer
         )
+        routingCoordinator.pipelineManager.renderPipeline?.setGoniometerEngine(goniometerEngine)
     }
 
     /// Placeholder for future room-calibration filter application.

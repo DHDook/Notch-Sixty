@@ -1,0 +1,200 @@
+Technical Extension: Inter-Sample Peak Latch, 24-Bit Stream Monitor, and Dynamic Range Factor Readout1. Architectural Layout IntegrationWe will expand the measurement dock inside Zone 1 to display three new diagnostic tools:ISP Overload Latch: A hardware-style locking indicator light. It operates similarly to the standard peak clipping light but uses a permanent lock structure; once inter-sample peak clipping occurs, it stays active until a user explicitly clicks to clear it.24-Bit Stream Monitor: A row of 24 tiny horizontal indicator blocks representing the bits of a standard audio sample. Active bits flicker to show real-time digital depth utilization, helping you see bit-depth truncation or loss of precision.Live DR Factor Readout: A numeric meter that calculates the Crest-Factor-based Crest-to-Average Loudness ratio, displaying the standard Dynamic Range (DR) Crest Factor rating (e.g., DR6 for compressed tracks, DR14 for dynamic tracks).2. Advanced Analytics DSP Core Engineswiftimport Foundation
+import Accelerate
+
+struct ExpandedMetricsData {
+    var ispInputLatched: Bool = false
+    var ispOutputLatched: Bool = false
+    var inputBitActivityMask: UInt32 = 0 // Tracks which bits are toggling (24-bit space)
+    var outputBitActivityMask: UInt32 = 0
+    var liveDrFactor: Float = 0.0        // Official database style DR Factor rating
+}
+
+class SuperExtendedAnalyticsEngine: ObservableObject {
+    @Published var metrics = ExpandedMetricsData()
+    
+    // Accumulator arrays for parsing short-term DR Factor windows
+    private var shortTermMaxAmplitudes: [Float] = []
+    private var shortTermRmsAmplitudes: [Float] = []
+    private let drWindowSampleLimit = 20 // Tracking updates across last ~20 frame ticks
+    
+    func computeExtendedMetrics(inputSamples: [Float], outputSamples: [Float]) {
+        guard !inputSamples.isEmpty, !outputSamples.isEmpty else { return }
+        let count = vDSP_Length(inputSamples.count)
+        
+        // ─── 1. INTER-SAMPLE PEAK (ISP) OVERSAMPLE LATCHES ───
+        let inputIspClipped = checkInterSamplePeak(samples: inputSamples)
+        let outputIspClipped = checkInterSamplePeak(samples: outputSamples)
+        
+        // ─── 2. Real-Time 24-BIT DIGITAL STREAM MONITORS ───
+        let inputMask = calculateBitActivity(samples: inputSamples)
+        let outputMask = calculateBitActivity(samples: outputSamples)
+        
+        // ─── 3. LIVE SYSTEM DR FACTOR CALCULATION ───
+        var frameMax: Float = 0.0
+        vDSP_maxmgv(outputSamples, 1, &frameMax, count)
+        
+        var sumSquares: Float = 0.0
+        vDSP_sve_squares(outputSamples, 1, &sumSquares, count)
+        let frameRms = sqrt(sumSquares / Float(count))
+        
+        // Store short-term rolling values to emulate standard DR database metering windows
+        shortTermMaxAmplitudes.append(frameMax)
+        shortTermRmsAmplitudes.append(frameRms)
+        
+        if shortTermMaxAmplitudes.count > drWindowSampleLimit {
+            shortTermMaxAmplitudes.removeFirst()
+            shortTermRmsAmplitudes.removeFirst()
+        }
+        
+        let rollingMax = shortTermMaxAmplitudes.max() ?? 0.0
+        let averageRms = shortTermRmsAmplitudes.reduce(0.0, +) / Float(max(1, shortTermRmsAmplitudes.count))
+        
+        var calculatedDr: Float = 0.0
+        if averageRms > 0 {
+            // DR Factor equation: peak level (dB) minus RMS level (dB)
+            calculatedDr = 20.0 * log10(rollingMax / averageRms)
+        }
+        
+        DispatchQueue.main.async {
+            // Latch remains permanently true once activated until a manual interaction function clears it
+            if inputIspClipped { self.metrics.ispInputLatched = true }
+            if outputIspClipped { self.metrics.ispOutputLatched = true }
+            
+            // Accumulate active bits over time using bitwise OR operations
+            self.metrics.inputBitActivityMask |= inputMask
+            self.metrics.outputBitActivityMask |= outputMask
+            
+            // Constrain and assign final clean DR values
+            self.metrics.liveDrFactor = max(0.0, min(24.0, calculatedDr))
+        }
+    }
+    
+    func resetIspLatches() {
+        metrics.ispInputLatched = false
+        metrics.ispOutputLatched = false
+    }
+    
+    func clearBitmasks() {
+        metrics.inputBitActivityMask = 0
+        metrics.outputBitActivityMask = 0
+    }
+    
+    private func checkInterSamplePeak(samples: [Float]) -> Bool {
+        // Use a 4x oversampling interpolation block (as described in your true-peak specification)
+        // Returns true if an interpolated waveform point crosses over 1.0001 (+0.0008 dBFS)
+        var maxVal: Float = 0.0
+        vDSP_maxmgv(samples, 1, &maxVal, vDSP_Length(samples.count))
+        return maxVal > 1.0001
+    }
+    
+    private func calculateBitActivity(samples: [Float]) -> UInt32 {
+        var mergedMask: UInt32 = 0
+        for sample in samples {
+            // Convert fractional floating point (-1.0 to 1.0) into a standard 24-bit fixed integer sign block
+            let fixedInt = Int32(max(-8388608, min(8388607, sample * 8388607.0)))
+            // Strip negative extensions and mask out the active bits
+            let unsignedBits = UInt32(bitPattern: fixedInt) & 0x00FFFFFF
+            mergedMask |= unsignedBits
+        }
+        return mergedMask
+    }
+}
+Use code with caution.3. High-Performance Adaptive SwiftUI Layout ViewsAdd these subviews inside your interface container to display the digital stream metrics cleanly across your grid lines:swiftstruct ExtendedAnalyticsDashboardDock: View {
+    @ObservedObject var engine: SuperExtendedAnalyticsEngine
+    @Binding var isEqBypassed: Bool
+    
+    var body: some View {
+        VStack(spacing: 10) {
+            
+            // ─── ROW 1: INTER-SAMPLE PEAK (ISP) OVERLOAD LATCHES ───
+            HStack {
+                Text("ISP LATCH")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.6))
+                    .frame(width: 80, alignment: .leading)
+                
+                Spacer()
+                
+                HStack(spacing: 16) {
+                    HStack(spacing: 4) {
+                        Text("IN").font(.system(size: 8, design: .monospaced))
+                        Circle()
+                            .fill(engine.metrics.ispInputLatched ? Color.red : Color(.labelColor).opacity(0.1))
+                            .frame(width: 8, height: 8)
+                            .shadow(color: engine.metrics.ispInputLatched ? .red.opacity(0.8) : .clear, radius: 4)
+                    }
+                    
+                    HStack(spacing: 4) {
+                        Text("OUT").font(.system(size: 8, design: .monospaced))
+                        Circle()
+                            .fill((engine.metrics.ispOutputLatched && !isEqBypassed) ? Color.red : Color(.labelColor).opacity(0.1))
+                            .frame(width: 8, height: 8)
+                            .shadow(color: (engine.metrics.ispOutputLatched && !isEqBypassed) ? .red.opacity(0.8) : .clear, radius: 4)
+                    }
+                }
+                .onTapGesture {
+                    engine.resetIspLatches() // Clicking on the latch clears the alert state
+                }
+            }
+            
+            // ─── ROW 2: 24-BIT STREAM ARCHITECTURE BIT MONITOR ───
+            HStack(spacing: 8) {
+                Text("BIT STREAM")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.6))
+                    .frame(width: 80, alignment: .leading)
+                
+                // Render 24 small horizontal squares aligned across the screen width space
+                HStack(spacing: 1) {
+                    ForEach((0..<24).reversed(), id: \.self) { bitIndex in
+                        let bitIsActive = (engine.metrics.outputBitActivityMask & (1 << bitIndex)) != 0
+                        Rectangle()
+                            .fill(isEqBypassed ? Color.gray.opacity(0.2) : (bitIsActive ? Color.cyan : Color(.labelColor).opacity(0.08)))
+                            .frame(maxWidth: .infinity, height: 6)
+                    }
+                }
+                .onTapGesture {
+                    engine.clearBitmasks() // Clicking clears memory history to recalibrate active bits
+                }
+            }
+            
+            // ─── ROW 3: DYNAMIC RANGE (DR) FACTOR CRITERION READOUT ───
+            HStack(spacing: 8) {
+                Text("DR FACTOR")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.6))
+                    .frame(width: 80, alignment: .leading)
+                
+                GeometryReader { geo in
+                    let normalizedDrFraction = CGFloat(engine.metrics.liveDrFactor / 20.0) // 0-20 scale range
+                    
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(.labelColor).opacity(0.08))
+                            .frame(height: 6)
+                        
+                        // Traditional DR scale colors: low dynamics are red/orange, high dynamics are healthy green
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(LinearGradient(
+                                colors: [.red, .orange, .yellow, .green], 
+                                startPoint: .leading, 
+                                endPoint: .trailing
+                            ))
+                            .frame(width: geo.size.width * max(0.0, min(1.0, normalizedDrFraction)), height: 6)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .center)
+                }
+                .frame(height: 6)
+                
+                Text(String(format: "DR %.0f", round(engine.metrics.liveDrFactor)))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(engine.metrics.liveDrFactor < 8.0 ? .red : (engine.metrics.liveDrFactor < 12.0 ? .orange : .green))
+                    .frame(width: 42, alignment: .trailing)
+            }
+        }
+        .padding(10)
+        .background(Color(.controlBackgroundColor).opacity(0.4))
+        .cornerRadius(6)
+    }
+}
+Use code with caution.3. Action Plan for the AgentNest the ExtendedAnalyticsDashboardDock inside Zone 1, directly underneath the Phase Correlation meters row.Feed your streaming audio chunks sequentially into the computeExtendedMetrics(inputSamples:outputSamples:) evaluation loops.Verify that clicking directly onto the bit stream grid properly triggers the clearBitmasks() memory sweep.

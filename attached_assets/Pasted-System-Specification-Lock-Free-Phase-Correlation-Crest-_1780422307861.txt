@@ -1,0 +1,248 @@
+System Specification: Lock-Free Phase Correlation, Crest Factor, and True-Peak Analytics Engine1. Architectural Layout RealignmentWe are adding a secondary monitoring dock beneath the main horizontal progress tracks in Zone 1. This cluster contains:Phase Correlation Meter: A horizontal center-zero track (\(-1.0\) to \(+1.0\)) measuring phase relationships.Crest Factor Meter: A horizontal row calculating the dynamic headroom density (\(0\text{ dB}\) to \(24\text{ dB}\)).True-Peak Oversample Alert: A responsive hardware indicator light that illuminates if an interpolated reconstructed waveform crosses inter-sample clipping thresholds (\(> 0\text{ dBFS}\)).2. Advanced Multi-Metric DSP Core Engineswiftimport Foundation
+import Accelerate
+
+struct AnalyticsMetricsData {
+    var phaseCorrelation: Float = 1.0 // +1 = Mono, 0 = Wide Stereo, -1 = Out of phase
+    var crestFactorDb: Float = 0.0     // Peak to RMS difference in dB
+    var inputTruePeakClipped: Bool = false
+    var outputTruePeakClipped: Bool = false
+}
+
+class AdvancedAudioAnalyticsEngine: ObservableObject {
+    @Published var metrics = AnalyticsMetricsData()
+    
+    // Hold count threshold for true-peak indicator lamps (1.5 seconds at 60 FPS)
+    private let alertHoldFrames = 90
+    private var inputTruePeakTimer = 0
+    private var outputTruePeakTimer = 0
+    
+    // vDSP 4x Oversampling Interpolation assets for True-Peak processing
+    private var upsampleFilters: [Float]
+    private let interpolationFactor = 4
+    
+    init() {
+        // Simple lanczos or sinc low-pass coefficients for inter-sample interpolation simulation
+        self.upsampleFilters = [Float](repeating: 0.25, count: 16)
+    }
+    
+    /// Analyzes raw audio frame arrays on the 60 FPS update tick thread
+    func computeAdvancedMetrics(inputSamples: [Float], outputSamples: [Float], sampleRate: Float) {
+        guard inputSamples.count >= 512, outputSamples.count >= 512 else { return }
+        let count = vDSP_Length(inputSamples.count)
+        
+        var currentPhase: Float = 1.0
+        var currentCrest: Float = 0.0
+        
+        // ─── 1. PHASE CORRELATION CALCULATION ───
+        // Formula: DotProduct(L, R) / (Norm(L) * Norm(R))
+        // De-interleave channel samples for calculation if tracking output pipeline directly
+        var left = [Float](repeating: 0.0, count: inputSamples.count)
+        var right = [Float](repeating: 0.0, count: inputSamples.count)
+        
+        // Mock separation step - map to actual L/R buffers in production
+        vDSP_vadd(inputSamples, 1, inputSamples, 1, &left, 1, count) 
+        
+        var dotProduct: Float = 0.0
+        vDSP_dotpr(left, 1, right, 1, &dotProduct, count)
+        
+        var leftSqSum: Float = 0.0
+        var rightSqSum: Float = 0.0
+        vDSP_sve_squares(left, 1, &leftSqSum, count)
+        vDSP_sve_squares(right, 1, &rightSqSum, count)
+        
+        let denominator = sqrt(leftSqSum * rightSqSum)
+        if denominator > 0 {
+            currentPhase = dotProduct / denominator
+        }
+        
+        // ─── 2. CREST FACTOR METRIC CALCULATION ───
+        // Formula: 20 * log10(Peak_Amplitude / RMS_Amplitude)
+        var maxAmplitude: Float = 0.0
+        vDSP_maxmgv(outputSamples, 1, &maxAmplitude, count)
+        
+        var sumSquares: Float = 0.0
+        vDSP_sve_squares(outputSamples, 1, &sumSquares, count)
+        let rmsAmplitude = sqrt(sumSquares / Float(count))
+        
+        if rmsAmplitude > 0 {
+            currentCrest = 20.0 * log10(maxAmplitude / rmsAmplitude)
+        }
+        
+        // ─── 3. TRUE-PEAK ESTIMATION (4x OVERSAMPLING INTERPOLATION) ───
+        let inputTrueClip = evaluateTruePeakClipping(samples: inputSamples)
+        let outputTrueClip = evaluateTruePeakClipping(samples: outputSamples)
+        
+        DispatchQueue.main.async {
+            self.metrics.phaseCorrelation = currentPhase
+            self.metrics.crestFactorDb = max(0.0, min(24.0, currentCrest))
+            
+            // Manage Input True Peak alert timers
+            if inputTrueClip {
+                self.metrics.inputTruePeakClipped = true
+                self.inputTruePeakTimer = self.alertHoldFrames
+            } else if self.metrics.inputTruePeakClipped {
+                self.inputTruePeakTimer -= 1
+                if self.inputTruePeakTimer <= 0 { self.metrics.inputTruePeakClipped = false }
+            }
+            
+            // Manage Output True Peak alert timers
+            if outputTrueClip {
+                self.metrics.outputTruePeakClipped = true
+                self.outputTruePeakTimer = self.alertHoldFrames
+            } else if self.metrics.outputTruePeakClipped {
+                self.outputTruePeakTimer -= 1
+                if self.outputTruePeakTimer <= 0 { self.metrics.outputTruePeakClipped = false }
+            }
+        }
+    }
+    
+    private func evaluateTruePeakClipping(samples: [Float]) -> Bool {
+        let size = samples.count
+        let upsampledSize = size * interpolationFactor
+        var upsampledResult = [Float](repeating: 0.0, count: upsampledSize)
+        
+        // Zero-stuff and interpolate the time-domain waveform to approximate inter-sample peaks
+        var resultLength = vDSP_Length(upsampledSize)
+        var filterLength = vDSP_Length(upsampleFilters.count)
+        
+        // Simulate inter-sample reconstruction using basic linear/sinc vector expansion
+        var inputSignal = samples
+        var outputSignal = [Float](repeating: 0.0, count: upsampledSize)
+        
+        for i in 0..<size {
+            outputSignal[i * 4] = inputSignal[i] // Zero stuffing step
+        }
+        
+        // Convolve to smooth the points into true peak curves
+        vDSP_conv(outputSignal, 1, upsampleFilters, 1, &upsampledResult, 1, resultLength, filterLength)
+        
+        var maxPeak: Float = 0.0
+        vDSP_maxmgv(upsampledResult, 1, &maxPeak, resultLength)
+        
+        return maxPeak >= 1.0 // Returns true if reconstructed oversamples cross reference 0 dBFS
+    }
+    
+    func resetTruePeakAlarms() {
+        metrics.inputTruePeakClipped = false; inputTruePeakTimer = 0
+        metrics.outputTruePeakClipped = false; outputTruePeakTimer = 0
+    }
+}
+Use code with caution.3. High-Performance Adaptive SwiftUI Layout ViewsAdd these row components inside your interface file layout loop to construct the custom measurement indicators:swiftstruct AdvancedMetricsRowDock: View {
+    @ObservedObject var analytics: AdvancedAudioAnalyticsEngine
+    @Binding var isEqBypassed: Bool
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            
+            // ─── ROW A: HORIZONTAL PHASE CORRELATION METER ───
+            HStack(spacing: 8) {
+                Text("PHASE CORR")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.6))
+                    .frame(width: 80, alignment: .leading)
+                
+                GeometryReader { geo in
+                    let width = geo.size.width
+                    let centerPoint = width / 2
+                    let markerPosition = centerPoint + (CGFloat(analytics.metrics.phaseCorrelation) * centerPoint)
+                    
+                    ZStack(alignment: .leading) {
+                        // Background strip track tray
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(.labelColor).opacity(0.08))
+                            .frame(height: 6)
+                        
+                        // Center Zero Notch Line tick marker
+                        Rectangle()
+                            .fill(Color(.labelColor).opacity(0.2))
+                            .frame(width: 1.5, height: 10)
+                            .position(x: centerPoint, y: 3)
+                        
+                        // Active sliding core cursor tracking node
+                        Circle()
+                            .fill(analytics.metrics.phaseCorrelation < 0.0 ? Color.red : Color.blue)
+                            .frame(width: 8, height: 8)
+                            .position(x: max(4, min(width - 4, markerPosition)), y: 3)
+                    }
+                }
+                .frame(height: 10)
+                
+                // Readout indicators markers text display layout
+                HStack(spacing: 12) {
+                    Text("-1").font(.system(size: 8, design: .monospaced))
+                    Text("0").font(.system(size: 8, design: .monospaced))
+                    Text("+1").font(.system(size: 8, design: .monospaced))
+                }
+                .foregroundColor(Color(.labelColor).opacity(0.4))
+            }
+            
+            // ─── ROW B: HORIZONTAL CREST FACTOR DENSITY METER ───
+            HStack(spacing: 8) {
+                Text("CREST FACT")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.6))
+                    .frame(width: 80, alignment: .leading)
+                
+                GeometryReader { geo in
+                    let normalizedCrestFraction = CGFloat(analytics.metrics.crestFactorDb / 24.0)
+                    
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(.labelColor).opacity(0.08))
+                            .frame(height: 6)
+                        
+                        // Dynamic bar displaying the raw numeric headroom spread space
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(LinearGradient(colors: [.orange, .yellow], startPoint: .leading, endPoint: .trailing))
+                            .frame(width: geo.size.width * max(0.0, min(1.0, normalizedCrestFraction)), height: 6)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .center)
+                }
+                .frame(height: 6)
+                
+                Text(String(format: "%.1f dB", analytics.metrics.crestFactorDb))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.5))
+                    .frame(width: 42, alignment: .trailing)
+            }
+            
+            // ─── ROW C: HARDWARE TRUE-PEAK OVER-SAMPLE ALERTS INDICATORS ───
+            HStack {
+                Text("TRUE-PEAK ALERTS")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(Color(.labelColor).opacity(0.6))
+                    .frame(width: 100, alignment: .leading)
+                
+                Spacer()
+                
+                HStack(spacing: 16) {
+                    // Input alarm light node
+                    HStack(spacing: 4) {
+                        Text("IN").font(.system(size: 8, design: .monospaced))
+                        Circle()
+                            .fill(analytics.metrics.inputTruePeakClipped ? Color.red : Color(.labelColor).opacity(0.1))
+                            .frame(width: 8, height: 8)
+                            .shadow(color: analytics.metrics.inputTruePeakClipped ? .red.opacity(0.8) : .clear, radius: 3)
+                    }
+                    
+                    // Output alarm light node
+                    HStack(spacing: 4) {
+                        Text("OUT").font(.system(size: 8, design: .monospaced))
+                        Circle()
+                            .fill((analytics.metrics.outputTruePeakClipped && !isEqBypassed) ? Color.red : Color(.labelColor).opacity(0.1))
+                            .frame(width: 8, height: 8)
+                            .shadow(color: (analytics.metrics.outputTruePeakClipped && !isEqBypassed) ? .red.opacity(0.8) : .clear, radius: 3)
+                    }
+                }
+                .onTapGesture {
+                    analytics.resetTruePeakAlarms() // Interactive gesture tap clears warning codes
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(10)
+        .background(Color(.controlBackgroundColor).opacity(0.4))
+        .cornerRadius(6)
+    }
+}
+Use code with caution.4. Action Plan for the AgentNest the AdvancedMetricsRowDock view directly inside Zone 1, positioned immediately underneath your primary master volume tracks layout.Execute the computeAdvancedMetrics(inputSamples:outputSamples:sampleRate:) background calculations concurrently inside your active 60 FPS ticks pipeline step thread.Map user click-taps over the alert lights cluster to clear warning codes by running the resetTruePeakAlarms() closure function instantly.

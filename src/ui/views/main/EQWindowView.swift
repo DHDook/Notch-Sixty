@@ -32,15 +32,16 @@ struct EQWindowView: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 0) {
             // Level meters + control panel
             HStack(alignment: .top, spacing: 0) {
                 LevelMetersView(meterStore: store.meterStore)
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(1)
                     .offset(x: -8)
-                    .opacity(metersEnabledUI ? 1.0 : 0.0)
-                    .animation(.easeInOut(duration: 0.2), value: metersEnabledUI)
+                    .opacity(metersEnabledUI ? 1.0 : 0.35)
+                    .saturation(metersEnabledUI ? 1.0 : 0.0)
+                    .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
 
                 Spacer(minLength: 64)
 
@@ -57,8 +58,9 @@ struct EQWindowView: View {
                 Spacer()
 
                 // Manual-mode controls (device pickers + routing toggle)
-                VStack(alignment: .trailing, spacing: 8) {
-                    if routingViewModel.manualModeEnabled {
+                // Only reserve horizontal space when manual mode is active.
+                if routingViewModel.manualModeEnabled {
+                    VStack(alignment: .trailing, spacing: 8) {
                         DevicePickerView()
 
                         ToggleWithHelp(
@@ -81,8 +83,8 @@ struct EQWindowView: View {
                             return false
                         }())
                     }
+                    .frame(minWidth: 376)
                 }
-                .frame(minWidth: 376)
             }
 
             // Dual 31-band real-time spectrum analyser

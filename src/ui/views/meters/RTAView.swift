@@ -96,7 +96,7 @@ struct RTADashboardView: View {
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color(white: 0.18))
+                        .fill(Color(.controlBackgroundColor))
 
                     BackgroundGridLines(minDb: minDb, maxDb: 0)
                         .opacity(isBypassed ? 0.12 : 0.45)

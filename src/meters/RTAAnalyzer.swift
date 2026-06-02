@@ -274,10 +274,10 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
                 vDSP_zvmags(&split, 1, &mags, 1, vDSP_Length(half))
 
                 // Correct normalisation for Hann-windowed one-sided real FFT.
-                // 0 dBFS full-scale sine → 0 dB output.
-                // Derivation: peak squared magnitude ≈ (N/4)² = N²/16 for Hann
-                // coherent gain 0.5; flag=1 → 10·log10(mags / scale).
-                var scale: Float = Float(fftSize * fftSize) / 16.0
+                // vDSP_vdbcon flag=1 computes: result = 10 * log10(mags * scale)
+                // For 0 dBFS full-scale sine: peak squared magnitude = (fftSize/4)²
+                // We want result = 0 dB, so scale = 1/(fftSize/4)² = 16/fftSize²
+                var scale: Float = 16.0 / Float(fftSize * fftSize)
                 vDSP_vdbcon(&mags, 1, &scale, &resultDb, 1, vDSP_Length(half), 1)
 
                 // Clamp to display range.
@@ -301,18 +301,17 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
             let lo = fc * pow(2.0, -1.0 / 6.0)
             let hi = fc * pow(2.0,  1.0 / 6.0)
 
-            var sum: Float = 0
-            var cnt: Float = 0
+            // Use MAX within the 1/3-octave band.
+            // This gives correct amplitude for pure tones (one dominant bin)
+            // and a representative level for broadband signals.
             for i in 0..<half {
                 let freq = Float(i) * binWidth
-                if freq >= lo && freq <= hi {
-                    sum += dbMagnitudes[i]
-                    cnt += 1
+                if freq >= lo && freq <= hi && dbMagnitudes[i] > out[k] {
+                    out[k] = dbMagnitudes[i]
                 }
             }
-            if cnt > 0 {
-                out[k] = sum / cnt
-            } else {
+            // Fallback: if no bin falls in range, use nearest bin
+            if out[k] == minDb {
                 let idx = max(0, min(Int(round(fc / binWidth)), half - 1))
                 out[k] = dbMagnitudes[idx]
             }

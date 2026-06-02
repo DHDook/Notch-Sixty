@@ -905,6 +905,7 @@ final class RenderPipeline {
         // 0. Provide frames for processing (handles both direct capture and ring buffer modes)
         let framesRead = context.provideFrames(frameCount: frameCount)
         context.writeRTAInput(frameCount: Int(framesRead))
+        context.writeGoniometer(frameCount: Int(framesRead))
 
         // If we got no samples, zero-fill output
         if framesRead == 0 {
@@ -973,5 +974,12 @@ final class RenderPipeline {
     func setRTABuffers(input: LockFreeAudioRingBuffer?, output: LockFreeAudioRingBuffer?) {
         callbackContext?.rtaInputBuffer  = input
         callbackContext?.rtaOutputBuffer = output
+    }
+
+    // MARK: - Goniometer
+
+    /// Connects the goniometer engine to the audio render thread stereo tap point.
+    func setGoniometerEngine(_ engine: GoniometerBufferEngine?) {
+        callbackContext?.goniometerEngine = engine
     }
 }

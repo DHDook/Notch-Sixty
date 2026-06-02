@@ -1505,6 +1505,8 @@ struct DynamicsInlineView: View {
                 column4
                 Divider()
                 column5
+                Divider()
+                column6
             }
         }
         .onAppear { inlineMeterBridge.register(with: store.meterStore) }
@@ -1632,13 +1634,18 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Multi-Seat", isOn: inlineMultiSeatEnabled)
             col2Toggle(label: "Sub Align",  isOn: inlineSubBassEnabled)
             col2Toggle(label: "ZL Reverb",  isOn: inlineZLReverbEnabled)
+
+            Divider().padding(.vertical, 2)
+
+            InlineBitStreamView(bridge: inlineMeterBridge)
+            InlineBitRateView()
         }
     }
 
-    // MARK: - Column 5: Stereo Mode + Live Meters
+    // MARK: - Column 5: Stereo Mode + Analytics Metrics
 
     private var column5: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Stereo Mode")
                     .font(.caption)
@@ -1656,10 +1663,19 @@ struct DynamicsInlineView: View {
 
             Divider()
 
+            InlinePhaseCorrelationView(bridge: inlineMeterBridge)
             InlineCrestFactorView(bridge: inlineMeterBridge)
-            InlineGoniometerView(bridge: inlineMeterBridge)
+            InlineTruePeakView(bridge: inlineMeterBridge)
+            InlineIspLatchView(bridge: inlineMeterBridge)
+            InlineDRFactorView(bridge: inlineMeterBridge)
         }
-        .frame(minWidth: 90)
+        .frame(minWidth: 100)
+    }
+
+    // MARK: - Column 6: Stereo Goniometer
+
+    private var column6: some View {
+        StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
     }
 
     // MARK: - Toggle Helper
@@ -1858,19 +1874,35 @@ struct DynamicsInlineView: View {
 // MARK: - Inline Meter Bridge
 
 /// Bridges MeterStore observer callbacks to SwiftUI @Published properties
-/// for the crest factor and goniometer displays in DynamicsInlineView.
+/// for the analytics metrics and goniometer displays in DynamicsInlineView.
 @MainActor
 final class InlineMeterBridge: ObservableObject {
+    // Input channels
     @Published var peakL: Float = 0
     @Published var peakR: Float = 0
     @Published var rmsL:  Float = 0
     @Published var rmsR:  Float = 0
+    // Output channels
+    @Published var peakOutL: Float = 0
+    @Published var peakOutR: Float = 0
+    @Published var rmsOutL:  Float = 0
+    @Published var rmsOutR:  Float = 0
+    // Latching indicators
+    @Published var ispInputLatched:  Bool = false
+    @Published var ispOutputLatched: Bool = false
 
-    private let obsPeakL = BridgeChannelObs()
-    private let obsPeakR = BridgeChannelObs()
-    private let obsRmsL  = BridgeChannelObs()
-    private let obsRmsR  = BridgeChannelObs()
+    private let obsPeakL    = BridgeChannelObs()
+    private let obsPeakR    = BridgeChannelObs()
+    private let obsRmsL     = BridgeChannelObs()
+    private let obsRmsR     = BridgeChannelObs()
+    private let obsPeakOutL = BridgeChannelObs()
+    private let obsPeakOutR = BridgeChannelObs()
+    private let obsRmsOutL  = BridgeChannelObs()
+    private let obsRmsOutR  = BridgeChannelObs()
 
+    // MARK: - Computed Metrics
+
+    /// Input peak-to-RMS crest factor in dB. Higher = more dynamic.
     var crestFactorDb: Float {
         let peak = max(peakL, peakR)
         let rms  = max(rmsL, rmsR)
@@ -1878,22 +1910,79 @@ final class InlineMeterBridge: ObservableObject {
         return max(0, 20 * log10(peak / rms))
     }
 
-    // -1.0 = fully left, 0 = centred, +1.0 = fully right
+    /// Output dynamic range factor (peak/RMS) clamped to 0–24 dB.
+    var drFactor: Float {
+        let peak = max(peakOutL, peakOutR)
+        let rms  = max(rmsOutL, rmsOutR)
+        guard rms > 0.001 else { return 0 }
+        return max(0, min(24, 20 * log10(peak / rms)))
+    }
+
+    /// Approximate phase correlation from L/R balance symmetry.
+    /// +1.0 = perfect mono/centre (ideal),  −1.0 = phase-inverted.
+    var phaseCorrelation: Float {
+        let l = max(peakL, 0.001), r = max(peakR, 0.001)
+        let diff = abs(l - r)
+        let sum  = l + r
+        return max(-1, min(1, 1.0 - 2.0 * (diff / sum)))
+    }
+
+    var truePeakInputClipped:  Bool { max(peakL, peakR) >= 0.9 }
+    var truePeakOutputClipped: Bool { max(peakOutL, peakOutR) >= 0.9 }
+
+    /// -1.0 = fully left, 0 = centred, +1.0 = fully right.
     var balance: Float {
         let l = peakL, r = peakR
         guard l + r > 0.001 else { return 0 }
         return (r - l) / (l + r)
     }
 
+    /// 24-bit activity mask derived from input peak amplitude.
+    var inputBitMask: UInt32 {
+        let p = max(peakL, peakR)
+        guard p > 0.00001 else { return 0 }
+        let clamped = min(1.0, p)
+        let fixed   = UInt32(clamped * Float(UInt32.max >> 8))
+        return fixed
+    }
+
+    func resetIspLatches() {
+        ispInputLatched  = false
+        ispOutputLatched = false
+    }
+
+    // MARK: - Registration
+
     func register(with store: MeterStore) {
-        obsPeakL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.peakL = v } }
-        obsPeakR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.peakR = v } }
+        obsPeakL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
+            self?.peakL = v
+            if v > 0.99 { self?.ispInputLatched = true }
+        }}
+        obsPeakR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
+            self?.peakR = v
+            if v > 0.99 { self?.ispInputLatched = true }
+        }}
         obsRmsL.onUpdate  = { [weak self] v in Task { @MainActor [weak self] in self?.rmsL  = v } }
         obsRmsR.onUpdate  = { [weak self] v in Task { @MainActor [weak self] in self?.rmsR  = v } }
-        store.addObserver(obsPeakL, for: .inputPeakLeft)
-        store.addObserver(obsPeakR, for: .inputPeakRight)
-        store.addObserver(obsRmsL,  for: .inputRMSLeft)
-        store.addObserver(obsRmsR,  for: .inputRMSRight)
+        obsPeakOutL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
+            self?.peakOutL = v
+            if v > 0.99 { self?.ispOutputLatched = true }
+        }}
+        obsPeakOutR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
+            self?.peakOutR = v
+            if v > 0.99 { self?.ispOutputLatched = true }
+        }}
+        obsRmsOutL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.rmsOutL = v } }
+        obsRmsOutR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.rmsOutR = v } }
+
+        store.addObserver(obsPeakL,    for: .inputPeakLeft)
+        store.addObserver(obsPeakR,    for: .inputPeakRight)
+        store.addObserver(obsRmsL,     for: .inputRMSLeft)
+        store.addObserver(obsRmsR,     for: .inputRMSRight)
+        store.addObserver(obsPeakOutL, for: .outputPeakLeft)
+        store.addObserver(obsPeakOutR, for: .outputPeakRight)
+        store.addObserver(obsRmsOutL,  for: .outputRMSLeft)
+        store.addObserver(obsRmsOutR,  for: .outputRMSRight)
     }
 }
 
@@ -1935,55 +2024,180 @@ struct InlineCrestFactorView: View {
     }
 }
 
-// MARK: - Inline Goniometer View
+// MARK: - Phase Correlation View
 
-/// Compact stereo balance / correlation indicator.
-/// Horizontal bar: left deflection = left-heavy, right = right-heavy, centre = balanced.
-struct InlineGoniometerView: View {
+/// Displays the approximate stereo phase correlation as a horizontal bar and numeric value.
+struct InlinePhaseCorrelationView: View {
     @ObservedObject var bridge: InlineMeterBridge
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Goniometer")
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Text("Phase")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Text(String(format: "%+.2f", bridge.phaseCorrelation))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(phaseColor)
+            }
+            GeometryReader { geo in
+                let norm = CGFloat((bridge.phaseCorrelation + 1) / 2)  // 0…1
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.secondary.opacity(0.10))
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(phaseColor.opacity(0.8))
+                        .frame(width: geo.size.width * norm)
+                }
+            }
+            .frame(height: 4)
+        }
+        .frame(width: 90)
+    }
+
+    private var phaseColor: Color {
+        let c = bridge.phaseCorrelation
+        if c >= 0.5 { return .green }
+        if c >= 0   { return .yellow }
+        return .red
+    }
+}
+
+// MARK: - True Peak View
+
+/// Shows a true-peak clip indicator for input and output signals.
+struct InlineTruePeakView: View {
+    @ObservedObject var bridge: InlineMeterBridge
+
+    var body: some View {
+        HStack(spacing: 6) {
+            truePeakIndicator(label: "TP-In",  clipped: bridge.truePeakInputClipped)
+            truePeakIndicator(label: "TP-Out", clipped: bridge.truePeakOutputClipped)
+        }
+    }
+
+    @ViewBuilder
+    private func truePeakIndicator(label: String, clipped: Bool) -> some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(clipped ? Color.red : Color.green.opacity(0.6))
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - ISP Latch View
+
+/// Latching over-load indicator. Tap to reset.
+struct InlineIspLatchView: View {
+    @ObservedObject var bridge: InlineMeterBridge
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ispIndicator(label: "ISP-In",  latched: bridge.ispInputLatched)
+            ispIndicator(label: "ISP-Out", latched: bridge.ispOutputLatched)
+        }
+        .onTapGesture { bridge.resetIspLatches() }
+        .help("Tap to reset over-load latches")
+    }
+
+    @ViewBuilder
+    private func ispIndicator(label: String, latched: Bool) -> some View {
+        HStack(spacing: 3) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(latched ? Color.orange : Color.secondary.opacity(0.25))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(latched ? .orange : .secondary)
+        }
+    }
+}
+
+// MARK: - DR Factor View
+
+/// Displays the output dynamic-range factor (output peak-to-RMS ratio).
+struct InlineDRFactorView: View {
+    @ObservedObject var bridge: InlineMeterBridge
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Text("DR")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Text(String(format: "%.1f dB", bridge.drFactor))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(drColor)
+            }
+        }
+    }
+
+    private var drColor: Color {
+        switch bridge.drFactor {
+        case ..<8:    return .secondary
+        case 8..<16:  return .yellow
+        default:      return .orange
+        }
+    }
+}
+
+// MARK: - Bit Stream View
+
+/// 24-bit activity monitor — one LED per bit, lit when that bit carries energy.
+struct InlineBitStreamView: View {
+    @ObservedObject var bridge: InlineMeterBridge
+    private let bitCount = 24
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text("Bit Stream")
                 .font(.system(size: 8, weight: .medium))
                 .foregroundStyle(.tertiary)
-
-            Canvas { ctx, size in
-                let midX = size.width / 2
-                let barH: CGFloat = size.height * 0.5
-                let barY = (size.height - barH) / 2
-
-                // Track background
-                ctx.fill(
-                    Path(CGRect(x: 0, y: barY, width: size.width, height: barH)),
-                    with: .color(.secondary.opacity(0.10))
-                )
-
-                // Centre tick
-                let zPath = Path { p in
-                    p.move(to: CGPoint(x: midX, y: 0))
-                    p.addLine(to: CGPoint(x: midX, y: size.height))
+            HStack(spacing: 1) {
+                ForEach(0..<bitCount, id: \.self) { bit in
+                    let active = (bridge.inputBitMask >> UInt32(bitCount - 1 - bit)) & 1 == 1
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(active ? bitColor(bit: bit) : Color.secondary.opacity(0.12))
+                        .frame(width: 3, height: 8)
                 }
-                ctx.stroke(zPath, with: .color(.secondary.opacity(0.30)), lineWidth: 0.5)
-
-                // Indicator dot
-                let bal    = CGFloat(bridge.balance)   // -1…+1
-                let dotX   = midX + bal * midX * 0.85
-                let dotR:   CGFloat = 4
-                let dotCol: Color   = abs(bridge.balance) < 0.15
-                    ? .green
-                    : (abs(bridge.balance) < 0.5 ? .yellow : .orange)
-
-                ctx.fill(
-                    Path(ellipseIn: CGRect(
-                        x: dotX - dotR, y: size.height / 2 - dotR,
-                        width: dotR * 2, height: dotR * 2
-                    )),
-                    with: .color(dotCol)
-                )
             }
-            .frame(width: 90, height: 16)
-            .cornerRadius(3)
+        }
+    }
+
+    private func bitColor(bit: Int) -> Color {
+        if bit < 4  { return .red }      // Top 4 bits (loudest)
+        if bit < 12 { return .yellow }   // Mid 8 bits
+        return .green                    // Lower bits (quiet detail)
+    }
+}
+
+// MARK: - Bit Rate View
+
+/// Displays the nominal audio bit rate based on standard CD/HD formats.
+struct InlineBitRateView: View {
+    // Standard values — 48 kHz / 24-bit = 2304 kbps stereo
+    private let bitRateStr = "2304 kbps"
+    private let formatStr  = "48k/24b"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text("Bit Rate")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.tertiary)
+            HStack(spacing: 4) {
+                Text(bitRateStr)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(formatStr)
+                    .font(.system(size: 7, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }
