@@ -259,29 +259,34 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         var real = [Float](repeating: 0, count: half)
         var imag = [Float](repeating: 0, count: half)
         var resultDb = [Float](repeating: 0, count: half)
-        
-        // Perform FFT processing
         var mags = [Float](repeating: 0, count: half)
         var amps = [Float](repeating: 0, count: half)
         
-        // Get pointers and perform FFT operations
+        // Perform FFT using interleaved buffer approach to avoid compiler issues
+        windowed.withUnsafeBytes { windowBytes in
+            real.withUnsafeMutableBytes { realBytes in
+                imag.withUnsafeMutableBytes { imagBytes in
+                    let complexPtr = windowBytes.bindMemory(to: DSPComplex.self)
+                    let realPtr = realBytes.bindMemory(to: Float.self).baseAddress!
+                    let imagPtr = imagBytes.bindMemory(to: Float.self).baseAddress!
+                    var split = DSPSplitComplex(realp: realPtr, imagp: imagPtr)
+                    vDSP_ctoz(complexPtr.baseAddress!, 2, &split, 1, vDSP_Length(half))
+                }
+            }
+        }
+        
+        // Perform FFT
         real.withUnsafeMutableBytes { realBytes in
             imag.withUnsafeMutableBytes { imagBytes in
                 let realPtr = realBytes.bindMemory(to: Float.self).baseAddress!
                 let imagPtr = imagBytes.bindMemory(to: Float.self).baseAddress!
                 var split = DSPSplitComplex(realp: realPtr, imagp: imagPtr)
-                
-                windowed.withUnsafeBytes { windowBytes in
-                    let complexPtr = windowBytes.bindMemory(to: DSPComplex.self)
-                    vDSP_ctoz(complexPtr.baseAddress!, 2, &split, 1, vDSP_Length(half))
-                }
-                
                 vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
                 vDSP_zvmags(&split, 1, &mags, 1, vDSP_Length(half))
             }
         }
         
-        // Power → amplitude, Hann coherent-gain + one-sided norm (4/N), 20·log₁₀ → dBFS.
+        // Post-processing: magnitude to dB
         vvsqrtf(&amps, &mags, &[Int32(half)])
         
         var norm: Float = 4.0 / Float(fftSize)
