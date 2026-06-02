@@ -281,9 +281,11 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
                 vDSP_vdbcon(&mags, 1, &scale, &resultDb, 1, vDSP_Length(half), 1)
 
                 // Clamp to display range.
+                // Copy resultDb to a temporary to avoid exclusivity violation
+                var clipped = resultDb
                 var floorVal = self.minDb
                 var ceilVal  = self.maxDb
-                vDSP_vclip(&resultDb, 1, &floorVal, &ceilVal, &resultDb, 1, vDSP_Length(half))
+                vDSP_vclip(&clipped, 1, &floorVal, &ceilVal, &resultDb, 1, vDSP_Length(half))
             }
         }
         return resultDb
