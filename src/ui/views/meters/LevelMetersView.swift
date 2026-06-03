@@ -85,11 +85,6 @@ struct ChannelBalanceSlider: View {
                         .fill(Color.secondary.opacity(0.3))
                         .frame(height: 4)
 
-                    // Fill track (blue when off-center, gray when centered)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(fillColor)
-                        .frame(width: fillWidth(in: geometry.size), height: 4)
-
                     // Thumb
                     Circle()
                         .fill(Color.accentColor)
@@ -111,6 +106,7 @@ struct ChannelBalanceSlider: View {
                 )
             }
             .frame(height: 20)
+            .frame(width: 120)
 
             HStack(spacing: 4) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -157,18 +153,6 @@ struct ChannelBalanceSlider: View {
             pct = 100.0 * (1.0 + b)
         }
         return "\(Int(pct))%"
-    }
-
-    private var fillColor: Color {
-        if abs(balance) < 0.05 {
-            return Color.secondary.opacity(0.3)
-        }
-        return Color.accentColor.opacity(0.6)
-    }
-
-    private func fillWidth(in size: CGSize) -> CGFloat {
-        let normalizedValue = (Double(balance) + 1.0) / 2.0
-        return size.width * CGFloat(normalizedValue)
     }
 
     private func thumbOffset(in size: CGSize) -> CGFloat {

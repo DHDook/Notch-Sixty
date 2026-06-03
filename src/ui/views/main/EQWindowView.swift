@@ -64,8 +64,7 @@ struct EQWindowView: View {
                 DynamicsInlineView()
                     .padding(.leading, 24)
                     .padding(.bottom, 0)
-
-                Spacer(minLength: 0)
+                    .padding(.trailing, 8)
 
                 // Manual-mode controls (device pickers + routing toggle)
                 // Only reserve horizontal space when manual mode is active.
@@ -243,20 +242,15 @@ struct EQWindowView: View {
                 .padding(.vertical, 4)
                 .padding(.horizontal, 2)
 
-                VStack(spacing: 2) {
-                    Button {
-                        openSettings()
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14))
-                            .frame(height: 20)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Settings (⌘,)")
-                    Text("Settings")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
+                Button {
+                    openSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14))
+                        .frame(height: 20)
                 }
+                .buttonStyle(.plain)
+                .help("Settings (⌘,)")
                 .frame(minWidth: 44, alignment: .center)
                 .padding(.vertical, 4)
                 .padding(.horizontal, 2)
