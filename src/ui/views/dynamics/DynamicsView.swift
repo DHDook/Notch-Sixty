@@ -1637,7 +1637,10 @@ struct DynamicsInlineView: View {
     // MARK: - Column 6: Stereo Goniometer
 
     private var column6: some View {
-        StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
+        VStack(spacing: 0) {
+            StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
+            Spacer(minLength: 0)
+        }
     }
 
 
@@ -2010,7 +2013,7 @@ struct InlineCrestFactorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Crest Factor")
-                .font(.system(size: 8, weight: .medium))
+                .font(.caption)
                 .foregroundStyle(.tertiary)
             HStack(spacing: 3) {
                 Image(systemName: "waveform")
@@ -2045,7 +2048,7 @@ struct InlinePhaseCorrelationView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 3) {
                     Text("Phase")
-                        .font(.system(size: 8, weight: .medium))
+                        .font(.caption)
                         .foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "%+.2f", correlation))
@@ -2110,7 +2113,7 @@ struct InlineTruePeakView: View {
                 .fill(clipped ? Color.red : Color.green.opacity(0.6))
                 .frame(width: 12, height: 12)
             Text(label)
-                .font(.system(size: 8, weight: .medium))
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
@@ -2138,7 +2141,7 @@ struct InlineIspLatchView: View {
                 .fill(latched ? Color.orange : Color.green.opacity(0.6))
                 .frame(width: 12, height: 12)
             Text(label)
-                .font(.system(size: 8, weight: .medium))
+                .font(.caption)
                 .foregroundStyle(latched ? .orange : .secondary)
         }
     }
@@ -2154,7 +2157,7 @@ struct InlineDRFactorView: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 3) {
                 Text("DR")
-                    .font(.system(size: 8, weight: .medium))
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
                 Spacer()
                 Text(String(format: "%.1f dB", bridge.drFactor))
@@ -2183,7 +2186,7 @@ struct InlineBitStreamView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text("Bit Stream")
-                .font(.system(size: 8, weight: .medium))
+                .font(.caption)
                 .foregroundStyle(.tertiary)
             HStack(spacing: 1) {
                 ForEach(0..<bitCount, id: \.self) { bit in

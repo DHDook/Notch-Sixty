@@ -45,7 +45,7 @@ struct EQWindowView: View {
 
                 Spacer(minLength: 64)
 
-                VStack(spacing: 4) {
+                VStack(spacing: 8) {
                     GainControlsView(
                         inputGain: store.inputGain,
                         outputGain: store.outputGain,
@@ -99,7 +99,7 @@ struct EQWindowView: View {
 
             // Dual 31-band real-time spectrum analyser
             RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
-                .padding(.top, 0)
+                .padding(.top, -4)
 
             Divider()
 
@@ -222,11 +222,11 @@ struct EQWindowView: View {
                     .controlSize(.small)
                     .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
                     Text("System EQ")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minWidth: 58, alignment: .center)
-                .padding(.vertical, 4)
+                .frame(minWidth: 52, alignment: .center)
+                .padding(.vertical, 6)
                 .padding(.horizontal, 2)
 
                 VStack(spacing: 2) {
@@ -236,11 +236,11 @@ struct EQWindowView: View {
                         .controlSize(.small)
                         .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
                     Text("Meters")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minWidth: 58, alignment: .center)
-                .padding(.vertical, 4)
+                .frame(minWidth: 52, alignment: .center)
+                .padding(.vertical, 6)
                 .padding(.horizontal, 2)
 
                 VStack(spacing: 2) {
@@ -248,17 +248,17 @@ struct EQWindowView: View {
                         openSettings()
                     } label: {
                         Image(systemName: "gearshape")
-                            .font(.system(size: 16))
+                            .font(.system(size: 15))
                             .frame(height: 22)
                     }
                     .buttonStyle(.plain)
                     .help("Settings (⌘,)")
                     Text("Settings")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minWidth: 58, alignment: .center)
-                .padding(.vertical, 4)
+                .frame(minWidth: 52, alignment: .center)
+                .padding(.vertical, 6)
                 .padding(.horizontal, 2)
             }
         }

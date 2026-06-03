@@ -82,6 +82,11 @@ final class VolumeManager: ObservableObject {
     /// During settling, volume forwarding is suppressed to avoid macOS-initiated spikes.
     private var isSettling: Bool = false
 
+    /// Flag to track when we're processing a volume change.
+    /// During volume changes, we suppress mute sync to prevent macOS auto-mute at zero volume
+    /// from causing rapid mute cycling.
+    private var isProcessingVolumeChange = false
+
     // MARK: - Callbacks
 
     /// Called when boost gain changes (for render pipeline to apply).
@@ -223,6 +228,16 @@ final class VolumeManager: ObservableObject {
             return
         }
 
+        // Set flag to suppress mute sync during volume change
+        // This prevents macOS auto-mute at zero volume from causing rapid cycling
+        isProcessingVolumeChange = true
+        defer {
+            // Clear flag after a short delay to allow mute sync to resume
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.isProcessingVolumeChange = false
+            }
+        }
+
         // Capture values before dispatching to background queue
         guard let outputID = outputDeviceID else { return }
 
@@ -264,20 +279,26 @@ final class VolumeManager: ObservableObject {
             logger.debug("handleDriverMuteChanged: skipping - already syncing")
             return
         }
-        
+
+        // Suppress mute sync during volume changes to prevent macOS auto-mute cycling
+        guard !isProcessingVolumeChange else {
+            logger.debug("handleDriverMuteChanged: skipping - processing volume change")
+            return
+        }
+
         logger.info("handleDriverMuteChanged: newMuted=\(newMuted)")
-        
+
         isSyncingMute = true
         defer { isSyncingMute = false }
-        
+
         // Update internal state
         muted = newMuted
-        
+
         // Sync mute to output device
         if let outputID = outputDeviceID {
             volumeService.setDeviceMute(deviceID: outputID, muted: newMuted)
         }
-        
+
         // Update boost (no boost when muted)
         let boost = boostGain()
         onBoostGainChanged?(boost)
@@ -291,20 +312,26 @@ final class VolumeManager: ObservableObject {
             logger.debug("handleOutputMuteChanged: skipping - already syncing")
             return
         }
-        
+
+        // Suppress mute sync during volume changes to prevent macOS auto-mute cycling
+        guard !isProcessingVolumeChange else {
+            logger.debug("handleOutputMuteChanged: skipping - processing volume change")
+            return
+        }
+
         logger.info("handleOutputMuteChanged: newMuted=\(newMuted)")
-        
+
         isSyncingMute = true
         defer { isSyncingMute = false }
-        
+
         // Update internal state
         muted = newMuted
-        
+
         // Sync mute to driver
         if let driverID = driverDeviceID {
             volumeService.setDeviceMute(deviceID: driverID, muted: newMuted)
         }
-        
+
         // Update boost
         let boost = boostGain()
         onBoostGainChanged?(boost)

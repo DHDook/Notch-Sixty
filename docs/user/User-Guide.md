@@ -212,7 +212,23 @@ A 0.5 Hz single-pole high-pass filter that removes any DC component in the signa
 
 #### Stage 3 — Stereo Widener
 
-A three-band M/S processor that independently controls stereo width in three regions:
+A three-band M/S processor that independently controls stereo width in three regions using mid/side decomposition:
+
+**Mathematical Model:**
+The processor first converts L/R stereo to mid/side representation:
+```
+M = (L + R) / √2  (mid channel - mono information)
+S = (L - R) / √2  (side channel - stereo difference)
+```
+Each frequency band applies a gain multiplier to the side channel:
+```
+S' = S × width_factor
+```
+Then reconstructs to L/R:
+```
+L' = (M + S') / √2
+R' = (M - S') / √2
+```
 
 - **Low band (< 200 Hz)** — Default 0.0 (mono). Keeping bass mono is acoustically correct because low frequencies are omnidirectional and a mono bass is essential for proper subwoofer integration.
 - **Mid band (200 Hz – 4 kHz)** — Default 1.4. Moderate expansion adds perceived width.
@@ -221,6 +237,21 @@ A three-band M/S processor that independently controls stereo width in three reg
 #### Stage 4 — LUFS Loudness Match
 
 Continuously measures the 3-second K-weighted integrated loudness of the signal and applies a smooth gain correction to hit a target in LUFS. Prevents excessively loud content from overdriving subsequent stages.
+
+**Mathematical Model:**
+Uses EBU R.128 loudness measurement with K-weighting:
+```
+L_k = -0.691 + 10 × log₁₀(Σ |X_k(f)|² × G_k(f)²)
+```
+Where X_k(f) is the FFT bin magnitude and G_k(f) is the K-weighting filter response. The integrated loudness over time T is:
+```
+L_integrated = -0.691 + 10 × log₁₀((1/T) ∫₀ᵀ 10^(L_k(t)/10) dt)
+```
+The gain correction is computed as:
+```
+gain_correction = 10^((target_LUFS - measured_LUFS) / 20)
+```
+Applied with a first-order IIR smoothing filter for transparent transitions.
 
 | Parameter | Range | Recommendation |
 |-----------|-------|---------------|
@@ -231,9 +262,36 @@ Continuously measures the 3-second K-weighted integrated loudness of the signal 
 
 Applies a gentle Fletcher-Munson (equal-loudness) compensation curve: a small bass boost and a small treble lift that counteract the ear's reduced sensitivity at lower listening levels. Enable when listening at quiet levels to restore perceived fullness.
 
+**Mathematical Model:**
+Based on ISO 226:2003 equal-loudness contours. The compensation applies frequency-dependent gain:
+```
+G(f) = 10^(ΔL(f)/20)
+```
+Where ΔL(f) is the loudness level difference at frequency f between reference and target listening levels. Typical implementation uses a dual-shelving filter:
+```
+H_bass(f) = (√(1 + (f/f_b)²)) / (√(1 + (f/f_b·Q)²))  (low-frequency boost)
+H_treble(f) = (√(1 + (f·Q/f_t)²)) / (√(1 + (f/f_t)²))  (high-frequency boost)
+```
+Combined response: H_total(f) = H_bass(f) × H_treble(f)
+
 #### Stage 6 — De-Esser
 
 A frequency-selective compressor targeting sibilant frequencies (typically 4–10 kHz). Apply to recordings or streams where "S", "T", and "CH" sounds are harsh or fatiguing.
+
+**Mathematical Model:**
+Uses a side-chain filter to isolate the sibilance band:
+```
+H_sc(f) = 1 / (1 + (f/f_c/Q)² - (f/f_c)²)  (band-pass filter)
+```
+The compression gain is computed from the filtered side-chain signal:
+```
+gain_dB = -ratio × max(0, level_sc - threshold)
+```
+In Dynamic EQ mode, only the sibilance band is attenuated using a dynamic biquad filter:
+```
+H_dynamic(f, t) = 1 - g(t) × |H_sc(f)|
+```
+Where g(t) is the time-varying gain reduction. This preserves the full spectral content outside the sibilance band for greater transparency.
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
@@ -245,6 +303,23 @@ A frequency-selective compressor targeting sibilant frequencies (typically 4–1
 
 Splits the signal into three frequency bands using Linkwitz-Riley crossovers, then compresses each band independently. Prevents loud bass from triggering unnecessary compression in the midrange.
 
+**Mathematical Model:**
+Linkwitz-Riley 4th-order crossovers (LR4) provide perfect magnitude summation:
+```
+H_Low(f) = 1 / (1 + (f/f_c)⁴)  (low-pass)
+H_High(f) = (f/f_c)⁴ / (1 + (f/f_c)⁴)  (high-pass)
+H_Mid(f) = H_High_Low × H_Low_High  (band-pass from two cascaded crossovers)
+```
+Each band applies independent compression:
+```
+gain_band = 10^(-ratio × max(0, level_band - threshold) / 20)
+```
+With soft-knee smoothing:
+```
+effective_threshold = threshold - (knee/2) + sqrt((knee/2)² + (level - threshold + knee/2)²)
+```
+Attack and release use first-order IIR filters for smooth gain transitions.
+
 | Parameter | Range | Description |
 |-----------|-------|-------------|
 | Low/Mid crossover | 40 – 250 Hz | Frequency separating the Low and Mid bands |
@@ -255,6 +330,27 @@ Splits the signal into three frequency bands using Linkwitz-Riley crossovers, th
 #### Stage 8 — Wideband Compressor
 
 Feed-forward compressor acting on the full frequency range. Use to tame overall dynamic range after multiband compression.
+
+**Mathematical Model:**
+Standard feed-forward compression with peak detection:
+```
+level_dB = 20 × log₁₀(|x(n)|)
+gain_dB = -ratio × max(0, level_dB - effective_threshold)
+```
+Soft-knee implementation:
+```
+effective_threshold = threshold - (knee/2) + sqrt((knee/2)² + (level - threshold + knee/2)²)
+```
+Attack smoothing (first-order IIR):
+```
+level_smoothed(n) = α_attack × level(n) + (1 - α_attack) × level_smoothed(n-1)
+α_attack = exp(-1/(fs × attack_time))
+```
+Release smoothing:
+```
+α_release = exp(-1/(fs × release_time))
+```
+Makeup gain compensates for average gain reduction to maintain perceived loudness.
 
 | Parameter | Range | Recommendation |
 |-----------|-------|---------------|
@@ -269,15 +365,62 @@ Feed-forward compressor acting on the full frequency range. Use to tame overall 
 
 A downward dynamic-range expander that attenuates signals below a threshold, widening perceived dynamics. Useful for reducing low-level noise between tracks.
 
+**Mathematical Model:**
+Inverse of compression - attenuates signals below threshold:
+```
+gain_dB = -ratio × max(0, threshold - level_dB)
+```
+The range parameter limits maximum attenuation:
+```
+gain_dB = max(gain_dB, -range)
+```
+Soft-knee can be applied similarly to compression for smoother transitions. The expander increases the dynamic range difference between loud and quiet passages, effectively "gating" low-level noise while preserving transients above threshold.
+
 #### Stage 10 — Soft Clipper
 
 An analogue-style wave-shaper that gently rounds transient peaks before the limiter. Rather than hard-clipping, it progressively saturates the signal above the threshold using a smooth sigmoid curve. This reduces the amount of work the limiter must do on sharp transients.
 
-**Asymmetry Trim:** Many recordings have asymmetric waveforms (higher positive peaks than negative, or vice versa). The trim applies a fractional gain offset to one half of the waveform, balancing it symmetrically across zero. This frees 1–2 dB of headroom in the downstream amplifier without introducing distortion. Recommended value: **+0.5 to +1.5 dB** for acoustic and vintage rock material.
+**Mathematical Model:**
+Uses a cubic soft-clipping function:
+```
+y = x - (x³ / 3)  for |x| ≤ 1
+y = sign(x) × (2/3)  for |x| > 1
+```
+With adjustable knee parameter controlling the transition region:
+```
+y = x × (1 - (|x|/threshold)^(2×knee) / (2×knee+1))
+```
+The asymmetry trim applies different gains to positive and negative halves:
+```
+y_positive = y × (1 + asymmetry/20)  for y > 0
+y_negative = y × (1 - asymmetry/20)  for y < 0
+```
+This balances asymmetric waveforms, freeing 1–2 dB of headroom. Recommended value: **+0.5 to +1.5 dB** for acoustic and vintage rock material.
 
 #### Brickwall Limiter
 
 The final protection stage. A look-ahead limiter with a configurable ceiling that guarantees the output cannot exceed the set level.
+
+**Mathematical Model:**
+Look-ahead processing delays the signal by the look-ahead time, allowing the limiter to "see" peaks before they arrive:
+```
+y(n) = x(n - lookahead_samples) × gain(n)
+```
+Gain computation based on peak detection over the look-ahead window:
+```
+peak_lookahead = max(|x(n)|, |x(n-1)|, ..., |x(n-lookahead_samples)|)
+gain_dB = ceiling_dB - peak_lookahead_dB
+```
+With True-Peak Guard, 4x oversampling is applied:
+```
+x_oversampled = upsample(x, factor=4)
+peak_true = max(|x_oversampled|)
+```
+This catches inter-sample peaks that would exceed 0 dBFS after DAC reconstruction. The release envelope uses exponential smoothing:
+```
+gain(n) = min(gain(n), gain(n-1) + release_rate)
+```
+Attack is instantaneous for true brickwall behavior.
 
 | Parameter | Range | Recommendation |
 |-----------|-------|---------------|
@@ -297,6 +440,13 @@ The final protection stage. A look-ahead limiter with a configurable ceiling tha
 
 A high-frequency tilt filter applied after the soft clipper. Gently attenuates frequencies above ~3.5 kHz by a configurable amount (typically −1.5 dB). Use when your tweeter sounds fatiguing after long listening sessions — certain tweeter designs and room acoustics can make the top end appear forward.
 
+**Mathematical Model:**
+First-order shelving filter with adjustable tilt:
+```
+H(f) = (1 + (f/f_c) × tilt) / (1 + (f/f_c))
+```
+Where tilt controls the high-frequency attenuation (negative values for cut). The filter provides a gentle 6 dB/octave roll-off above the corner frequency, preserving harmonic content while reducing harshness. The tilt parameter allows continuous adjustment from flat to -6 dB at high frequencies.
+
 ### Channel Balance
 
 The L/R Channel Balance slider sits below the Gain In / Gain Out controls on the main window. It defaults to centre (100% output on both channels) and scales linearly:
@@ -314,6 +464,18 @@ L/R balance correction. −1.0 = full left, 0.0 = centre, +1.0 = full right. App
 ### L/R Time Delay
 
 Delays the right channel relative to the left (positive value = right delayed). Applied as a post-chain offset. Used for correcting timing mismatches between two speakers at different distances from the listening position.
+
+**Mathematical Model:**
+Fractional-sample delay using all-pass interpolation:
+```
+H(z) = (a + z⁻¹) / (1 + a × z⁻¹)
+a = (1 - delay) / (1 + delay)
+```
+For delays longer than one sample, a combination of integer delay (buffer shift) and fractional all-pass correction is used. The delay in samples is:
+```
+delay_samples = delay_ms × sample_rate / 1000
+```
+This ensures phase-coherent time alignment between channels at the crossover frequency, critical for proper stereo imaging.
 
 ### Pause Gate
 
@@ -333,11 +495,36 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** Applies relative gain multipliers to the L and R channels to correct for listening-position asymmetry. Unlike the simple L/R Balance trim, Symmetry Balance is specifically designed for use with a room correction workflow.
 
+**Mathematical Model:**
+Constant-power panning law maintains overall loudness while shifting the stereo image:
+```
+gain_L = cos(θ × π/4)
+gain_R = sin(θ × π/4)
+```
+Where θ ranges from -1 (full left) to +1 (full right). This ensures that:
+```
+L'² + R'² = L² + R²  (constant power)
+```
+Unlike linear balance which would reduce total level when off-center, constant-power balance preserves perceived loudness while shifting the image.
+
 **How to calibrate:** Play a mono test tone. Adjust the Balance slider until the tone images perfectly in the centre of the soundstage between your speakers. Lock the setting and enable the toggle.
 
 ### Panning Gain Matrix
 
 **What it does:** A bilinear gain matrix that blends a configurable proportion of the left channel into the right, and vice versa. Simulates the natural crossfeed that occurs when listening to stereo speakers (where each ear hears both speakers).
+
+**Mathematical Model:**
+2×2 mixing matrix with crossfeed coefficient α:
+```
+[L']   [1-α   α ] [L]
+[R'] = [ α   1-α] [R]
+```
+Where α ∈ [0, 1] controls the amount of crossfeed. For α = 0.3 (default):
+```
+L' = 0.7 × L + 0.3 × R
+R' = 0.3 × L + 0.7 × R
+```
+This simulates the acoustic crosstalk that occurs with speakers at approximately 60° separation, where each ear receives sound from both speakers with an inter-aural time difference (ITD) and level difference (ILD).
 
 **Use case:** Particularly useful over headphones to simulate speaker listening. The 0.3 default crossfeed amount is calibrated for a standard 60° stereo loudspeaker placement angle.
 
@@ -345,11 +532,37 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** Spectral subtraction noise floor reduction. The engine builds a running estimate of the noise power spectrum (measured during quiet passages) and subtracts it from each analysis frame. The threshold sets the estimated noise floor ceiling.
 
+**Mathematical Model:**
+Spectral subtraction with over-subtraction factor and spectral floor:
+```
+|Y(f)|² = |X(f)|² - α × |N(f)|²
+```
+Where X(f) is the input spectrum, N(f) is the noise estimate, and α is the over-subtraction factor (typically 1-2). To prevent musical artifacts:
+```
+|Y(f)|² = max(|Y(f)|², β × |X(f)|²)
+```
+Where β is the spectral floor parameter (typically 0.01-0.1). The noise estimate is updated during quiet passages using exponential smoothing:
+```
+|N(f)|²(n) = γ × |X(f)|²(n) + (1-γ) × |N(f)|²(n-1)
+```
+Only updated when the signal level is below the threshold parameter.
+
 **Use case:** Removes low-level HVAC, room noise, and transformer hum from recordings made in live or untreated spaces.
 
 ### Speaker Impulse Response Alignment
 
 **What it does:** Applies a fractional-sample delay compensation (sub-millisecond resolution) to time-align the acoustic centres of multi-driver speaker systems.
+
+**Mathematical Model:**
+Fractional delay using Lagrange interpolation or all-pass filters:
+```
+H(z) = z⁻ᴰ  where D = delay_samples + fractional_part
+```
+For fractional delays, a Thiran all-pass filter provides near-ideal phase response:
+```
+H(z) = Σₖ₌₀ᴺ aₖ × z⁻ᵏ / Σₖ₌₀ᴺ aₙ₋ₖ × z⁻ᵏ
+```
+Where coefficients aₖ are computed from the desired delay D and filter order N. This maintains phase linearity across the frequency band, ensuring that all frequencies arrive at the listening position simultaneously.
 
 **Use case:** Most speakers with separate woofers and tweeters have physically different acoustic centres. Adjusting the fine delay aligns their impulse responses at the listening position, improving phase coherence in the crossover region.
 
@@ -359,17 +572,55 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** An iterative binaural inversion filter that actively reduces inter-channel acoustic leakage — the contamination of the left channel by the right speaker's output and vice versa.
 
+**Mathematical Model:**
+Models the acoustic crosstalk path as a 2×2 matrix H:
+```
+[L_ear]   [H_LL  H_LR] [L_speaker]
+[R_ear] = [H_RL  H_RR] [R_speaker]
+```
+Where H_LL and H_RR are direct paths, H_LR and H_RL are crosstalk paths. The cancellation matrix C is computed as:
+```
+C = H⁻¹  (matrix inversion)
+```
+In practice, a regularized inversion is used to avoid instability:
+```
+C = (HᵀH + λI)⁻¹Hᵀ
+```
+Where λ is a regularization parameter. The recursive implementation updates the cancellation coefficients iteratively to adapt to room acoustics.
+
 **Use case:** Widens the perceived stereo image at the listening position beyond what the speakers' physical placement provides. Effective at typical room listening distances of 2–3 metres.
 
 ### Room Boundary Early Reflection Cancellation
 
 **What it does:** An FIR comb filter tuned to the arrival time of first-order room boundary reflections (floor, ceiling, front wall). The Room Size control sets the estimated first-reflection arrival time in milliseconds.
 
+**Mathematical Model:**
+Comb filter with notches at reflection frequencies:
+```
+H(z) = 1 - α × z⁻ᴰ
+```
+Where D is the delay in samples corresponding to the reflection arrival time, and α controls the cancellation depth. The notch frequencies are at:
+```
+f_notch = n × fs / D  for n = 0, 1, 2, ...
+```
+The filter creates destructive interference at frequencies where the reflection arrives 180° out of phase with the direct sound. Multiple reflections can be addressed by cascading comb filters with different delays.
+
 **Estimating Room Size:** Measure the distance from the listener's head to the nearest reflective surface (typically the floor). Divide by the speed of sound (343 m/s) to get the one-way travel time. Multiply by 2 for the round trip. Example: 1.2 m floor distance → 2.4 m round trip → ~7 ms. Set Room Size to 7 ms.
 
 ### HPF Phase Linearisation
 
 **What it does:** An all-pass FIR compensation network that linearises the group delay introduced by high-pass filter networks. When you apply a high-pass filter (e.g., 80 Hz to hand off bass to a subwoofer), the HPF introduces phase shift in the transition band. This correction removes that phase shift, maintaining time-domain accuracy.
+
+**Mathematical Model:**
+Standard IIR high-pass filters introduce frequency-dependent group delay:
+```
+τ_g(f) = -dφ(f)/df
+```
+Where φ(f) is the phase response. The phase linearisation filter is designed as an all-pass FIR with inverse phase response:
+```
+H_linearise(f) = e^(-j × φ_hpf(f))
+```
+Implemented using a linear-phase FIR filter with coefficients computed via frequency sampling or least-squares design. The filter length determines the accuracy of phase correction across the transition band.
 
 **Recommended setting:** Match the Frequency parameter to your high-pass filter's −3 dB frequency (e.g., 80 Hz).
 
@@ -383,11 +634,41 @@ The LTI (Linear Time-Invariant) processing suite contains ten advanced signal pr
 
 **What it does:** An all-pass filter network that phase-aligns the sub-bass region (below the crossover frequency) with the main speaker bandwidth. Corrects the acoustic phase relationship between the subwoofer and the main speakers at the crossover point.
 
+**Mathematical Model:**
+Second-order all-pass filter for phase adjustment:
+```
+H(s) = (s² - (ω₀/Q) × s + ω₀²) / (s² + (ω₀/Q) × s + ω₀²)
+```
+Where ω₀ = 2π × f_crossover and Q controls the transition steepness. The phase response is:
+```
+φ(ω) = -2 × arctan((ω/ω₀) / (Q × (1 - (ω/ω₀)²)))
+```
+By adjusting Q, the phase at the crossover frequency can be rotated to achieve constructive summation with the main speakers. The goal is +3 dB at the crossover point (coherent sum of two equal-level signals).
+
 **Setup:** Set Crossover to match the subwoofer's crossover frequency (typically 80 Hz). With this engaged, the summation of sub and main speakers at the crossover should be +3 dB coherent (constructive) rather than cancelling. Verify with an RTA measurement of the combined response.
 
 ### Zero-Latency Convolution Reverb Engine
 
 **What it does:** Applies a room impulse response (RIR) to the audio signal using uniformly-partitioned FFT convolution. Unlike standard convolution reverb, this implementation adds zero samples of processing latency to the signal path.
+
+**Mathematical Model:**
+Convolution in time domain:
+```
+y(n) = Σₖ₌₀ᴸ⁻¹ h(k) × x(n-k)
+```
+Implemented using partitioned convolution for efficiency:
+```
+Y(m) = H(m) × X(m)  (frequency domain multiplication)
+```
+Where H(m) is the FFT of the impulse response partition and X(m) is the FFT of the input block. Uniform partitioning ensures:
+```
+latency = partition_size - 1
+```
+By setting partition_size = 1, zero latency is achieved. The dry/wet mix is:
+```
+output = (1 - mix) × dry + mix × wet
+```
+The wet signal is the convolved output, scaled by the mix parameter.
 
 **Use case:** Simulates a specific acoustic space by convolving the dry signal with a measurement of that space. Can be used to make music recorded in a dead studio sound as if it were played in a concert hall, or to apply the measured acoustics of a reference listening room.
 

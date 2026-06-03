@@ -78,26 +78,121 @@ struct ChannelBalanceSlider: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            HStack {
-                Text("L")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Slider(
-                    value: Binding(
+            HStack(spacing: 4) {
+                VStack(spacing: 0) {
+                    Text("L")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(balancePercentage(for: balance, channel: .left))
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 30, alignment: .leading)
+                }
+                CustomBalanceSlider(
+                    balance: Binding(
                         get: { Double(balance) },
-                        set: { balance = Float($0) }
+                        set: { newValue in
+                            // Sticky center behavior
+                            let centerThreshold = 0.05
+                            if abs(newValue) < centerThreshold {
+                                balance = 0.0
+                            } else {
+                                balance = Float(newValue)
+                            }
+                        }
                     ),
-                    in: -1.0...1.0
+                    range: -1.0...1.0
                 )
-                .controlSize(.mini)
-                Text("R")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 0) {
+                    Text("R")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(balancePercentage(for: balance, channel: .right))
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 30, alignment: .trailing)
+                }
             }
             Text("Balance")
-                .font(.system(size: 8))
+                .font(.caption)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    private enum Channel {
+        case left, right
+    }
+
+    private func balancePercentage(for value: Float, channel: Channel) -> String {
+        let absValue = abs(value)
+        if absValue < 0.01 {
+            return "0%"
+        }
+        let percentage = Int(absValue * 100)
+        return "\(percentage)%"
+    }
+}
+
+struct CustomBalanceSlider: View {
+    @Binding var balance: Double
+    let range: ClosedRange<Double>
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                // Background track (gray when centered, blue when off-center)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(trackColor)
+                    .frame(height: 4)
+
+                // Fill track
+                GeometryReader { fillGeometry in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(fillColor)
+                        .frame(width: fillWidth(in: fillGeometry.size), height: 4)
+                }
+
+                // Thumb
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 12, height: 12)
+                    .offset(x: thumbOffset(in: geometry.size))
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let newValue = valueAt(position: value.location, in: geometry.size)
+                        balance = newValue
+                    }
+            )
+        }
+        .frame(height: 20)
+    }
+
+    private var trackColor: Color {
+        Color.secondary.opacity(0.3)
+    }
+
+    private var fillColor: Color {
+        if abs(balance) < 0.05 {
+            return Color.secondary.opacity(0.3)
+        }
+        return Color.accentColor.opacity(0.6)
+    }
+
+    private func fillWidth(in size: CGSize) -> CGFloat {
+        let normalizedValue = (balance - range.lowerBound) / (range.upperBound - range.lowerBound)
+        return size.width * CGFloat(normalizedValue)
+    }
+
+    private func thumbOffset(in size: CGSize) -> CGFloat {
+        let normalizedValue = (balance - range.lowerBound) / (range.upperBound - range.lowerBound)
+        return size.width * CGFloat(normalizedValue) - 6
+    }
+
+    private func valueAt(position: CGPoint, in size: CGSize) -> Double {
+        let normalizedPosition = max(0, min(1, position.x / size.width))
+        return range.lowerBound + normalizedPosition * (range.upperBound - range.lowerBound)
     }
 }
 
