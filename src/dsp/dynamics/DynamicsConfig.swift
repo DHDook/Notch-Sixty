@@ -672,6 +672,9 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
     var expander:            ExpanderConfig             = .default
     var softClipper:         SoftClipperConfig          = .default
     var limiter:             BrickwallLimiterConfig      = .default
+    /// L/R channel balance. Range: −1.0 (full left) … 0.0 (centre) … +1.0 (full right).
+    /// At centre both channels output at 100%. Moving left fades right to 0%; moving right fades left to 0%.
+    var channelBalance:      Float                      = 0.0
     /// Advanced / extended processing parameters (sections A–J including LTI suite).
     var advanced:            AdvancedProcessingConfig   = .default
 
@@ -679,7 +682,7 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case stereoWidener, loudnessMatch, deEsser, multibandCompressor
-        case compressor, expander, softClipper, limiter, advanced
+        case compressor, expander, softClipper, limiter, channelBalance, advanced
     }
 
     init(
@@ -691,6 +694,7 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         expander: ExpanderConfig = .default,
         softClipper: SoftClipperConfig = .default,
         limiter: BrickwallLimiterConfig = .default,
+        channelBalance: Float = 0.0,
         advanced: AdvancedProcessingConfig = .default
     ) {
         self.stereoWidener       = stereoWidener
@@ -701,6 +705,7 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         self.expander            = expander
         self.softClipper         = softClipper
         self.limiter             = limiter
+        self.channelBalance      = channelBalance
         self.advanced            = advanced
     }
 
@@ -714,6 +719,7 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         expander            = try c.decodeIfPresent(ExpanderConfig.self,            forKey: .expander)            ?? .default
         softClipper         = try c.decodeIfPresent(SoftClipperConfig.self,         forKey: .softClipper)         ?? .default
         limiter             = try c.decodeIfPresent(BrickwallLimiterConfig.self,    forKey: .limiter)             ?? .default
+        channelBalance      = try c.decodeIfPresent(Float.self,                    forKey: .channelBalance)      ?? 0.0
         advanced            = try c.decodeIfPresent(AdvancedProcessingConfig.self,  forKey: .advanced)            ?? .default
     }
 
@@ -727,6 +733,7 @@ struct DynamicsConfig: Codable, Equatable, Sendable {
         try c.encode(expander,            forKey: .expander)
         try c.encode(softClipper,         forKey: .softClipper)
         try c.encode(limiter,             forKey: .limiter)
+        try c.encode(channelBalance,      forKey: .channelBalance)
         try c.encode(advanced,            forKey: .advanced)
     }
 }

@@ -58,6 +58,13 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
 
     @Published var trailPoints: [GoniometerTrailPoint] = []
 
+    // MARK: Pre-allocated tick buffers (avoids per-frame heap allocation)
+
+    private var tickRawL: [Float]
+    private var tickRawR: [Float]
+    private var tickSide: [Float]
+    private var tickMid:  [Float]
+
     // MARK: Timer
 
     private var cancellable: AnyCancellable?
@@ -67,6 +74,10 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
     init() {
         circularL = [Float](repeating: 0, count: 16_384)
         circularR = [Float](repeating: 0, count: 16_384)
+        tickRawL  = [Float](repeating: 0, count: 512)
+        tickRawR  = [Float](repeating: 0, count: 512)
+        tickSide  = [Float](repeating: 0, count: 512)
+        tickMid   = [Float](repeating: 0, count: 512)
     }
 
     // MARK: - Audio Thread API
@@ -100,24 +111,20 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
         let n   = renderWindowSize
         let wh  = writeHead
 
-        var rawL = [Float](repeating: 0, count: n)
-        var rawR = [Float](repeating: 0, count: n)
         var start = wh - n
         if start < 0 { start += cap }
         for i in 0..<n {
-            let idx  = (start + i) & (cap - 1)
-            rawL[i]  = circularL[idx]
-            rawR[i]  = circularR[idx]
+            let idx     = (start + i) & (cap - 1)
+            tickRawL[i] = circularL[idx]
+            tickRawR[i] = circularR[idx]
         }
 
         // 45° clockwise rotation: X = (L − R) / √2,  Y = (L + R) / √2
-        var side = [Float](repeating: 0, count: n)
-        var mid  = [Float](repeating: 0, count: n)
-        vDSP_vsub(rawR, 1, rawL, 1, &side, 1, vDSP_Length(n))   // L - R
-        vDSP_vadd(rawL, 1, rawR, 1, &mid,  1, vDSP_Length(n))   // L + R
+        vDSP_vsub(tickRawR, 1, tickRawL, 1, &tickSide, 1, vDSP_Length(n))   // L - R
+        vDSP_vadd(tickRawL, 1, tickRawR, 1, &tickMid,  1, vDSP_Length(n))   // L + R
         var inv_sqrt2: Float = 1.0 / sqrt(2.0)
-        vDSP_vsmul(side, 1, &inv_sqrt2, &side, 1, vDSP_Length(n))
-        vDSP_vsmul(mid,  1, &inv_sqrt2, &mid,  1, vDSP_Length(n))
+        vDSP_vsmul(tickSide, 1, &inv_sqrt2, &tickSide, 1, vDSP_Length(n))
+        vDSP_vsmul(tickMid,  1, &inv_sqrt2, &tickMid,  1, vDSP_Length(n))
 
         for i in trailPoints.indices {
             trailPoints[i].age += refreshInterval
@@ -125,7 +132,7 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
         trailPoints.removeAll { $0.age >= trailDecayDuration }
 
         for i in stride(from: 0, to: n, by: 4) {
-            trailPoints.append(GoniometerTrailPoint(x: side[i], y: mid[i], age: 0))
+            trailPoints.append(GoniometerTrailPoint(x: tickSide[i], y: tickMid[i], age: 0))
         }
         let maxTrail = 4_096
         if trailPoints.count > maxTrail {
@@ -185,8 +192,10 @@ struct StereoGoniometerView: View {
                     let bypassAlpha: CGFloat = isBypassed ? 0.25 : 1.0
 
                     for pt in engine.trailPoints {
-                        let px = CGFloat(pt.x) * r + cx
-                        let py = cy - CGFloat(pt.y) * r
+                        let sx = StereoGoniometerView.logScale(pt.x)
+                        let sy = StereoGoniometerView.logScale(pt.y)
+                        let px = CGFloat(sx) * r + cx
+                        let py = cy - CGFloat(sy) * r
                         let dx = px - cx, dy = py - cy
                         guard dx * dx + dy * dy <= r * r else { continue }
 
@@ -217,6 +226,16 @@ struct StereoGoniometerView: View {
         }
         .onAppear  { engine.startRefresh() }
         .onDisappear { engine.stopRefresh() }
+    }
+
+    /// Applies a sign-preserving logarithmic scaling to amplify low-level signals
+    /// on the goniometer display so they are visible at moderate listening volumes.
+    static func logScale(_ value: Float) -> Float {
+        guard abs(value) > 1.0e-6 else { return 0 }
+        let sign: Float = value < 0 ? -1 : 1
+        let mag = abs(value)
+        let scaled = log10(1.0 + mag * 99.0) / 2.0
+        return sign * min(scaled, 1.0)
     }
 
     private func goniometerDotColour(amplitude: Float) -> Color {

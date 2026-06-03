@@ -297,9 +297,19 @@ The final protection stage. A look-ahead limiter with a configurable ceiling tha
 
 A high-frequency tilt filter applied after the soft clipper. Gently attenuates frequencies above ~3.5 kHz by a configurable amount (typically −1.5 dB). Use when your tweeter sounds fatiguing after long listening sessions — certain tweeter designs and room acoustics can make the top end appear forward.
 
+### Channel Balance
+
+The L/R Channel Balance slider sits below the Gain In / Gain Out controls on the main window. It defaults to centre (100% output on both channels) and scales linearly:
+
+- **Full left** — 100% left channel, 0% right channel
+- **Centre** — 100% both channels (default)
+- **Full right** — 0% left channel, 100% right channel
+
+Use this when one speaker is physically louder than the other, or when the source material has an unbalanced stereo image.
+
 ### Stereo Balance (Advanced)
 
-L/R balance correction. −1.0 = full left, 0.0 = centre, +1.0 = full right. Applied after the dynamics chain as a non-destructive gain correction. **Distinct from the Symmetry Balance LTI feature** — this is a simple left/right trim. Use it if one speaker is physically louder than the other.
+L/R balance correction. −1.0 = full left, 0.0 = centre, +1.0 = full right. Applied after the dynamics chain as a constant-power gain correction. **Distinct from the Channel Balance slider** — Stereo Balance uses a constant-power panning law and is part of the Symmetry Balance LTI feature designed for room correction workflows.
 
 ### L/R Time Delay
 
@@ -307,7 +317,11 @@ Delays the right channel relative to the left (positive value = right delayed). 
 
 ### Pause Gate
 
-Smoothly silences the output during extended near-silence periods, preventing low-level amplifier hiss and click artefacts when audio resumes. Useful when listening through a vintage amplifier that produces audible hiss.
+Smoothly silences the output during extended near-silence periods, preventing low-level amplifier hiss and click artefacts when audio resumes. Useful when listening through a vintage amplifier that produces audible hiss. The gate opens when the RMS level exceeds −60 dBFS and closes after 500 ms of continuous sub-threshold signal.
+
+### Sync Buffer to Latency Mode
+
+Synchronises the internal processing buffer to the selected latency mode. When enabled, the buffer size adapts to match the chosen mode (Music, Low Latency, or Broadcast), ensuring that all processing stages complete within the allotted hardware buffer window. **Enable this** if you experience audio dropouts or glitching at low latency settings.
 
 ---
 

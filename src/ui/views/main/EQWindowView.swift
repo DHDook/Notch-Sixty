@@ -45,12 +45,21 @@ struct EQWindowView: View {
 
                 Spacer(minLength: 64)
 
-                GainControlsView(
-                    inputGain: store.inputGain,
-                    outputGain: store.outputGain,
-                    onInputGainChange: { store.updateInputGain($0) },
-                    onOutputGainChange: { store.updateOutputGain($0) }
-                )
+                VStack(spacing: 4) {
+                    GainControlsView(
+                        inputGain: store.inputGain,
+                        outputGain: store.outputGain,
+                        onInputGainChange: { store.updateInputGain($0) },
+                        onOutputGainChange: { store.updateOutputGain($0) }
+                    )
+
+                    ChannelBalanceSlider(
+                        balance: Binding(
+                            get: { store.dynamicsConfig.channelBalance },
+                            set: { store.updateChannelBalance($0) }
+                        )
+                    )
+                }
 
                 DynamicsInlineView()
                     .padding(.leading, 24)
@@ -90,7 +99,7 @@ struct EQWindowView: View {
 
             // Dual 31-band real-time spectrum analyser
             RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
-                .padding(.top, 2)
+                .padding(.top, 0)
 
             Divider()
 
@@ -197,7 +206,9 @@ struct EQWindowView: View {
 
             EQBandGridView()
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 12)
         .frame(minWidth: 1280, minHeight: 700)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -215,6 +226,8 @@ struct EQWindowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(minWidth: 58, alignment: .center)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 2)
 
                 VStack(spacing: 2) {
                     Toggle("", isOn: $metersEnabledUI)
@@ -227,6 +240,8 @@ struct EQWindowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(minWidth: 58, alignment: .center)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 2)
 
                 VStack(spacing: 2) {
                     Button {
@@ -243,6 +258,8 @@ struct EQWindowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(minWidth: 58, alignment: .center)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 2)
             }
         }
         .background(
