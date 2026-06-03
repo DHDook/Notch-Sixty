@@ -1631,7 +1631,7 @@ struct DynamicsInlineView: View {
             InlineBitStreamView(bridge: inlineMeterBridge)
             InlineBitRateView()
         }
-        .frame(minWidth: 100)
+        .frame(minWidth: 110)
     }
 
     // MARK: - Column 6: Stereo Goniometer

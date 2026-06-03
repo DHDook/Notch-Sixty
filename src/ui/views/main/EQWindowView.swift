@@ -99,7 +99,7 @@ struct EQWindowView: View {
 
             // Dual 31-band real-time spectrum analyser
             RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
-                .padding(.top, -4)
+                .padding(.top, -8)
 
             Divider()
 
@@ -225,8 +225,8 @@ struct EQWindowView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minWidth: 52, alignment: .center)
-                .padding(.vertical, 6)
+                .frame(minWidth: 50, alignment: .center)
+                .padding(.vertical, 5)
                 .padding(.horizontal, 2)
 
                 VStack(spacing: 2) {
@@ -239,8 +239,8 @@ struct EQWindowView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minWidth: 52, alignment: .center)
-                .padding(.vertical, 6)
+                .frame(minWidth: 50, alignment: .center)
+                .padding(.vertical, 5)
                 .padding(.horizontal, 2)
 
                 VStack(spacing: 2) {
@@ -257,8 +257,8 @@ struct EQWindowView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
-                .frame(minWidth: 52, alignment: .center)
-                .padding(.vertical, 6)
+                .frame(minWidth: 50, alignment: .center)
+                .padding(.vertical, 5)
                 .padding(.horizontal, 2)
             }
         }

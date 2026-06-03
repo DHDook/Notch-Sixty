@@ -168,10 +168,12 @@ struct StereoGoniometerView: View {
     var isBypassed: Bool = false
 
     var body: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 2) {
             Text("Goniometer")
-                .font(.system(size: 8, weight: .medium))
+                .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
 
             ZStack {
                 // Background
