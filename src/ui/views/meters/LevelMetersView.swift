@@ -73,6 +73,34 @@ struct GainControlsView: View {
     }
 }
 
+struct ChannelBalanceSlider: View {
+    @Binding var balance: Float
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text("L")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Slider(
+                    value: Binding(
+                        get: { Double(balance) },
+                        set: { balance = Float($0) }
+                    ),
+                    in: -1.0...1.0
+                )
+                .controlSize(.mini)
+                Text("R")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text("Balance")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
 struct StereoMeterGroup: View {
     let title: String
     let meterStore: MeterStore

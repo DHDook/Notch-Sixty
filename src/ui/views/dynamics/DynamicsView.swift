@@ -116,10 +116,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Stereo Widener")
-        } footer: {
-            Text("Low band (< 200 Hz) defaults to mono for tight bass. Mid and High expand stereo width.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -158,10 +154,6 @@ struct DynamicsView: View {
                 .opacity(!store.dynamicsConfig.deEsser.isEnabled ? 0.4 : 1.0)
         } header: {
             Text("De-Esser")
-        } footer: {
-            Text("Dynamic EQ Mode converts the de-esser into a localized dynamic cut, preserving high-end air outside the sibilance band.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -250,10 +242,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Multiband Compressor")
-        } footer: {
-            Text("Gentle = LR4 (24 dB/oct). Steep = LR8 (48 dB/oct). Fixed ratio 4:1 with 6 dB soft-knee per band.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -391,10 +379,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Symmetry Balance")
-        } footer: {
-            Text("Applies relative gain multipliers to correct listening-position asymmetry. Adjust balance until a mono source images exactly centre.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -419,10 +403,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Panning Gain Matrix")
-        } footer: {
-            Text("Bilinear gain matrix that blends a proportion of each channel into the opposite channel. Simulates speaker crosstalk over headphones.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -447,10 +427,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Speaker IR Alignment")
-        } footer: {
-            Text("Fractional-sample delay line that time-aligns multi-driver acoustic centres. Corrects for woofer/tweeter offset in complex speaker systems.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -475,10 +451,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Crosstalk Cancellation Matrix")
-        } footer: {
-            Text("Recursive binaural inversion filter that reduces inter-channel acoustic leakage between speakers. Widens perceived stereo image at the listening position.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -501,10 +473,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Multi-Seat Complex Averaging")
-        } footer: {
-            Text("Combines HRTF estimates from multiple listening positions into a single composite room correction. Optimises the response across an entire sofa rather than one chair.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -534,10 +502,6 @@ struct DynamicsView: View {
                 .opacity(!store.dynamicsConfig.loudnessMatch.isEnabled ? 0.4 : 1.0)
         } header: {
             Text("LUFS Loudness Match")
-        } footer: {
-            Text("Continuously measures 3-second K-weighted loudness and applies a smooth gain correction to hit the target. Dialogue Gate raises the measurement floor to −60 dBFS, preventing silence from skewing the loudness estimate.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -591,10 +555,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Clipper")
-        } footer: {
-            Text("Asymmetry Trim compensates for transient waveform asymmetry. Positive values boost the negative half-cycle, negative values attenuate it.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -651,10 +611,6 @@ struct DynamicsView: View {
                 .opacity(!store.dynamicsConfig.limiter.isEnabled ? 0.4 : 1.0)
         } header: {
             Text("Limiter")
-        } footer: {
-            Text("TP Guard adds −1.5 dBFS inter-sample peak headroom inside the limiter to prevent inter-sample overs on downstream converters.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -685,10 +641,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Stereo Matrix")
-        } footer: {
-            Text("Stereo Mode folds the signal before all other stages. L/R Delay is applied after the dynamics chain as a non-destructive time offset. Use Symmetry Balance (LTI section) for gain-based left/right correction.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -716,10 +668,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Spectral Enhancement")
-        } footer: {
-            Text("Loudness Contouring applies a gentle Fletcher-Munson compensation curve. De-Harsh attenuates frequencies above 3.5 kHz after the limiter.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -786,10 +734,6 @@ struct DynamicsView: View {
                 .font(.system(size: 13))
         } header: {
             Text("System Utilities")
-        } footer: {
-            Text("DC Offset Filter removes any DC bias before the dynamics chain. Music mode targets 128-frame I/O. Movie mode targets 512-frame I/O (better AV sync). Delta Solo is controlled via the Compare picker on the main screen.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -812,10 +756,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Linear Denoising Engine")
-        } footer: {
-            Text("Spectral subtraction noise floor reduction. Builds a running estimate of the noise power spectrum and subtracts it from each frame. Threshold sets the noise floor estimate ceiling.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -840,10 +780,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Early Reflection Cancellation")
-        } footer: {
-            Text("FIR comb filter targeting the first-order floor, ceiling, and wall reflection group. Room Size sets the estimated first-reflection arrival time.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -866,10 +802,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("HPF Phase Linearisation")
-        } footer: {
-            Text("All-pass FIR compensation network that linearises the group delay introduced by high-pass filter networks. Frequency sets the target cutoff where phase correction is centred.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -892,10 +824,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Sub-Bass Phase Alignment")
-        } footer: {
-            Text("All-pass filter network that phase-aligns the sub-bass region with the main speaker bandwidth at the chosen crossover frequency. Eliminates destructive interference between subwoofer and main speakers.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -920,10 +848,6 @@ struct DynamicsView: View {
             )
         } header: {
             Text("ZL Convolution Reverb")
-        } footer: {
-            Text("Uniformly-partitioned FFT convolution applying a room impulse response with zero added latency. Dry/Wet controls the blend between the direct signal and the convolved room response.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 
@@ -1557,9 +1481,16 @@ struct DynamicsInlineView: View {
             .popover(isPresented: $showDefinitions, arrowEdge: .bottom) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
+                        // Column 1 — early signal chain
+                        definitionEntry(title: "Hi-Res Coef", body: "Enables high-resolution coefficient decoupling for per-sample filter updates at the cost of higher CPU.")
+                        Divider()
+                        definitionEntry(title: "DC Filter", body: "0.5 Hz single-pole high-pass removing DC bias before the dynamics chain.")
+                        Divider()
                         definitionEntry(title: "Stereo Widener", body: "Three-band M/S processor that independently adjusts stereo width in the Low (< 200 Hz), Mid (200 Hz – 4 kHz), and High (> 4 kHz) regions.")
                         Divider()
                         definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level.")
+                        Divider()
+                        definitionEntry(title: "Loudness Contour", body: "Fletcher-Munson compensation curve adding gentle bass and treble lift for low-level listening.")
                         Divider()
                         definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance by applying frequency-selective gain reduction around a tunable centre frequency.")
                         Divider()
@@ -1567,15 +1498,25 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Compressor", body: "Wideband feed-forward compressor with soft-knee option that automatically balances dynamic range.")
                         Divider()
+                        // Column 2 — later dynamics + spatial
                         definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
                         Divider()
                         definitionEntry(title: "Clipper", body: "Analogue-style wave-shaper that gently rounds transient peaks before the limiter.")
                         Divider()
                         definitionEntry(title: "Limiter", body: "Look-ahead true peak limiter. Guarantees the output cannot exceed the ceiling.")
                         Divider()
+                        definitionEntry(title: "De-Harsh", body: "High-frequency tilt filter attenuating above ~3.5 kHz to reduce tweeter fatigue.")
+                        Divider()
+                        definitionEntry(title: "Pause Gate", body: "Smoothly silences output during extended silence, preventing amplifier hiss.")
+                        Divider()
+                        definitionEntry(title: "Sync Buffer", body: "Synchronises processing buffer to latency mode, preventing dropouts at low latency settings.")
+                        Divider()
                         definitionEntry(title: "Symmetry Balance", body: "Gain-matrix correction for asymmetric listening positions. Aligns L/R loudness at the ear.")
                         Divider()
                         definitionEntry(title: "Panning Gain Matrix", body: "Bilinear crossfeed matrix blending a proportion of each channel into the opposite channel.")
+                        Divider()
+                        // Column 3 — LTI suite
+                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
                         Divider()
                         definitionEntry(title: "IR Alignment", body: "Fractional-sample delay compensation for multi-driver speaker acoustic centres.")
                         Divider()
@@ -1593,7 +1534,7 @@ struct DynamicsInlineView: View {
                     }
                     .padding(14)
                 }
-                .frame(width: 290, height: 520)
+                .frame(width: 290, height: 620)
             }
 
             Button {
@@ -1612,7 +1553,7 @@ struct DynamicsInlineView: View {
         }
     }
 
-    // MARK: - Column 1: Signal chain (early stages, 8 toggles)
+    // MARK: - Column 1: Signal chain (early stages)
 
     private var column1: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1623,35 +1564,37 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Contour",     isOn: inlineLoudnessContourEnabled)
             col2Toggle(label: "De-Esser",    isOn: deEsserEnabledBinding)
             col2Toggle(label: "M-Band",      isOn: mbEnabledBinding)
+            col2Toggle(label: "Comp.",       isOn: compressorEnabledBinding)
         }
     }
 
-    // MARK: - Column 2: Dynamics + spatial (7 toggles)
+    // MARK: - Column 2: Dynamics + spatial
 
     private var column2: some View {
         VStack(alignment: .leading, spacing: 4) {
-            col2Toggle(label: "Comp.",     isOn: compressorEnabledBinding)
-            col2Toggle(label: "Expander",  isOn: expanderEnabledBinding)
-            col2Toggle(label: "Clipper",   isOn: clipperEnabledBinding)
-            col2Toggle(label: "Limiter",   isOn: limiterEnabledBinding)
-            col2Toggle(label: "De-Harsh",  isOn: inlineDeharshEnabled)
-            col2Toggle(label: "Sym. Bal.", isOn: inlineSymmetryBalanceEnabled)
-            col2Toggle(label: "Pan Matrix", isOn: inlinePanningEnabled)
-            col2Toggle(label: "Denoiser",   isOn: inlineDenoisingEnabled)
+            col2Toggle(label: "Expander",    isOn: expanderEnabledBinding)
+            col2Toggle(label: "Clipper",     isOn: clipperEnabledBinding)
+            col2Toggle(label: "Limiter",     isOn: limiterEnabledBinding)
+            col2Toggle(label: "De-Harsh",    isOn: inlineDeharshEnabled)
+            col2Toggle(label: "Pause Gate",  isOn: inlinePauseGateEnabled)
+            col2Toggle(label: "Sync Buffer", isOn: inlineSyncBufferEnabled)
+            col2Toggle(label: "Sym. Bal.",   isOn: inlineSymmetryBalanceEnabled)
+            col2Toggle(label: "Pan Matrix",  isOn: inlinePanningEnabled)
         }
     }
 
-    // MARK: - Column 3: LTI suite (7 toggles)
+    // MARK: - Column 3: LTI suite
 
     private var column3: some View {
         VStack(alignment: .leading, spacing: 4) {
-            col2Toggle(label: "IR Align",   isOn: inlineIRAlignmentEnabled)
-            col2Toggle(label: "Crosstalk",  isOn: inlineCrosstalkEnabled)
-            col2Toggle(label: "Early Refl", isOn: inlineEarlyReflectionEnabled)
-            col2Toggle(label: "HPF Lin.",   isOn: inlineHPFLinearizationEnabled)
-            col2Toggle(label: "Multi-Seat", isOn: inlineMultiSeatEnabled)
-            col2Toggle(label: "Sub Align",  isOn: inlineSubBassEnabled)
-            col2Toggle(label: "ZL Reverb",  isOn: inlineZLReverbEnabled)
+            col2Toggle(label: "Denoiser",    isOn: inlineDenoisingEnabled)
+            col2Toggle(label: "IR Align",    isOn: inlineIRAlignmentEnabled)
+            col2Toggle(label: "Crosstalk",   isOn: inlineCrosstalkEnabled)
+            col2Toggle(label: "Early Refl",  isOn: inlineEarlyReflectionEnabled)
+            col2Toggle(label: "HPF Lin.",    isOn: inlineHPFLinearizationEnabled)
+            col2Toggle(label: "Multi-Seat",  isOn: inlineMultiSeatEnabled)
+            col2Toggle(label: "Sub Align",   isOn: inlineSubBassEnabled)
+            col2Toggle(label: "ZL Reverb",   isOn: inlineZLReverbEnabled)
         }
     }
 
@@ -1831,6 +1774,20 @@ struct DynamicsInlineView: View {
         Binding(
             get: { store.dynamicsConfig.advanced.symmetryBalanceEnabled },
             set: { v in var adv = store.dynamicsConfig.advanced; adv.symmetryBalanceEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlinePauseGateEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.pauseGateEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.pauseGateEnabled = v; store.updateAdvancedProcessing(adv) }
+        )
+    }
+
+    private var inlineSyncBufferEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.hardwareSyncBufferEnabled },
+            set: { v in var adv = store.dynamicsConfig.advanced; adv.hardwareSyncBufferEnabled = v; store.updateAdvancedProcessing(adv) }
         )
     }
 

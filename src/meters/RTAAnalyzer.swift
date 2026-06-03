@@ -79,6 +79,18 @@ final class LockFreeAudioRingBuffer: @unchecked Sendable {
         }
         return chunk
     }
+
+    /// Reads the most recent `dest.count` samples into a pre-allocated buffer.
+    /// Avoids heap allocation on the hot path.
+    func readLatestChunkInto(_ dest: inout [Float]) {
+        let n = min(dest.count, bufferSize)
+        let wi = writeIndex
+        var start = wi - n
+        if start < 0 { start += bufferSize }
+        for i in 0..<n {
+            dest[i] = buffer[(start + i) & (bufferSize - 1)]
+        }
+    }
 }
 
 // MARK: - Analyser
@@ -133,6 +145,10 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     private var frameCount: Int  = 0
     private var lastFpsTick: Date = Date()
 
+    // MARK: Pre-allocated tick buffers (avoids per-frame heap allocation)
+    private var tickInputSamples:  [Float]
+    private var tickOutputSamples: [Float]
+
     // MARK: Timer
     private var updateTimer: AnyCancellable?
 
@@ -146,6 +162,8 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         self.fftSetup = vDSP_create_fftsetup(vDSP_Length(log2(Float(fftSize))),
                                               FFTRadix(kFFTRadix2))!
         self.window = [Float](repeating: 0, count: fftSize)
+        self.tickInputSamples  = [Float](repeating: 0, count: fftSize)
+        self.tickOutputSamples = [Float](repeating: 0, count: fftSize)
         vDSP_hann_window(&self.window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
         startTimer()
     }
@@ -163,11 +181,11 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     }
 
     private func tick() {
-        let inSamples  = inputRingBuffer.readLatestChunk(size: fftSize)
-        let outSamples = outputRingBuffer.readLatestChunk(size: fftSize)
+        inputRingBuffer.readLatestChunkInto(&tickInputSamples)
+        outputRingBuffer.readLatestChunkInto(&tickOutputSamples)
         updateSmearedSpectrums(
-            inputSamples:  inSamples,  inputGainDb:  0,
-            outputSamples: outSamples, outputGainDb: 0,
+            inputSamples:  tickInputSamples,  inputGainDb:  0,
+            outputSamples: tickOutputSamples, outputGainDb: 0,
             sampleRate: assumedSampleRate
         )
         // FPS counter

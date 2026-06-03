@@ -305,6 +305,12 @@ final class EqualiserStore: ObservableObject {
         dynamicsConfig = dyn
     }
 
+    func updateChannelBalance(_ balance: Float) {
+        var dyn = eqConfiguration.dynamicsConfig
+        dyn.channelBalance = max(-1.0, min(1.0, balance))
+        dynamicsConfig = dyn
+    }
+
     /// Updates advanced processing parameters (sections A–J) and propagates to the audio pipeline.
     func updateAdvancedProcessing(_ advanced: AdvancedProcessingConfig) {
         let prevDecoupling = dynamicsConfig.advanced.coefficientDecouplingEnabled

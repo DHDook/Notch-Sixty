@@ -174,6 +174,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _deharshEnabled:         ManagedAtomic<Int32>
     private let _deharshTiltBits:        ManagedAtomic<Int32>  // Float bits, dB
     private let _balanceBits:            ManagedAtomic<Int32>  // Float bits, −1 to +1
+    private let _channelBalanceBits:     ManagedAtomic<Int32>  // Float bits, −1 to +1 (linear L/R)
     private let _tpGuardEnabled:         ManagedAtomic<Int32>
     private let _timeDelayBits:          ManagedAtomic<Int32>  // Float bits, ms
     private let _deltaSoloEnabled:       ManagedAtomic<Int32>
@@ -385,6 +386,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _deharshEnabled         = ManagedAtomic(0)
         _deharshTiltBits        = ManagedAtomic(floatBits(-1.5))
         _balanceBits            = ManagedAtomic(floatBits(0.0))
+        _channelBalanceBits     = ManagedAtomic(floatBits(0.0))
         _tpGuardEnabled         = ManagedAtomic(0)
         _timeDelayBits          = ManagedAtomic(floatBits(0.0))
         _deltaSoloEnabled       = ManagedAtomic(0)
@@ -523,6 +525,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setStereoBalancePosition(_ balance: Float) {
         _balanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
     }
+    func setChannelBalance(_ balance: Float) {
+        _channelBalanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
+    }
     func setLimiterTruePeakGuardEnabled(_ v: Bool) {
         _tpGuardEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
@@ -590,6 +595,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLimiterAttackMs(config.limiter.attackMs, sampleRate: sampleRate)
         setLimiterReleaseMs(config.limiter.releaseMs, sampleRate: sampleRate)
         setLimiterLookAheadMs(config.limiter.lookAheadMs, sampleRate: sampleRate)
+
+        setChannelBalance(config.channelBalance)
 
         // Advanced processing (sections A–J)
         let adv = config.advanced
@@ -875,7 +882,15 @@ final class DynamicsProcessor: @unchecked Sendable {
               let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
 
-        // Constant-power balance law.
+        // Linear channel balance (centre = 100% both, left = 100%L/0%R, right = 0%L/100%R).
+        let chBal    = bitsToFloat(_channelBalanceBits.load(ordering: .relaxed))
+        let chGainL  = max(0.0, 1.0 - max(0.0, chBal))
+        let chGainR  = max(0.0, 1.0 + min(0.0, chBal))
+        if chGainL < 1.0 || chGainR < 1.0 {
+            for i in 0..<count { bufL[i] *= chGainL; bufR[i] *= chGainR }
+        }
+
+        // Constant-power symmetry balance law.
         let balance = bitsToFloat(_balanceBits.load(ordering: .relaxed))
         let angle   = (balance + 1.0) * Float.pi * 0.25   // 0 … π/2
         let gainL   = max(0.0, cos(angle))
