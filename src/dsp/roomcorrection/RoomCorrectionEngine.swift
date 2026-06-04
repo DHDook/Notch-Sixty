@@ -94,7 +94,7 @@ final class RoomCorrectionEngine {
             let outPtr = output[ch]
 
             // Convert input to array for convolution
-            var inputArray = Array(repeating: 0.0, count: frameCount)
+            var inputArray = Array(repeating: Float(0.0), count: frameCount)
             for i in 0..<frameCount {
                 inputArray[i] = inPtr[i]
             }
@@ -129,7 +129,7 @@ final class RoomCorrectionEngine {
             // House curve - gentle bass and treble lift
             generateHouseCurveFilter()
 
-        case .custom:
+        case .customREW:
             // Custom curve - would be loaded from measurement data
             inverseFilter = Array(repeating: 0.0, count: filterLength)
             inverseFilter[0] = 1.0
