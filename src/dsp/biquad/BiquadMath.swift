@@ -28,6 +28,26 @@ enum BiquadMath {
         return actualRate
     }
 
+    /// Applies Tustin pre-warping to correct for bilinear transform frequency compression
+    /// when the design sample rate differs from the actual sample rate.
+    ///
+    /// When coefficientDecoupling is active, filters are designed at `designRate` (48 kHz)
+    /// but processed at `actualRate` (e.g. 192 kHz). The bilinear transform maps the
+    /// continuous-frequency axis nonlinearly — pre-warping ensures the discrete-time
+    /// cutoff lands exactly at the intended frequency.
+    ///
+    /// Formula: f_prewarped = (designRate / π) × tan(π × f / actualRate)
+    ///
+    /// Only applies when actualRate ≠ designRate. At unity (no decoupling), returns f unchanged.
+    static func prewarpFrequency(
+        frequency: Double,
+        actualRate: Double,
+        designRate: Double
+    ) -> Double {
+        guard actualRate != designRate, designRate > 0, actualRate > 0 else { return frequency }
+        return (designRate / .pi) * tan(.pi * frequency / actualRate)
+    }
+
     // MARK: - Main Entry Point (single section)
 
     /// Calculates biquad coefficients for the given filter parameters.
@@ -61,6 +81,8 @@ enum BiquadMath {
             return bandPass(sampleRate: sampleRate, frequency: frequency, q: q)
         case .notch:
             return notch(sampleRate: sampleRate, frequency: frequency, q: q)
+        case .allPass:
+            return allPass(sampleRate: sampleRate, frequency: frequency, q: q)
         }
     }
 
@@ -105,6 +127,9 @@ enum BiquadMath {
             return lowShelfSections(sampleRate: sampleRate, frequency: frequency, gain: gain, slope: slope)
         case .highShelf:
             return highShelfSections(sampleRate: sampleRate, frequency: frequency, gain: gain, slope: slope)
+        case .allPass:
+            // Allpass has no slope — return a single section
+            return [calculateCoefficients(type: type, sampleRate: sampleRate, frequency: frequency, q: q, gain: gain)]
         default:
             // Slope is not applicable — return a single section
             return [calculateCoefficients(type: type, sampleRate: sampleRate, frequency: frequency, q: q, gain: gain)]
@@ -512,6 +537,36 @@ enum BiquadMath {
         let b0 = 1.0
         let b1 = -2.0 * cosOmega
         let b2 = 1.0
+        let a0 = 1.0 + alpha
+        let a1 = -2.0 * cosOmega
+        let a2 = 1.0 - alpha
+
+        return normalise(b0: b0, b1: b1, b2: b2, a0: a0, a1: a1, a2: a2)
+    }
+
+    // MARK: - All-Pass
+
+    /// 2nd-order allpass filter.
+    ///
+    /// Unity magnitude, tunable phase. Centre of phase transition at `frequency`,
+    /// sharpness controlled by `q` (higher Q = narrower phase transition).
+    /// Coefficients: a1 = b1, a2 = b0, so the filter is its own inverse.
+    /// - Parameters:
+    ///   - sampleRate: Sample rate in Hz
+    ///   - frequency: Centre frequency in Hz
+    ///   - q: Q factor (phase transition sharpness)
+    static func allPass(
+        sampleRate: Double,
+        frequency: Double,
+        q: Double
+    ) -> BiquadCoefficients {
+        let omega = 2.0 * .pi * frequency / sampleRate
+        let sinOmega = sin(omega)
+        let cosOmega = cos(omega)
+        let alpha = sinOmega / (2.0 * q)
+        let b0 = 1.0 - alpha
+        let b1 = -2.0 * cosOmega
+        let b2 = 1.0 + alpha
         let a0 = 1.0 + alpha
         let a1 = -2.0 * cosOmega
         let a2 = 1.0 - alpha

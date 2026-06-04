@@ -329,6 +329,17 @@ enum DitherMode: Int, Codable, Equatable, Sendable {
     case tpdf   = 1
     /// Noise-shaped dither — perceptually weighted for 44.1 / 48 kHz.
     case shaped = 2
+    /// 5th-order Wannamaker/Lipshitz psychoacoustic noise shaping — optimal for 44.1/48 kHz.
+    case highOrder = 3
+}
+
+// MARK: - Target Curve Type
+
+/// Target curve type for room correction EQ.
+enum TargetCurveType: Int, Codable, Equatable, Sendable {
+    case flat = 0
+    case houseCurve = 1
+    case customREW = 2
 }
 
 // MARK: - Advanced Processing Configuration
@@ -453,6 +464,20 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Dry/wet mix ratio. Range: 0.0 (dry) – 1.0 (full wet). Default: 0.1.
     var zlConvolutionReverbMix: Float = 0.1
 
+    /// 4x Oversampling — upsamples audio by 4x before EQ and downsamples after EQ.
+    /// Improves high-frequency response and reduces aliasing artifacts.
+    var oversamplingEnabled: Bool = false
+
+    /// Linear-Phase EQ Mode — uses FIR filters instead of IIR biquads for zero-phase distortion.
+    /// Increases latency but eliminates phase warping from EQ bands.
+    var linearPhaseEQEnabled: Bool = false
+
+    /// Room Correction / Target Curve EQ — applies inverse filter to match a target response curve.
+    /// Requires REW measurement import for accurate room correction.
+    var roomCorrectionEnabled: Bool = false
+    /// Target curve type: flat, house curve, or custom imported from REW.
+    var targetCurveType: TargetCurveType = .flat
+
     // MARK: - Codable
 
     static let `default` = AdvancedProcessingConfig()
@@ -474,6 +499,10 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case stereoMode
         case hardwareSyncBufferEnabled
         case ditherMode
+        case oversamplingEnabled
+        case linearPhaseEQEnabled
+        case roomCorrectionEnabled
+        case targetCurveType
         // LTI Suite
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount

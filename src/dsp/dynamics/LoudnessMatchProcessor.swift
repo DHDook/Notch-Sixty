@@ -19,8 +19,9 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     // MARK: - Constants
 
-    /// Maximum blocks in the 3-second FIFO (covers 96 kHz @ 128 frames per block).
-    private static let maxFIFOBlocks: Int = 2048
+    /// Maximum blocks in the 3-second FIFO (covers 384 kHz @ 256 frames per block).
+    /// Derivation: 384000 Hz × 3 s / 256 frames = 4500 blocks (worst case)
+    private static let maxFIFOBlocks: Int = 4500
 
     /// Gate threshold: blocks with mean power below this value are excluded from integration.
     private static let gateThreshold: Float = 1e-7  // ≈ −70 dBFS (relative full-scale)
@@ -50,8 +51,13 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     /// Smoothed gain correction multiplier (linear). Starts at unity.
     nonisolated(unsafe) private var smoothedGain: Float = 1.0
 
-    /// Smoothed gain alpha for 2-second RC filter (updated when sample rate changes).
+    /// Smoothed gain alpha for 2-second RC filter (updated when sample rate or block size changes).
     nonisolated(unsafe) private var smoothAlpha: Float = 0.999
+
+    /// Last block size seen (for lazy smoothAlpha recalculation).
+    nonisolated(unsafe) private var lastBlockSize: Int = 512
+    /// Last sample rate seen (for lazy smoothAlpha recalculation).
+    nonisolated(unsafe) private var lastSampleRate: Double = 48000
 
     // MARK: - K-weighting Coefficients (recomputed when sample rate changes)
 
@@ -76,7 +82,10 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
         kwState1  = Array(repeating: 0.0, count: 2 * 2)  // 2 channels × 2 state vars
         kwState2  = Array(repeating: 0.0, count: 2 * 2)
         powerFIFO = Array(repeating: 0.0, count: Self.maxFIFOBlocks)
-        updateCoefficients(sampleRate: 48000.0)
+        // NOTE: coefficients are recomputed in resetState(sampleRate:) which is called
+        // immediately after init by DynamicsProcessor.init(). The 48000 here is a safe
+        // placeholder that never reaches the audio thread.
+        updateCoefficients(sampleRate: 48000.0, blockSize: 512)
     }
 
     // MARK: - Parameter API (main thread)
@@ -99,7 +108,9 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
         fifoWriteIndex = 0
         fifoFilled     = 0
         smoothedGain   = 1.0
-        updateCoefficients(sampleRate: sampleRate)
+        lastBlockSize  = 512
+        lastSampleRate = sampleRate
+        updateCoefficients(sampleRate: sampleRate, blockSize: 512)
     }
 
     // MARK: - Audio Thread: Apply Gain
@@ -122,6 +133,13 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     @inline(__always)
     func update(abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int, sampleRate: Double) {
         guard _enabled.load(ordering: .relaxed) != 0, count > 0 else { return }
+
+        // Recompute smoothAlpha when block size or sample rate changes
+        if count != lastBlockSize || sampleRate != lastSampleRate {
+            updateCoefficients(sampleRate: sampleRate, blockSize: count)
+            lastBlockSize = count
+            lastSampleRate = sampleRate
+        }
 
         // Step 1: compute K-weighted mean-square power for this block
         var sumPower: Float = 0.0
@@ -197,14 +215,12 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     // MARK: - K-weighting Coefficient Computation
 
-    /// Recomputes K-weighting filter coefficients for the given sample rate.
-    func updateCoefficients(sampleRate: Double) {
+    /// Recomputes K-weighting filter coefficients for the given sample rate and block size.
+    func updateCoefficients(sampleRate: Double, blockSize: Int) {
         // Update smooth alpha for 2-second time constant per-block
-        // (The audio thread may call resetState which calls this; also called by applyConfig)
-        // Alpha is computed lazily in applyGain using storedSampleRate of the callback block.
-        // We store a per-sample alpha here; the per-block version is derived on the fly.
+        // Alpha depends on actual block size to maintain correct time constant across all sample rates
         let tau = 2.0
-        smoothAlpha = Float(exp(-1.0 / (sampleRate * tau / 512.0)))  // approx per-block at 512 frames
+        smoothAlpha = Float(exp(-Double(blockSize) / (sampleRate * tau)))
 
         // ── Stage 1: K-weighting high-shelf pre-filter ───────────────────
         // Parameters from ITU-R BS.1770-4 (bilinear transform of analogue prototype).

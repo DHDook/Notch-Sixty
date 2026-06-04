@@ -1,6 +1,6 @@
 /// Custom filter type enum replacing AVAudioUnitEQFilterType.
 /// Lives in domain layer — no framework dependencies.
-/// Raw values 0-6 cover all filter types. Q/resonance is controlled via parameter.
+/// Raw values 0-7 cover all filter types. Q/resonance is controlled via parameter.
 enum FilterType: Int, Codable, Sendable, CaseIterable {
     case parametric = 0   // Peaking EQ (bell)
     case lowPass = 1      // 2nd-order low pass (Q controls resonance)
@@ -9,6 +9,7 @@ enum FilterType: Int, Codable, Sendable, CaseIterable {
     case highShelf = 4    // High shelf (Q controls slope)
     case bandPass = 5     // Band pass (constant 0 dB peak gain)
     case notch = 6       // Band stop / notch
+    case allPass = 7      // Allpass (unity magnitude, configurable phase)
 
     /// Creates a FilterType from a raw value.
     /// Returns nil if the raw value is outside the valid range.
@@ -24,7 +25,7 @@ enum FilterType: Int, Codable, Sendable, CaseIterable {
         default: migratedValue = rawValue
         }
 
-        guard (0...6).contains(migratedValue) else { return nil }
+        guard (0...7).contains(migratedValue) else { return nil }
         self.init(rawValue: migratedValue)
     }
 }
@@ -49,6 +50,8 @@ extension FilterType {
             return "Band Pass"
         case .notch:
             return "Notch"
+        case .allPass:
+            return "All-Pass"
         }
     }
 
@@ -69,12 +72,14 @@ extension FilterType {
             return "BP"
         case .notch:
             return "Notch"
+        case .allPass:
+            return "AP"
         }
     }
 
     /// All filter types in UI display order.
     static var allCasesInUIOrder: [FilterType] {
-        [.parametric, .lowPass, .highPass, .lowShelf, .highShelf, .bandPass, .notch]
+        [.parametric, .lowPass, .highPass, .lowShelf, .highShelf, .bandPass, .notch, .allPass]
     }
 }
 
@@ -93,6 +98,7 @@ extension FilterType {
         case "HS": self = .highShelf
         case "BP": self = .bandPass
         case "Notch": self = .notch
+        case "AP": self = .allPass
         // Legacy resonant abbreviations (migrated to non-resonant)
         case "RLP": self = .lowPass
         case "RHP": self = .highPass

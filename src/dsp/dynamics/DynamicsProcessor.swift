@@ -100,6 +100,10 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var pauseGateIsOpen: Bool  = true
     /// TPDF dither: previous random value to form triangle-PDF noise.
     nonisolated(unsafe) var ditherPrevRand:  Float = 0.0
+    /// 5th-order noise shaping feedback taps: 5 taps per channel.
+    nonisolated(unsafe) var noiseShapingState: [Float]
+    /// Sub-bass phase alignment allpass state: 2 state vars per channel (w1, w2).
+    nonisolated(unsafe) var subBassPhaseState: [Float]
 
     // MARK: - Atomic Parameters (main thread → audio thread)
 
@@ -182,6 +186,10 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _pauseGateEnabled:       ManagedAtomic<Int32>
     private let _syncBufferEnabled:      ManagedAtomic<Int32>
     private let _ditherModeBits:         ManagedAtomic<Int32>  // DitherMode.rawValue
+
+    // Sub-bass phase alignment
+    private let _subBassPhaseEnabled:     ManagedAtomic<Int32>
+    private let _subBassPhaseFreqBits:    ManagedAtomic<Int32>  // Hz as Float bits
 
     // MARK: - Advanced Metrics (audio → main)
 
@@ -375,6 +383,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.dcOffsetState = Array(repeating: 0.0, count: 2 * ch)
         self.deharshState  = Array(repeating: 0.0, count: 2 * ch)
         self.contourState  = Array(repeating: 0.0, count: 4 * ch)
+        self.noiseShapingState = Array(repeating: 0.0, count: 5 * ch)
+        self.subBassPhaseState = Array(repeating: 0.0, count: 2 * ch)
 
         // Advanced processing atomics (main → audio)
         _stereoMode             = ManagedAtomic(Int32(StereoModeSelection.stereo.rawValue))
@@ -394,6 +404,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         _pauseGateEnabled       = ManagedAtomic(0)
         _syncBufferEnabled      = ManagedAtomic(0)
         _ditherModeBits         = ManagedAtomic(Int32(DitherMode.bypass.rawValue))
+
+        // Sub-bass phase alignment
+        _subBassPhaseEnabled  = ManagedAtomic(0)
+        _subBassPhaseFreqBits = ManagedAtomic(floatBits(80.0))
 
         // Advanced metric atomics (audio → main)
         _phaseCorrelationBits   = ManagedAtomic(floatBits(0.0))
@@ -549,6 +563,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setDitherMode(_ mode: DitherMode) {
         _ditherModeBits.store(Int32(mode.rawValue), ordering: .relaxed)
     }
+    func setSubBassPhaseAlignmentEnabled(_ v: Bool) {
+        _subBassPhaseEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setSubBassAlignmentFrequencyHz(_ hz: Float) {
+        _subBassPhaseFreqBits.store(floatBits(max(20.0, min(200.0, hz))), ordering: .relaxed)
+    }
 
     /// Applies a full config snapshot atomically (main thread).
     func applyConfig(_ config: DynamicsConfig, sampleRate: Double) {
@@ -616,6 +636,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         setPauseGateEnabled(adv.pauseGateEnabled)
         setHardwareSyncBufferEnabled(adv.hardwareSyncBufferEnabled)
         setDitherMode(adv.ditherMode)
+        setSubBassPhaseAlignmentEnabled(adv.subBassPhaseAlignmentEnabled)
+        setSubBassAlignmentFrequencyHz(adv.subBassAlignmentFrequencyHz)
     }
 
     /// Called when the pipeline sample rate changes (main thread).
@@ -645,11 +667,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         for i in 0..<dcOffsetState.count { dcOffsetState[i] = 0 }
         for i in 0..<deharshState.count  { deharshState[i]  = 0 }
         for i in 0..<contourState.count  { contourState[i]  = 0 }
+        for i in 0..<noiseShapingState.count { noiseShapingState[i] = 0 }
+        for i in 0..<subBassPhaseState.count { subBassPhaseState[i] = 0 }
         crestPeakEnv    = 0.0
         crestRmsEnv     = 0.0
         pauseGateLevel  = 0.0
         pauseGateIsOpen = true
         ditherPrevRand  = 0.0
+        for i in 0..<noiseShapingState.count { noiseShapingState[i] = 0 }
         for p in timeDelayBufs { p.initialize(repeating: 0, count: Self.maxDelaySamples) }
         timeDelayWriteIdx = 0
     }
@@ -680,10 +705,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         let pauseOn       = _pauseGateEnabled.load(ordering: .relaxed) != 0
         let ditherMode    = _ditherModeBits.load(ordering: .relaxed)
         let deltaSoloOn   = _deltaSoloEnabled.load(ordering: .relaxed) != 0
+        let subPhaseOn    = _subBassPhaseEnabled.load(ordering: .relaxed) != 0
 
         guard stereoModeRaw != 0 || dcOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
-                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn else {
+                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || subPhaseOn else {
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
             return
         }
@@ -697,7 +723,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stage 0: DC offset filter.
         if dcOn { processDCOffset(abl: abl, numCh: numCh, count: count) }
 
-        // Stage 0a: Stereo Widener.
+        // Stage 0a: Sub-bass phase alignment.
+        let subPhaseOn = _subBassPhaseEnabled.load(ordering: .relaxed) != 0
+        if subPhaseOn { processSubBassPhaseAlignment(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 0b: Stereo Widener.
         if wideOn { stereoWidener.process(abl: abl, numCh: numCh, count: count, sampleRate: storedSampleRate) }
 
         // Stage 0b: LUFS Loudness Match.
@@ -801,6 +831,28 @@ final class DynamicsProcessor: @unchecked Sendable {
             }
             dcOffsetState[ch * 2]     = xPrev
             dcOffsetState[ch * 2 + 1] = yPrev
+        }
+    }
+
+    /// Sub-bass phase alignment: 2nd-order allpass filter for driver time alignment.
+    @inline(__always)
+    private func processSubBassPhaseAlignment(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        let freq = Float(bitPattern: UInt32(bitPattern: _subBassPhaseFreqBits.load(ordering: .relaxed)))
+        let coeffs = BiquadMath.allPass(sampleRate: storedSampleRate, frequency: Double(freq), q: 0.7)
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            var w1 = subBassPhaseState[ch * 2]
+            var w2 = subBassPhaseState[ch * 2 + 1]
+            for i in 0..<count {
+                buf[i] = Self.processBiquad(buf[i],
+                    b0: Float(coeffs.b0), b1: Float(coeffs.b1), b2: Float(coeffs.b2),
+                    na1: Float(coeffs.a1), na2: Float(coeffs.a2),
+                    w1: &w1, w2: &w2)
+            }
+            subBassPhaseState[ch * 2]     = w1
+            subBassPhaseState[ch * 2 + 1] = w2
         }
     }
 
@@ -950,20 +1002,62 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
     }
 
-    /// TPDF dither at 24-bit LSB. `mode == 1` is flat TPDF, `mode == 2` is first-order noise-shaped.
+    /// TPDF dither at 24-bit LSB. `mode == 1` is flat TPDF, `mode == 2` is first-order noise-shaped,
+    /// `mode == 3` is 5th-order Wannamaker/Lipshitz psychoacoustic noise shaping.
     @inline(__always)
     private func processTPDFDither(
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int, mode: Int32
     ) {
         let lsb: Float = 1.0 / 8_388_608.0  // 2^−23 (24-bit LSB amplitude)
-        for i in 0..<count {
-            let r1 = Float.random(in: -lsb...lsb)
-            let r2 = Float.random(in: -lsb...lsb)
-            let noise: Float = mode == 2 ? (r1 - ditherPrevRand) : (r1 + r2)
-            ditherPrevRand = r2
+
+        if mode == 3 {
+            // 5th-order Wannamaker/Lipshitz psychoacoustic noise shaping
+            // Coefficients: c1=2.033, c2=-2.165, c3=1.959, c4=-1.590, c5=0.6149
+            let c1: Float = 2.033
+            let c2: Float = -2.165
+            let c3: Float = 1.959
+            let c4: Float = -1.590
+            let c5: Float = 0.6149
+
             for ch in 0..<numCh {
-                if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
-                    buf[i] += noise
+                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                var e1 = noiseShapingState[ch * 5]
+                var e2 = noiseShapingState[ch * 5 + 1]
+                var e3 = noiseShapingState[ch * 5 + 2]
+                var e4 = noiseShapingState[ch * 5 + 3]
+                var e5 = noiseShapingState[ch * 5 + 4]
+
+                for i in 0..<count {
+                    let r1 = Float.random(in: -lsb...lsb)
+                    let r2 = Float.random(in: -lsb...lsb)
+                    let tpdf = r1 + r2
+                    let shaped = tpdf - (c1 * e1 + c2 * e2 + c3 * e3 + c4 * e4 + c5 * e5)
+                    buf[i] += shaped
+                    let e = shaped
+                    e5 = e4
+                    e4 = e3
+                    e3 = e2
+                    e2 = e1
+                    e1 = e
+                }
+
+                noiseShapingState[ch * 5]     = e1
+                noiseShapingState[ch * 5 + 1] = e2
+                noiseShapingState[ch * 5 + 2] = e3
+                noiseShapingState[ch * 5 + 3] = e4
+                noiseShapingState[ch * 5 + 4] = e5
+            }
+        } else {
+            // Flat TPDF (mode == 1) or first-order shaped (mode == 2)
+            for i in 0..<count {
+                let r1 = Float.random(in: -lsb...lsb)
+                let r2 = Float.random(in: -lsb...lsb)
+                let noise: Float = mode == 2 ? (r1 - ditherPrevRand) : (r1 + r2)
+                ditherPrevRand = r2
+                for ch in 0..<numCh {
+                    if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
+                        buf[i] += noise
+                    }
                 }
             }
         }

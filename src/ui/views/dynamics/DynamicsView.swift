@@ -718,12 +718,28 @@ struct DynamicsView: View {
                     Text("Off").tag(DitherMode.bypass)
                     Text("TPDF").tag(DitherMode.tpdf)
                     Text("Shaped").tag(DitherMode.shaped)
+                    Text("5th-Order").tag(DitherMode.highOrder)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
 
             Toggle("Pause Gate", isOn: pauseGateBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("4x Oversampling", isOn: oversamplingBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("Linear-Phase EQ", isOn: linearPhaseEQBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            Toggle("Room Correction", isOn: roomCorrectionBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
                 .font(.system(size: 13))
@@ -1218,6 +1234,30 @@ struct DynamicsView: View {
             set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateEnabled = val; store.updateAdvancedProcessing(adv) }
         )
     }
+    private var oversamplingBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.oversamplingEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.oversamplingEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var linearPhaseEQBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.linearPhaseEQEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.linearPhaseEQEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var roomCorrectionBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.roomCorrectionEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.roomCorrectionEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var targetCurveTypeBinding: Binding<TargetCurveType> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.targetCurveType },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.targetCurveType = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
     private var syncBufferBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.advanced.hardwareSyncBufferEnabled },
@@ -1457,7 +1497,7 @@ struct DynamicsInlineView: View {
                 column6
             }
         }
-        .onAppear { inlineMeterBridge.register(with: store.meterStore) }
+        .onAppear { inlineMeterBridge.register(with: store.meterStore, equaliserStore: store) }
     }
 
     // MARK: - Header
@@ -1615,7 +1655,20 @@ struct DynamicsInlineView: View {
                 Text("Off").tag(DitherMode.bypass)
                 Text("TPDF").tag(DitherMode.tpdf)
                 Text("Shape").tag(DitherMode.shaped)
+                Text("5th").tag(DitherMode.highOrder)
             }
+            Toggle("4x OS", isOn: inlineOversamplingBinding)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
+            Toggle("LP-EQ", isOn: inlineLinearPhaseEQBinding)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
+            Toggle("RC", isOn: inlineRoomCorrectionBinding)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
         }
     }
 
@@ -1630,6 +1683,8 @@ struct DynamicsInlineView: View {
             InlineDRFactorView(bridge: inlineMeterBridge)
             InlineBitStreamView(bridge: inlineMeterBridge)
             InlineBitRateView()
+            Divider()
+            GainStructureMeterView()
         }
         .frame(minWidth: 110)
     }
@@ -1888,6 +1943,24 @@ struct DynamicsInlineView: View {
             set: { val in var adv = store.dynamicsConfig.advanced; adv.ditherMode = val; store.updateAdvancedProcessing(adv) }
         )
     }
+    private var inlineOversamplingBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.oversamplingEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.oversamplingEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var inlineLinearPhaseEQBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.linearPhaseEQEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.linearPhaseEQEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var inlineRoomCorrectionBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.roomCorrectionEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.roomCorrectionEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
 }
 
 // MARK: - Inline Meter Bridge
@@ -1918,6 +1991,9 @@ final class InlineMeterBridge: ObservableObject {
     private let obsPeakOutR = BridgeChannelObs()
     private let obsRmsOutL  = BridgeChannelObs()
     private let obsRmsOutR  = BridgeChannelObs()
+
+    // Store reference for gain reduction metrics
+    private weak var store: EqualiserStore?
 
     // MARK: - Computed Metrics
 
@@ -1962,7 +2038,8 @@ final class InlineMeterBridge: ObservableObject {
 
     // MARK: - Registration
 
-    func register(with store: MeterStore) {
+    func register(with store: MeterStore, equaliserStore: EqualiserStore?) {
+        self.store = equaliserStore
         obsPeakL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
             self?.peakL = v
             if v > 0.99 { self?.ispInputLatched = true }

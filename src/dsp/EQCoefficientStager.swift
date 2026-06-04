@@ -99,10 +99,20 @@ final class EQCoefficientStager {
             actualRate: currentSampleRate,
             coefficientDecouplingEnabled: eqConfiguration.dynamicsConfig.advanced.coefficientDecouplingEnabled
         )
+        let warpedFrequency: Double
+        if designRate != currentSampleRate {
+            warpedFrequency = BiquadMath.prewarpFrequency(
+                frequency: Double(config.frequency),
+                actualRate: currentSampleRate,
+                designRate: designRate
+            )
+        } else {
+            warpedFrequency = Double(config.frequency)
+        }
         let sections = BiquadMath.calculateSections(
             type: config.filterType,
             sampleRate: designRate,
-            frequency: Double(config.frequency),
+            frequency: warpedFrequency,
             q: Double(config.q),
             gain: Double(config.gain),
             slope: config.slope
@@ -139,10 +149,20 @@ final class EQCoefficientStager {
         for index in 0..<activeCount {
             guard index < leftBands.count else { break }
             let config = leftBands[index]
+            let warpedFrequency: Double
+            if designRate != currentSampleRate {
+                warpedFrequency = BiquadMath.prewarpFrequency(
+                    frequency: Double(config.frequency),
+                    actualRate: currentSampleRate,
+                    designRate: designRate
+                )
+            } else {
+                warpedFrequency = Double(config.frequency)
+            }
             let sections = BiquadMath.calculateSections(
                 type: config.filterType,
                 sampleRate: designRate,
-                frequency: Double(config.frequency),
+                frequency: warpedFrequency,
                 q: Double(config.q),
                 gain: Double(config.gain),
                 slope: config.slope
@@ -170,10 +190,20 @@ final class EQCoefficientStager {
             for index in 0..<activeCount {
                 guard index < rightBands.count else { break }
                 let config = rightBands[index]
+                let warpedFrequency: Double
+                if designRate != currentSampleRate {
+                    warpedFrequency = BiquadMath.prewarpFrequency(
+                        frequency: Double(config.frequency),
+                        actualRate: currentSampleRate,
+                        designRate: designRate
+                    )
+                } else {
+                    warpedFrequency = Double(config.frequency)
+                }
                 let sections = BiquadMath.calculateSections(
                     type: config.filterType,
                     sampleRate: designRate,
-                    frequency: Double(config.frequency),
+                    frequency: warpedFrequency,
                     q: Double(config.q),
                     gain: Double(config.gain),
                     slope: config.slope

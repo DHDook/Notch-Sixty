@@ -45,7 +45,7 @@ struct EQWindowView: View {
 
                 Spacer(minLength: 64)
 
-                VStack(spacing: 8) {
+                VStack(spacing: 12) {
                     GainControlsView(
                         inputGain: store.inputGain,
                         outputGain: store.outputGain,
@@ -153,7 +153,7 @@ struct EQWindowView: View {
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
-                            Text("Compare")
+                            Text("Mode")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
