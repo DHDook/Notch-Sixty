@@ -143,6 +143,8 @@ enum EasyEffectsExporter {
             return "Band-pass"
         case .notch:
             return "Notch"
+        case .allPass:
+            return "All-pass"
         }
     }
 }
