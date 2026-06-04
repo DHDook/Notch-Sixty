@@ -175,7 +175,7 @@ struct EQWindowView: View {
 
                         Picker("", selection: $store.compareMode) {
                             Text("EQ").tag(CompareMode.eq)
-                            Text("Linear EQ").tag(CompareMode.linearEQ)
+                            Text("Linear").tag(CompareMode.linearEQ)
                             Text("Flat").tag(CompareMode.flat)
                             Text("Delta").tag(CompareMode.delta)
                         }
@@ -251,7 +251,7 @@ struct EQWindowView: View {
                     openSettings()
                 } label: {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 14))
+                        .font(.system(size: 16))
                         .frame(height: 20)
                 }
                 .buttonStyle(.plain)
