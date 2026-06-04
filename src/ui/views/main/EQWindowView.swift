@@ -181,7 +181,7 @@ struct EQWindowView: View {
                         }
                         .pickerStyle(.segmented)
                         .controlSize(.small)
-                        .frame(width: 160)
+                        .frame(width: 180)
                     }
 
                     VStack(spacing: 4) {
@@ -226,9 +226,10 @@ struct EQWindowView: View {
                     .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
                 }
                 .frame(minWidth: 40, alignment: .center)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
+                .padding(.top, 10)
+                .padding(.bottom, 2)
                 .padding(.leading, 4)
+                .padding(.trailing, 8)
 
                 VStack(spacing: 2) {
                     Text("Meters")
@@ -241,9 +242,10 @@ struct EQWindowView: View {
                         .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
                 }
                 .frame(minWidth: 40, alignment: .center)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
+                .padding(.top, 10)
+                .padding(.bottom, 2)
                 .padding(.leading, 4)
+                .padding(.trailing, 8)
 
                 Button {
                     openSettings()

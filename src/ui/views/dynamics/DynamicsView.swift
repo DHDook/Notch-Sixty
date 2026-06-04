@@ -1646,7 +1646,7 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Crosstalk",   isOn: inlineCrosstalkEnabled)
             col2Toggle(label: "Early Refl",  isOn: inlineEarlyReflectionEnabled)
             col2Toggle(label: "HPF Lin.",    isOn: inlineHPFLinearizationEnabled)
-            col2Toggle(label: "RC",          isOn: inlineRoomCorrectionBinding)
+            col2Toggle(label: "Rm. Correct.", isOn: inlineRoomCorrectionBinding)
             col2Toggle(label: "Sub Align",   isOn: inlineSubBassEnabled)
             col2Toggle(label: "ZL Reverb",   isOn: inlineZLReverbEnabled)
         }
