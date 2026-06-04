@@ -744,6 +744,11 @@ struct DynamicsView: View {
                 .controlSize(.regular)
                 .font(.system(size: 13))
 
+            Toggle("Multi-Seat Averaging", isOn: multiSeatBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
             Toggle("Sync Buffer to Latency Mode", isOn: syncBufferBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
@@ -1264,6 +1269,12 @@ struct DynamicsView: View {
             set: { val in var adv = store.dynamicsConfig.advanced; adv.hardwareSyncBufferEnabled = val; store.updateAdvancedProcessing(adv) }
         )
     }
+    private var multiSeatBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.multiSeatAveragingEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.multiSeatAveragingEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
 
     // MARK: - LTI Bindings
 
@@ -1532,11 +1543,11 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Loudness Contour", body: "Fletcher-Munson compensation curve adding gentle bass and treble lift for low-level listening.")
                         Divider()
+                        definitionEntry(title: "4x Oversampling", body: "Upsamples audio by 4× before EQ and downsamples after EQ. Improves high-frequency response and reduces aliasing artifacts.")
+                        Divider()
                         definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance by applying frequency-selective gain reduction around a tunable centre frequency.")
                         Divider()
                         definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers.")
-                        Divider()
-                        definitionEntry(title: "Compressor", body: "Wideband feed-forward compressor with soft-knee option that automatically balances dynamic range.")
                         Divider()
                         // Column 2 — later dynamics + spatial
                         definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
@@ -1566,9 +1577,11 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "HPF Linearise", body: "All-pass FIR network linearising group delay introduced by high-pass filter networks.")
                         Divider()
-                        definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions.")
-                        Divider()
                         definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
+                        Divider()
+                        definitionEntry(title: "Room Correction", body: "Applies inverse filter to match a target response curve. Requires REW measurement import for accurate room correction.")
+                        Divider()
+                        definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions for more robust room correction.")
                         Divider()
                         definitionEntry(title: "ZL Reverb", body: "Uniformly-partitioned FFT convolution reverb with zero added processing latency.")
                     }
@@ -1602,9 +1615,9 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Widener",     isOn: inlineWideEnabled)
             col2Toggle(label: "LUFS",        isOn: inlineLufsEnabled)
             col2Toggle(label: "Contour",     isOn: inlineLoudnessContourEnabled)
+            col2Toggle(label: "4x OS",       isOn: inlineOversamplingBinding)
             col2Toggle(label: "De-Esser",    isOn: deEsserEnabledBinding)
             col2Toggle(label: "M-Band",      isOn: mbEnabledBinding)
-            col2Toggle(label: "Comp.",       isOn: compressorEnabledBinding)
         }
     }
 
@@ -1612,6 +1625,7 @@ struct DynamicsInlineView: View {
 
     private var column2: some View {
         VStack(alignment: .leading, spacing: 4) {
+            col2Toggle(label: "Comp.",       isOn: compressorEnabledBinding)
             col2Toggle(label: "Expander",    isOn: expanderEnabledBinding)
             col2Toggle(label: "Clipper",     isOn: clipperEnabledBinding)
             col2Toggle(label: "Limiter",     isOn: limiterEnabledBinding)
@@ -1619,7 +1633,6 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Pause Gate",  isOn: inlinePauseGateEnabled)
             col2Toggle(label: "Sync Buffer", isOn: inlineSyncBufferEnabled)
             col2Toggle(label: "Sym. Bal.",   isOn: inlineSymmetryBalanceEnabled)
-            col2Toggle(label: "Pan Matrix",  isOn: inlinePanningEnabled)
         }
     }
 
@@ -1632,7 +1645,6 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Crosstalk",   isOn: inlineCrosstalkEnabled)
             col2Toggle(label: "Early Refl",  isOn: inlineEarlyReflectionEnabled)
             col2Toggle(label: "HPF Lin.",    isOn: inlineHPFLinearizationEnabled)
-            col2Toggle(label: "Multi-Seat",  isOn: inlineMultiSeatEnabled)
             col2Toggle(label: "Sub Align",   isOn: inlineSubBassEnabled)
             col2Toggle(label: "ZL Reverb",   isOn: inlineZLReverbEnabled)
         }
@@ -1657,18 +1669,8 @@ struct DynamicsInlineView: View {
                 Text("Shape").tag(DitherMode.shaped)
                 Text("5th").tag(DitherMode.highOrder)
             }
-            Toggle("4x OS", isOn: inlineOversamplingBinding)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .controlSize(.mini)
-            Toggle("LP-EQ", isOn: inlineLinearPhaseEQBinding)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .controlSize(.mini)
-            Toggle("RC", isOn: inlineRoomCorrectionBinding)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .controlSize(.mini)
+            Divider()
+            GainStructureMeterView()
         }
     }
 
@@ -1683,8 +1685,6 @@ struct DynamicsInlineView: View {
             InlineDRFactorView(bridge: inlineMeterBridge)
             InlineBitStreamView(bridge: inlineMeterBridge)
             InlineBitRateView()
-            Divider()
-            GainStructureMeterView()
         }
         .frame(minWidth: 110)
     }

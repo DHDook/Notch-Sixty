@@ -127,6 +127,7 @@ struct ChannelBalanceSlider: View {
                         .foregroundStyle(.tertiary)
                 }
             }
+            .frame(width: 120)
             Text("Balance")
                 .font(.caption)
                 .foregroundStyle(.tertiary)

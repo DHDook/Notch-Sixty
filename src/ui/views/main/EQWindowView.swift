@@ -166,15 +166,16 @@ struct EQWindowView: View {
                             }
                             .buttonStyle(.plain)
                             .popover(isPresented: $showCompareHelp, arrowEdge: .trailing) {
-                                Text("A/B/Delta comparison: EQ = full processing active. Flat = bypass EQ at matched volume to hear unprocessed audio. Delta = solo the difference signal to hear the processed effect.")
+                                Text("Mode comparison: EQ = full processing active. Linear EQ = zero-phase FIR EQ mode (increased latency). Flat = bypass EQ at matched volume to hear unprocessed audio. Delta = solo the difference signal to hear the processed effect.")
                                     .font(.caption)
                                     .padding(12)
-                                    .frame(width: 250)
+                                    .frame(width: 280)
                             }
                         }
 
                         Picker("", selection: $store.compareMode) {
                             Text("EQ").tag(CompareMode.eq)
+                            Text("Linear EQ").tag(CompareMode.linearEQ)
                             Text("Flat").tag(CompareMode.flat)
                             Text("Delta").tag(CompareMode.delta)
                         }
@@ -225,8 +226,9 @@ struct EQWindowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(minWidth: 40, alignment: .center)
-                .padding(.vertical, 4)
-                .padding(.horizontal, 2)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+                .padding(.horizontal, 0)
 
                 VStack(spacing: 2) {
                     Toggle("", isOn: $metersEnabledUI)
@@ -239,8 +241,9 @@ struct EQWindowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(minWidth: 40, alignment: .center)
-                .padding(.vertical, 4)
-                .padding(.horizontal, 2)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+                .padding(.horizontal, 0)
 
                 Button {
                     openSettings()

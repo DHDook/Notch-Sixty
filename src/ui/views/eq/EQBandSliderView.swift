@@ -334,6 +334,7 @@ struct EQBandDetailPopover: View {
                 }
             }
             .pickerStyle(.menu)
+            .disabled(filterType == .allPass)
             .onChange(of: slope) { _, newValue in
                 slopeUpdate(newValue)
             }
