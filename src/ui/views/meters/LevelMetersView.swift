@@ -77,7 +77,7 @@ struct ChannelBalanceSlider: View {
     @Binding var balance: Float
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     // Background track (always gray)

@@ -251,7 +251,7 @@ struct EQWindowView: View {
                     openSettings()
                 } label: {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 16))
+                        .font(.system(size: 18))
                         .frame(height: 20)
                 }
                 .buttonStyle(.plain)
