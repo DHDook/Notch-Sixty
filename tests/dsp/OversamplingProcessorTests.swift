@@ -61,6 +61,37 @@ final class OversamplingProcessorTests: XCTestCase {
         }
     }
 
+    func testOversamplingWithDCInput() {
+        // Test with DC input to verify gain compensation
+        let frameCount: Int = 512
+        let oversampler = OversamplingProcessor(maxFrameCount: frameCount)
+
+        var inputL = [Float](repeating: 0.5, count: frameCount)
+        var inputR = [Float](repeating: 0.5, count: frameCount)
+
+        let inputLevel = inputL[0]
+
+        inputL.withUnsafeMutableBufferPointer { inputPtr in
+            inputR.withUnsafeMutableBufferPointer { inputPtrR in
+                oversampler.upsample(ablL: inputPtr.baseAddress!,
+                                   ablR: inputPtrR.baseAddress!,
+                                   frameCount: frameCount)
+                oversampler.downsample(ablL: inputPtr.baseAddress!,
+                                      ablR: inputPtrR.baseAddress!,
+                                      frameCount: frameCount)
+            }
+        }
+
+        // Skip first few samples to account for filter startup
+        let startIndex = 100
+        let outputLevel = inputL[startIndex]
+
+        // DC should pass through with minimal attenuation
+        let levelDifference = abs(outputLevel - inputLevel)
+        XCTAssertLessThan(levelDifference, 0.01,
+                          "DC level difference should be < 0.01, got \(levelDifference)")
+    }
+
     func testOversamplingNumericalStability() {
         // Test with various input levels including extreme values
         let sampleRate: Double = 48000.0

@@ -2,6 +2,7 @@ import Atomics
 import AudioToolbox
 import CoreAudio
 import Foundation
+import os
 
 /// Real-time dynamics processor.
 ///
@@ -79,6 +80,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // ── Lightweight PRNG for dither ─────────────────────────────────────────
     private let ditherRNG: DSPRNG
+
+    // ── CPU Profiling ───────────────────────────────────────────────────────
+    private static let processSignpost = OSSignpostID(log: OSLog(subsystem: "net.knage.equaliser", category: "DynamicsProcessor"), name: "Process")
 
     // MARK: - Advanced DSP State (audio thread only)
 
@@ -344,9 +348,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Atomics — expander
         _expEnabled     = ManagedAtomic(0)
-        _expThreshBits  = ManagedAtomic(floatBits(-35.0))
-        _expRatioBits   = ManagedAtomic(floatBits(1.5))
-        _expRangeDBBits = ManagedAtomic(floatBits(-12.0))
+        _expThreshBits  = ManagedAtomic(floatBits(-50.0))  // Lower threshold for less aggressive expansion
+        _expRatioBits   = ManagedAtomic(floatBits(2.0))   // Higher ratio for more effective noise reduction
+        _expRangeDBBits = ManagedAtomic(floatBits(-24.0)) // Wider range for more dynamic range
 
         // Atomics — soft clipper
         _softClipperEnabled   = ManagedAtomic(0)
@@ -691,6 +695,10 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     @inline(__always)
     func process(bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: UInt32) {
+        let signpostInterval = OSSignpostIntervalState(log: OSLog(subsystem: "net.knage.equaliser", category: "DynamicsProcessor"), name: "Process")
+        signpostInterval.begin()
+        defer { signpostInterval.end() }
+
         let count = Int(frameCount)
         guard count > 0 else { return }
         let abl   = UnsafeMutableAudioBufferListPointer(bufferList)
@@ -1458,7 +1466,8 @@ final class DynamicsProcessor: @unchecked Sendable {
                 let v = buf[frame]; let a = v < 0 ? -v : v; if a > peak { peak = a }
             }
             let xDB: Float     = peak > 1e-5 ? 20.0 * log10(peak) : -100.0
-            var deltaDB: Float = xDB < thresh ? (thresh - xDB) * (1.0 - ratio) : 0.0
+            // Downward expansion: when input is below threshold, attenuate by (ratio - 1)
+            var deltaDB: Float = xDB < thresh ? (thresh - xDB) * (ratio - 1.0) : 0.0
             if deltaDB < rangeDB { deltaDB = rangeDB }
             env = deltaDB < env
                 ? alphaAtt * env + (1.0 - alphaAtt) * deltaDB

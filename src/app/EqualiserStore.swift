@@ -6,6 +6,7 @@ import Foundation
 import OSLog
 import AppKit
 import SwiftUI
+import os
 
 @MainActor
 final class EqualiserStore: ObservableObject {
@@ -247,6 +248,10 @@ final class EqualiserStore: ObservableObject {
     var dynamicsConfig: DynamicsConfig {
         get { eqConfiguration.dynamicsConfig }
         set {
+            let signpostInterval = OSSignpostIntervalState(log: OSLog(subsystem: "net.knage.equaliser", category: "EqualiserStore"), name: "DynamicsConfigUpdate")
+            signpostInterval.begin()
+            defer { signpostInterval.end() }
+
             eqConfiguration.dynamicsConfig = newValue
             routingCoordinator.updateDynamicsConfig(newValue)
             presetManager.markAsModified()

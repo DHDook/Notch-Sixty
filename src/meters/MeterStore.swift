@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import os
 import os.log
 
 /// Manages meter state and updates observers directly.
@@ -37,6 +38,7 @@ final class MeterStore: ObservableObject {
     
     private var meterTimer: AnyCancellable?
     private static let meterInterval: TimeInterval = 1.0 / 30.0  // 30 FPS
+    private static let meterRefreshSignpost = OSSignpostID(log: OSLog(subsystem: "net.knage.equaliser", category: "MeterStore"), name: "MeterRefresh")
     
     // MARK: - State
     
@@ -172,6 +174,11 @@ final class MeterStore: ObservableObject {
     // MARK: - Update Cycle
     
     private func refreshMeterSnapshot() {
+        let signpostInterval = OSSignpostIntervalState(log: OSLog(subsystem: "net.knage.equaliser", category: "MeterStore"), name: "MeterRefresh")
+        signpostInterval.begin()
+
+        defer { signpostInterval.end() }
+
         guard metersEnabled else {
             notifyAllObserversSilent()
             return

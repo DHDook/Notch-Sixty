@@ -149,9 +149,11 @@ final class OversamplingProcessor {
                 delay[(delayIdx + p) % T] = src[srcIdx]
             }
 
-            // Apply polyphase FIR filter (phase 0 only for decimation)
+            // Apply polyphase FIR filter using appropriate phase for decimation
+            // For output sample i, use phase (i mod factor) coefficients
+            let phase = i % Self.factor
             var acc: Float = 0
-            let phaseCoeffs = coeffs[0]
+            let phaseCoeffs = coeffs[phase]
             for k in 0..<T {
                 acc += phaseCoeffs[k] * delay[(delayIdx - k + T) % T]
             }
