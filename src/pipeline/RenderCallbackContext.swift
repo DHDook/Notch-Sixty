@@ -746,41 +746,40 @@ final class RenderCallbackContext: @unchecked Sendable {
         // Apply 4x oversampling before EQ if enabled
         if let oversampler = oversamplingProcessor {
             let upsampledFrameCount = frameCount * 4
-            var upsampledBuffer = Array(repeating: 0.0, count: Int(upsampledFrameCount) * Int(channelCount))
+            var upsampledBuffer = Array(repeating: Float(0.0), count: Int(upsampledFrameCount) * Int(channelCount))
 
             // Upsample each channel
             for ch in 0..<Int(channelCount) {
                 let inputPtr = processingBuffers[ch]
-                var inputArray = Array(repeating: 0.0, count: Int(frameCount))
-                for i in 0..<Int(frameCount) {
-                    inputArray[i] = inputPtr[i]
-                }
-
-                let outputPtr = UnsafeMutablePointer<Float>(mutating: upsampledBuffer[ch * Int(upsampledFrameCount)...])
+                let channelOffset = ch * Int(upsampledFrameCount)
+                let outputPtr = UnsafeMutablePointer<Float>(mutating: &upsampledBuffer[channelOffset])
                 oversampler.upsample(input: [inputPtr], frameCount: Int(frameCount), output: outputPtr)
             }
 
             // Process EQ on upsampled data
-            let upsampledPointers = (0..<Int(channelCount)).map { UnsafePointer<Float>(upsampledBuffer[$0 * Int(upsampledFrameCount)...]) }
-            let upsampledMutablePointers = (0..<Int(channelCount)).map { UnsafeMutablePointer<Float>(mutating: upsampledBuffer[$0 * Int(upsampledFrameCount)...]) }
+            for ch in 0..<Int(channelCount) {
+                let channelOffset = ch * Int(upsampledFrameCount)
+                let bufferPtr = UnsafeMutablePointer<Float>(mutating: &upsampledBuffer[channelOffset])
 
-            // Process L channel through all layers in series
-            for chain in leftEQChains {
-                chain.applyPendingUpdates()
-                chain.process(buffer: upsampledMutablePointers[0], frameCount: upsampledFrameCount)
-            }
-
-            // Process R channel through all layers in series (if stereo)
-            if channelCount > 1 {
-                for chain in rightEQChains {
-                    chain.applyPendingUpdates()
-                    chain.process(buffer: upsampledMutablePointers[1], frameCount: upsampledFrameCount)
+                if ch == 0 {
+                    // Process L channel through all layers in series
+                    for chain in leftEQChains {
+                        chain.applyPendingUpdates()
+                        chain.process(buffer: bufferPtr, frameCount: upsampledFrameCount)
+                    }
+                } else if ch == 1 {
+                    // Process R channel through all layers in series (if stereo)
+                    for chain in rightEQChains {
+                        chain.applyPendingUpdates()
+                        chain.process(buffer: bufferPtr, frameCount: upsampledFrameCount)
+                    }
                 }
             }
 
             // Downsample back to original rate
             for ch in 0..<Int(channelCount) {
-                let inputPtr = UnsafePointer<Float>(upsampledBuffer[ch * Int(upsampledFrameCount)...])
+                let channelOffset = ch * Int(upsampledFrameCount)
+                let inputPtr = UnsafePointer<Float>(&upsampledBuffer[channelOffset])
                 let outputPtr = processingBuffers[ch]
                 oversampler.downsample(input: inputPtr, frameCount: Int(frameCount), output: [outputPtr])
             }

@@ -107,7 +107,7 @@ final class SweepAnalyser {
         guard channel < channelCount else { return [] }
 
         let offset = channel * sweepSignal.count
-        var channelResponse = Array(repeating: 0.0, count: sweepSignal.count)
+        var channelResponse = Array(repeating: Float(0.0), count: sweepSignal.count)
 
         for i in 0..<sweepSignal.count {
             if offset + i < recordedResponse.count {
@@ -133,7 +133,7 @@ final class SweepAnalyser {
         let fftEngine = FFTEngine(fftSize: fftSize)
 
         // Pad impulse response to FFT size
-        var paddedIR = Array(repeating: 0.0, count: fftSize)
+        var paddedIR = Array(repeating: Float(0.0), count: fftSize)
         for i in 0..<impulseResponse.count {
             paddedIR[i] = impulseResponse[i]
         }
@@ -147,7 +147,7 @@ final class SweepAnalyser {
         for i in 0..<halfSize {
             let real = fftResult.real[i]
             let imag = fftResult.imag[i]
-            let magnitude = sqrt(real * real + imag * imag)
+            let magnitude = sqrt(Double(real * real + imag * imag))
             let magnitudeDB = magnitude > 0 ? 20.0 * log10(magnitude) : -100.0
 
             let frequency = Double(i) * sampleRate / Double(fftSize)
