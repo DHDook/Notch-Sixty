@@ -18,6 +18,8 @@ struct RTADashboardView: View {
     @State private var hoveredBandIndex: Int  = -1
     @State private var hoverPane: Int         = -1   // 0 = input, 1 = output
 
+    private let segmentCount: Int = 30
+
     private var isBypassed: Bool { store.isBypassed }
 
     var body: some View {
@@ -109,30 +111,76 @@ struct RTADashboardView: View {
                         let barW  = size.width / 46.0
                         let gap   = barW / 2.0
 
-                        // Bars
+                        let segH:   CGFloat = (size.height - CGFloat(segmentCount - 1)) / CGFloat(segmentCount)
+                        let segGap: CGFloat = 1.0
+
+                        // Unlit segment grid — draws the full LED matrix dimmed
+                        if !isBypassed {
+                            for i in 0..<count {
+                                let x = CGFloat(i) * (barW + gap)
+                                for seg in 0..<segmentCount {
+                                    let segY = size.height
+                                             - CGFloat(seg + 1) * (segH + segGap)
+                                             + segGap
+                                    ctx.fill(
+                                        Path(CGRect(x: x, y: segY, width: barW, height: segH)),
+                                        with: .color(Color(white: 0.14).opacity(0.65))
+                                    )
+                                }
+                            }
+                        }
+
+                        // Segmented bars
                         for i in 0..<count {
                             let norm = CGFloat(AdvancedDualSpectrumAnalyzer.normaliseDbStatic(
                                 bands[i].currentValue, min: minDb, max: 0))
-                            let h = max(0, norm * size.height)
+                            let litCount = max(0, Int(norm * CGFloat(segmentCount)))
                             let x = CGFloat(i) * (barW + gap)
-                            let rect = CGRect(x: x, y: size.height - h, width: barW, height: h)
-                            let col: Color = isBypassed
-                                ? Color(white: 0.45).opacity(0.5)
-                                : RTADashboardView.levelColor(norm: Float(norm))
-                            ctx.fill(Path(rect), with: .color(col))
+
+                            for seg in 0..<litCount {
+                                let segY = size.height
+                                         - CGFloat(seg + 1) * (segH + segGap)
+                                         + segGap
+                                // Colour is keyed to the segment's own position in the bar, not
+                                // the bar's overall level. This pins the colour zones to fixed
+                                // physical positions on the meter, matching real hardware behaviour.
+                                let segNorm = Float(seg) / Float(segmentCount - 1)
+                                let col: Color = isBypassed
+                                    ? Color(white: 0.45).opacity(0.5)
+                                    : RTADashboardView.levelColor(norm: segNorm)
+                                ctx.fill(
+                                    Path(CGRect(x: x, y: segY, width: barW, height: segH)),
+                                    with: .color(col)
+                                )
+                            }
                         }
 
-                        // Peak indicators
+                        // Floating peak bars
                         if showPeaks && !isBypassed {
                             for i in 0..<count {
                                 let pNorm = CGFloat(AdvancedDualSpectrumAnalyzer.normaliseDbStatic(
                                     bands[i].peakValue, min: minDb, max: 0))
-                                guard pNorm > 0.002 else { continue }
-                                let py = max(0, size.height - pNorm * size.height - 1.5)
-                                let x  = CGFloat(i) * (barW + gap)
-                                let col: Color = bands[i].peakValue >= 0.0 ? .red : .yellow
-                                ctx.fill(Path(CGRect(x: x, y: py, width: barW, height: 2)),
-                                         with: .color(col))
+                                guard pNorm > 0.01 else { continue }
+
+                                // Snap to the segment grid. The peak bar occupies exactly one
+                                // full segment slot — same height and width as a lit segment.
+                                let peakSeg = max(0, min(segmentCount - 1,
+                                                         Int(pNorm * CGFloat(segmentCount))))
+                                let segY = size.height
+                                         - CGFloat(peakSeg + 1) * (segH + segGap)
+                                         + segGap
+                                let x = CGFloat(i) * (barW + gap)
+
+                                // Colour: solid red at or above clip threshold; otherwise bright
+                                // white so it reads clearly above whatever live segments are below.
+                                let peakCol: Color = bands[i].peakValue >= -0.3
+                                    ? Color(red: 1.0, green: 0.15, blue: 0.15)
+                                    : Color(white: 1.0).opacity(0.82)
+
+                                ctx.fill(
+                                    Path(CGRect(x: x, y: segY, width: barW, height: segH)),
+                                    with: .color(peakCol)
+                                )
                             }
                         }
 

@@ -119,8 +119,8 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     // MARK: Ballistics
     private let risingAlpha:  Float = 1.00  // instant attack
     private let fallingAlpha: Float = 0.60  // ~80 ms decay at 20 Hz
-    private let peakHoldMax:  Int   = 20    // 1 second at 20 Hz
-    private let peakDecay:    Float = 0.80
+    private let peakHoldMax:  Int   = 30    // 1.5 seconds at 20 Hz
+    private let peakDecay:    Float = 0.88  // slower fall — each dB step reads as a discrete segment drop
 
     // MARK: Published outputs
     let centerFrequencies: [Float] = [
