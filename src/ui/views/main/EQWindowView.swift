@@ -66,7 +66,7 @@ struct EQWindowView: View {
                         Color.clear
                             .preference(
                                 key: BalanceSliderWidthKey.self,
-                                value: geo.frame(in: .named("mainVStack")).maxX
+                                value: geo.frame(in: .named("topHStack")).maxX
                             )
                     }
                 )
@@ -105,6 +105,7 @@ struct EQWindowView: View {
                     .frame(minWidth: 376)
                 }
             }
+            .coordinateSpace(name: "topHStack")
             .coordinateSpace(name: "mainVStack")
             .onPreferenceChange(BalanceSliderWidthKey.self) { eqGraphMaxX = $0 }
 
