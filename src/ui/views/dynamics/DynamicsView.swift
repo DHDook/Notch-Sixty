@@ -774,11 +774,6 @@ struct DynamicsView: View {
                 .labelsHidden()
             }
 
-            Toggle("Pause Gate", isOn: pauseGateBinding)
-                .toggleStyle(.switch)
-                .controlSize(.regular)
-                .font(.system(size: 13))
-
             Toggle("4x Oversampling", isOn: oversamplingBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
