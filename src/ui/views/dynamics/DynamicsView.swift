@@ -36,6 +36,7 @@ struct DynamicsView: View {
                         multibandSection
                         compressorSection
                         expanderSection
+                        pauseGateSection
                         ltiSymmetrySection
                         ltiPanningSection
                         ltiIRAlignmentSection
@@ -48,7 +49,6 @@ struct DynamicsView: View {
                     // ── Right column ─────────────────────────────────────────
                     Form {
                         loudnessMatchSection
-                        pauseGateSection
                         clipperSection
                         limiterSection
                         stereoMatrixSection
@@ -510,44 +510,81 @@ struct DynamicsView: View {
 
     private var pauseGateSection: some View {
         Section {
-            Toggle("Enabled", isOn: pauseGateBinding)
+            Toggle("Enabled", isOn: pauseGateEnabledBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
                 .font(.system(size: 13))
 
+            // ── Preset picker ─────────────────────────────────────────
+            HStack(spacing: 8) {
+                Text("Preset")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 80, alignment: .leading)
+                Picker("", selection: pauseGatePresetBinding) {
+                    ForEach(PauseGatePreset.allCases, id: \.self) { preset in
+                        Text(preset.rawValue).tag(preset)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: 160, alignment: .leading)
+                .disabled(!store.dynamicsConfig.advanced.pauseGateEnabled)
+            }
+
+            // ── Individual parameter sliders ──────────────────────────
             DynamicsSliderRow(
                 label: "Threshold",
                 value: pauseGateThresholdBinding,
-                range: -120.0...(-40.0),
+                range: -80.0 ... -40.0,
                 step: 1.0,
-                formatValue: { String(format: "%.0f dB", $0) },
+                formatValue: { String(format: "%.0f dBFS", $0) },
+                leftEndLabel: "Quiet",
+                rightEndLabel: "Loud",
                 isDisabled: !store.dynamicsConfig.advanced.pauseGateEnabled
             )
 
             DynamicsSliderRow(
-                label: "Hold Time",
-                value: pauseGateHoldTimeBinding,
-                range: 0.0...5000.0,
-                step: 10.0,
+                label: "Hold",
+                value: pauseGateHoldBinding,
+                range: 100.0 ... 2000.0,
+                step: 50.0,
                 formatValue: { String(format: "%.0f ms", $0) },
+                leftEndLabel: "Tight",
+                rightEndLabel: "Loose",
                 isDisabled: !store.dynamicsConfig.advanced.pauseGateEnabled
             )
 
             DynamicsSliderRow(
-                label: "Release (Fade-Out)",
-                value: pauseGateReleaseBinding,
-                range: 0.0...5000.0,
-                step: 10.0,
-                formatValue: { String(format: "%.0f ms", $0) },
-                isDisabled: !store.dynamicsConfig.advanced.pauseGateEnabled
-            )
-
-            DynamicsSliderRow(
-                label: "Attack (Fade-In)",
+                label: "Resume Speed",
                 value: pauseGateAttackBinding,
-                range: 0.0...500.0,
+                range: 1.0 ... 100.0,
                 step: 1.0,
                 formatValue: { String(format: "%.0f ms", $0) },
+                leftEndLabel: "Fast",
+                rightEndLabel: "Slow",
+                isDisabled: !store.dynamicsConfig.advanced.pauseGateEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "Close Speed",
+                value: pauseGateReleaseBinding,
+                range: 10.0 ... 500.0,
+                step: 10.0,
+                formatValue: { String(format: "%.0f ms", $0) },
+                leftEndLabel: "Fast",
+                rightEndLabel: "Slow",
+                isDisabled: !store.dynamicsConfig.advanced.pauseGateEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "Hysteresis",
+                value: pauseGateHysteresisBinding,
+                range: 0.0 ... 6.0,
+                step: 0.5,
+                formatValue: { String(format: "%.1f dB", $0) },
+                leftEndLabel: "None",
+                rightEndLabel: "Wide",
                 isDisabled: !store.dynamicsConfig.advanced.pauseGateEnabled
             )
         } header: {
@@ -1279,34 +1316,96 @@ struct DynamicsView: View {
             set: { val in var adv = store.dynamicsConfig.advanced; adv.ditherMode = val; store.updateAdvancedProcessing(adv) }
         )
     }
+    // MARK: - Pause Gate Bindings (full section)
+
+    private var pauseGateEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.pauseGateEnabled },
+            set: { val in
+                var adv = store.dynamicsConfig.advanced
+                adv.pauseGateEnabled = val
+                store.updateAdvancedProcessing(adv)
+            }
+        )
+    }
+
+    private var pauseGatePresetBinding: Binding<PauseGatePreset> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.pauseGatePreset },
+            set: { preset in
+                var adv = store.dynamicsConfig.advanced
+                adv.pauseGatePreset = preset
+                // Apply preset parameter bundle if not custom
+                if let params = preset.parameters {
+                    adv.pauseGateThresholdDBFS = params.thresholdDBFS
+                    adv.pauseGateHoldMs        = params.holdMs
+                    adv.pauseGateAttackMs      = params.attackMs
+                    adv.pauseGateReleaseMs     = params.releaseMs
+                    adv.pauseGateHysteresisDB  = params.hysteresisDB
+                }
+                store.updateAdvancedProcessing(adv)
+            }
+        )
+    }
+
+    /// Shared helper: updates individual pause gate parameters and sets preset to .custom
+    /// whenever a slider is moved directly (since the values no longer match any named preset).
+    private func updatePauseGateParam(_ update: (inout AdvancedProcessingConfig) -> Void) {
+        var adv = store.dynamicsConfig.advanced
+        update(&adv)
+        // Check if the current values still match any named preset; if not, mark as custom.
+        let matchedPreset = PauseGatePreset.allCases.first { preset in
+            guard let params = preset.parameters else { return false }
+            return params.thresholdDBFS == adv.pauseGateThresholdDBFS
+                && params.holdMs        == adv.pauseGateHoldMs
+                && params.attackMs      == adv.pauseGateAttackMs
+                && params.releaseMs     == adv.pauseGateReleaseMs
+                && params.hysteresisDB  == adv.pauseGateHysteresisDB
+        }
+        adv.pauseGatePreset = matchedPreset ?? .custom
+        store.updateAdvancedProcessing(adv)
+    }
+
+    private var pauseGateThresholdBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.pauseGateThresholdDBFS) },
+            set: { v in updatePauseGateParam { $0.pauseGateThresholdDBFS = Float(v) } }
+        )
+    }
+
+    private var pauseGateHoldBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.pauseGateHoldMs) },
+            set: { v in updatePauseGateParam { $0.pauseGateHoldMs = Float(v) } }
+        )
+    }
+
+    private var pauseGateAttackBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.pauseGateAttackMs) },
+            set: { v in updatePauseGateParam { $0.pauseGateAttackMs = Float(v) } }
+        )
+    }
+
+    private var pauseGateReleaseBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.pauseGateReleaseMs) },
+            set: { v in updatePauseGateParam { $0.pauseGateReleaseMs = Float(v) } }
+        )
+    }
+
+    private var pauseGateHysteresisBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.pauseGateHysteresisDB) },
+            set: { v in updatePauseGateParam { $0.pauseGateHysteresisDB = Float(v) } }
+        )
+    }
+
+    // Keep the simple binding for systemUtilitiesSection
     private var pauseGateBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.advanced.pauseGateEnabled },
             set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateEnabled = val; store.updateAdvancedProcessing(adv) }
-        )
-    }
-    private var pauseGateThresholdBinding: Binding<Double> {
-        Binding(
-            get: { Double(store.dynamicsConfig.advanced.pauseGateThresholdDB) },
-            set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateThresholdDB = Float(val); store.updateAdvancedProcessing(adv) }
-        )
-    }
-    private var pauseGateHoldTimeBinding: Binding<Double> {
-        Binding(
-            get: { Double(store.dynamicsConfig.advanced.pauseGateHoldTimeMs) },
-            set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateHoldTimeMs = Float(val); store.updateAdvancedProcessing(adv) }
-        )
-    }
-    private var pauseGateReleaseBinding: Binding<Double> {
-        Binding(
-            get: { Double(store.dynamicsConfig.advanced.pauseGateReleaseMs) },
-            set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateReleaseMs = Float(val); store.updateAdvancedProcessing(adv) }
-        )
-    }
-    private var pauseGateAttackBinding: Binding<Double> {
-        Binding(
-            get: { Double(store.dynamicsConfig.advanced.pauseGateAttackMs) },
-            set: { val in var adv = store.dynamicsConfig.advanced; adv.pauseGateAttackMs = Float(val); store.updateAdvancedProcessing(adv) }
         )
     }
     private var oversamplingBinding: Binding<Bool> {
@@ -1628,7 +1727,7 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "De-Harsh", body: "High-frequency tilt filter attenuating above ~3.5 kHz to reduce tweeter fatigue.")
                         Divider()
-                        definitionEntry(title: "Pause Gate", body: "Smoothly silences output during extended silence, preventing amplifier hiss.")
+                        definitionEntry(title: "Pause Gate", body: "Silences output when signal falls below the threshold for the Hold duration, then reopens at the Resume Speed when audio returns. Use the Preset picker or tune individually to match your amplifier and listening habits.")
                         Divider()
                         definitionEntry(title: "Sync Buffer", body: "Synchronises processing buffer to latency mode, preventing dropouts at low latency settings.")
                         Divider()

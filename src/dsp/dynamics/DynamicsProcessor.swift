@@ -187,7 +187,17 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _timeDelayBits:          ManagedAtomic<Int32>  // Float bits, ms
     private let _deltaSoloEnabled:       ManagedAtomic<Int32>
     private let _latencyModeBits:        ManagedAtomic<Int32>  // LatencyMode.rawValue
-    private let _pauseGateEnabled:       ManagedAtomic<Int32>
+    private let _pauseGateEnabled:          ManagedAtomic<Int32>
+    /// Threshold as linear RMS power value, stored as Float bits. Default: 1e-6 (= −60 dBFS power).
+    private let _pauseGateThresholdBits:    ManagedAtomic<Int32>
+    /// Hold/smoothing time constant, stored as Float bits of the alpha coefficient.
+    private let _pauseGateHoldAlphaBits:    ManagedAtomic<Int32>
+    /// Attack (open) time constant, stored as Float bits of the alpha coefficient.
+    private let _pauseGateAttackAlphaBits:  ManagedAtomic<Int32>
+    /// Release (close) time constant, stored as Float bits of the alpha coefficient.
+    private let _pauseGateReleaseAlphaBits: ManagedAtomic<Int32>
+    /// Hysteresis factor (linear amplitude ratio), stored as Float bits.
+    private let _pauseGateHysteresisBits:   ManagedAtomic<Int32>
     private let _syncBufferEnabled:      ManagedAtomic<Int32>
     private let _ditherModeBits:         ManagedAtomic<Int32>  // DitherMode.rawValue
     private let _subBassPhaseEnabled:  ManagedAtomic<Int32>
@@ -407,7 +417,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         _timeDelayBits          = ManagedAtomic(floatBits(0.0))
         _deltaSoloEnabled       = ManagedAtomic(0)
         _latencyModeBits        = ManagedAtomic(Int32(LatencyMode.music.rawValue))
-        _pauseGateEnabled       = ManagedAtomic(0)
+        _pauseGateEnabled            = ManagedAtomic(0)
+        _pauseGateThresholdBits      = ManagedAtomic(floatBits(1e-6))
+        _pauseGateHoldAlphaBits      = ManagedAtomic(floatBits(Float(exp(-1.0 / (sampleRate * 0.500)))))
+        _pauseGateAttackAlphaBits    = ManagedAtomic(floatBits(Float(exp(-1.0 / (sampleRate * 0.010)))))
+        _pauseGateReleaseAlphaBits   = ManagedAtomic(floatBits(Float(exp(-1.0 / (sampleRate * 0.200)))))
+        _pauseGateHysteresisBits     = ManagedAtomic(floatBits(pow(10.0, 3.0 / 20.0)))
         _syncBufferEnabled      = ManagedAtomic(0)
         _ditherModeBits         = ManagedAtomic(Int32(DitherMode.bypass.rawValue))
         _subBassPhaseEnabled  = ManagedAtomic(0)
@@ -562,6 +577,32 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setPauseGateEnabled(_ v: Bool) {
         _pauseGateEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
+    /// Sets the five pause-gate parameters from an `AdvancedProcessingConfig`.
+    /// All alpha values are recomputed from millisecond inputs here on the main thread
+    /// so the audio thread only reads pre-baked coefficients.
+    func setPauseGateParameters(
+        thresholdDBFS: Float,
+        holdMs:        Float,
+        attackMs:      Float,
+        releaseMs:     Float,
+        hysteresisDB:  Float
+    ) {
+        let sr = storedSampleRate
+        // Convert dBFS threshold to linear RMS power: P = 10^(dBFS/10)
+        let thresholdPower = pow(10.0, Double(thresholdDBFS) / 10.0)
+        _pauseGateThresholdBits.store(
+            floatBits(Float(thresholdPower)), ordering: .relaxed)
+        // Pre-bake alpha coefficients: alpha = exp(−1 / (sr × t_seconds))
+        let holdAlpha    = Float(exp(-1.0 / (sr * Double(max(holdMs,    1)) / 1000.0)))
+        let attackAlpha  = Float(exp(-1.0 / (sr * Double(max(attackMs,  0.1)) / 1000.0)))
+        let releaseAlpha = Float(exp(-1.0 / (sr * Double(max(releaseMs, 1)) / 1000.0)))
+        _pauseGateHoldAlphaBits.store(floatBits(holdAlpha),    ordering: .relaxed)
+        _pauseGateAttackAlphaBits.store(floatBits(attackAlpha),  ordering: .relaxed)
+        _pauseGateReleaseAlphaBits.store(floatBits(releaseAlpha), ordering: .relaxed)
+        // Hysteresis factor: linear amplitude ratio for the close-threshold reduction
+        let hystFactor = pow(10.0, Double(max(hysteresisDB, 0)) / 20.0)
+        _pauseGateHysteresisBits.store(floatBits(Float(hystFactor)), ordering: .relaxed)
+    }
     func setHardwareSyncBufferEnabled(_ v: Bool) {
         _syncBufferEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
@@ -646,6 +687,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         setDeltaSoloActive(adv.deltaSoloActive)
         setLatencyMode(adv.latencyMode)
         setPauseGateEnabled(adv.pauseGateEnabled)
+        setPauseGateParameters(
+            thresholdDBFS: adv.pauseGateThresholdDBFS,
+            holdMs:        adv.pauseGateHoldMs,
+            attackMs:      adv.pauseGateAttackMs,
+            releaseMs:     adv.pauseGateReleaseMs,
+            hysteresisDB:  adv.pauseGateHysteresisDB
+        )
         setHardwareSyncBufferEnabled(adv.hardwareSyncBufferEnabled)
         setDitherMode(adv.ditherMode)
         setSubBassPhaseAlignmentEnabled(adv.subBassPhaseAlignmentEnabled)
@@ -979,51 +1027,54 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
     }
 
-    /// Dynamic pause gate: silences output smoothly when RMS falls below −60 dBFS for 500 ms.
+    /// Dynamic pause gate: silences output smoothly when RMS falls below threshold for hold duration.
     /// Uses gain envelope with attack, hold, and release to avoid audible chatter.
     @inline(__always)
     private func processPauseGate(
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
     ) {
-        let holdAlpha: Float = Float(exp(-1.0 / (storedSampleRate * 0.5)))
-        let threshold: Float = 1e-6  // −60 dBFS power
-        let attackAlpha: Float = Float(exp(-1.0 / (storedSampleRate * 0.010)))  // 10 ms attack
-        let releaseAlpha: Float = Float(exp(-1.0 / (storedSampleRate * 0.200))) // 200 ms release
-        let hysteresisDB: Float = 3.0  // Hysteresis to prevent chatter
-        let hysteresisFactor: Float = pow(10.0, hysteresisDB / 20.0)
+        // Read all parameters from atomics once per callback — avoids redundant atomic
+        // loads inside the per-sample loop and ensures a consistent parameter set.
+        let holdAlpha    = bitsToFloat(_pauseGateHoldAlphaBits.load(ordering: .relaxed))
+        let attackAlpha  = bitsToFloat(_pauseGateAttackAlphaBits.load(ordering: .relaxed))
+        let releaseAlpha = bitsToFloat(_pauseGateReleaseAlphaBits.load(ordering: .relaxed))
+        let threshold    = bitsToFloat(_pauseGateThresholdBits.load(ordering: .relaxed))
+        let hystFactor   = bitsToFloat(_pauseGateHysteresisBits.load(ordering: .relaxed))
+
+        // Hysteresis: open threshold is the raw threshold; close threshold is lower by
+        // the hysteresis factor so the gate does not chatter near the boundary.
+        let openThreshold  = threshold
+        let closeThreshold = threshold / hystFactor
 
         var gateGain: Float = pauseGateIsOpen ? 1.0 : 0.0
 
         for i in 0..<count {
+            // Accumulate instantaneous power across all channels.
             var rmsSum: Float = 0.0
             for ch in 0..<numCh {
                 if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
                     rmsSum += buf[i] * buf[i]
                 }
             }
-            pauseGateLevel = holdAlpha * pauseGateLevel + (1.0 - holdAlpha) * (rmsSum / Float(max(numCh, 1)))
+            // Smooth the level detector — holdAlpha sets the effective integration window.
+            pauseGateLevel = holdAlpha * pauseGateLevel +
+                             (1.0 - holdAlpha) * (rmsSum / Float(max(numCh, 1)))
 
-            // Hysteresis: different thresholds for opening and closing
-            let openThreshold = threshold
-            let closeThreshold = threshold / hysteresisFactor
-
-            let shouldBeOpen = pauseGateLevel >= openThreshold
-            let shouldBeClosed = pauseGateLevel < closeThreshold
-
-            // Update gate state with hysteresis
-            if shouldBeOpen && !pauseGateIsOpen {
+            // Update gate state with hysteresis.
+            if pauseGateLevel >= openThreshold && !pauseGateIsOpen {
                 pauseGateIsOpen = true
-            } else if shouldBeClosed && pauseGateIsOpen {
+            } else if pauseGateLevel < closeThreshold && pauseGateIsOpen {
                 pauseGateIsOpen = false
             }
 
-            // Smooth gain envelope
+            // Advance the gain envelope toward target using asymmetric attack/release.
+            // attackAlpha governs how fast the gate reopens (resume speed).
             let targetGain: Float = pauseGateIsOpen ? 1.0 : 0.0
             gateGain = targetGain > gateGain
-                ? attackAlpha * gateGain + (1.0 - attackAlpha) * targetGain
+                ? attackAlpha  * gateGain + (1.0 - attackAlpha)  * targetGain
                 : releaseAlpha * gateGain + (1.0 - releaseAlpha) * targetGain
 
-            // Apply gain to all channels
+            // Apply gain to all channels.
             for ch in 0..<numCh {
                 if let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) {
                     buf[i] *= gateGain
