@@ -61,6 +61,15 @@ struct EQWindowView: View {
                         )
                     )
                 }
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(
+                                key: BalanceSliderWidthKey.self,
+                                value: geo.frame(in: .named("mainVStack")).maxX
+                            )
+                    }
+                )
 
                 DynamicsInlineView()
                     .padding(.leading, 24)
@@ -96,15 +105,6 @@ struct EQWindowView: View {
                     .frame(minWidth: 376)
                 }
             }
-            .background(
-                GeometryReader { geo in
-                    Color.clear
-                        .preference(
-                            key: BalanceSliderWidthKey.self,
-                            value: geo.frame(in: .named("mainVStack")).maxX
-                        )
-                }
-            )
             .coordinateSpace(name: "mainVStack")
             .onPreferenceChange(BalanceSliderWidthKey.self) { eqGraphMaxX = $0 }
 
@@ -113,7 +113,8 @@ struct EQWindowView: View {
                 Spacer()
             }
             .frame(width: eqGraphMaxX > 0 ? eqGraphMaxX : nil, alignment: .leading)
-            .padding(.leading, 8)
+            .offset(x: -8)
+            .padding(.leading, 0)
             .padding(.trailing, 4)
             .padding(.top, 4)
 
