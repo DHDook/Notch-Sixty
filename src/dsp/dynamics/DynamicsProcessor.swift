@@ -931,11 +931,16 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
 
         // Constant-power symmetry balance law.
-        let balance = bitsToFloat(_balanceBits.load(ordering: .relaxed))
-        let angle   = (balance + 1.0) * Float.pi * 0.25   // 0 … π/2
-        let gainL   = max(0.0, cos(angle))
-        let gainR   = max(0.0, sin(angle))
-        for i in 0..<count { bufL[i] *= gainL; bufR[i] *= gainR }
+        // balance ∈ [−1, +1]: −1 = full left, 0 = centre (unity gain both channels), +1 = full right.
+        // Map to angle ∈ [0, π/2] symmetrically: centre → π/4, giving gainL = gainR = 1.0.
+        // The √2 pre-scale ensures that cos(π/4)×√2 = 1.0 at centre, maintaining unity gain.
+        let balance  = bitsToFloat(_balanceBits.load(ordering: .relaxed))
+        let angle    = (balance + 1.0) * Float.pi * 0.25   // 0 … π/2
+        let gainL    = max(0.0, cos(angle)) * Float.sqrt2
+        let gainR    = max(0.0, sin(angle)) * Float.sqrt2
+        if gainL != 1.0 || gainR != 1.0 {
+            for i in 0..<count { bufL[i] *= gainL; bufR[i] *= gainR }
+        }
 
         // Live balance meter: (powerR − powerL) / totalPower.
         var powerL: Float = 0.0, powerR: Float = 0.0
@@ -1717,3 +1722,8 @@ private func floatBits(_ f: Float) -> Int32 { Int32(bitPattern: f.bitPattern) }
 
 @inline(__always)
 private func bitsToFloat(_ bits: Int32) -> Float { Float(bitPattern: UInt32(bitPattern: bits)) }
+
+private extension Float {
+    /// √2 ≈ 1.41421356. Used to normalise constant-power balance law to unity at centre.
+    static let sqrt2: Float = 1.4142135623730951
+}

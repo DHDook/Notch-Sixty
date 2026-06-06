@@ -101,7 +101,12 @@ final class StereoWidener: @unchecked Sendable {
     private func clampW(_ w: Float) -> Float { max(0.0, min(2.0, w)) }
 
     func applyConfig(_ config: StereoWidenerConfig) {
+        let wasEnabled = isEnabled
         setEnabled(config.isEnabled)
+        // Clear any accumulated filter state (including potential NaN) whenever the
+        // widener transitions from off to on. Without this, a state poisoned during
+        // a previous invalid-sampleRate callback would persist across re-enables.
+        if config.isEnabled && !wasEnabled { resetState() }
         setWidthLow(config.widthFactorLow)
         setWidthMid(config.widthFactorMid)
         setWidthHigh(config.widthFactorHigh)
@@ -139,7 +144,8 @@ final class StereoWidener: @unchecked Sendable {
         count: Int,
         sampleRate: Double
     ) {
-        guard numCh >= 2, count > 0, count <= Self.maxFrames else { return }
+        guard numCh >= 2, count > 0, count <= Self.maxFrames,
+              sampleRate > 0, sampleRate.isFinite else { return }
         guard _enabled.load(ordering: .relaxed) != 0 else { return }
 
         let wL  = bitsToFloatW(_widthLowBits.load(ordering: .relaxed))

@@ -44,7 +44,16 @@ final class OversamplingProcessor {
             h[n] = sinc * window
         }
 
-        // Upsampling coefficients: divide by factor to compensate for zero-insertion
+        // Normalize prototype so sum(h) = factor.
+        // The Kaiser-windowed sinc as computed has sum(h) ≈ 2.22 for these parameters,
+        // not 4.0. Without normalization the polyphase upsampler output is ~0.555× amplitude.
+        let sumH = h.reduce(0.0, +)
+        let normScale = Double(Self.factor) / sumH
+        h = h.map { $0 * normScale }
+
+        // Upsampling coefficients: h_norm[p + k*factor] / factor.
+        // With h normalized to sum = factor, dividing each tap by factor gives
+        // a per-phase sum of 1.0 — correct unity gain for the interpolating filter.
         var upC = [[Float]](repeating: [Float](repeating: 0, count: Self.tapsPerPhase),
                           count: Self.factor)
         for p in 0..<Self.factor {
@@ -54,7 +63,8 @@ final class OversamplingProcessor {
         }
         upCoeffs = upC
 
-        // Downsampling coefficients: use full filter (no division by factor)
+        // Downsampling coefficients: only phase 0 is used per output sample.
+        // Store all phases so the array shape is unchanged, but decimation applies phase 0 only.
         var downC = [[Float]](repeating: [Float](repeating: 0, count: Self.tapsPerPhase),
                             count: Self.factor)
         for p in 0..<Self.factor {
@@ -155,19 +165,20 @@ final class OversamplingProcessor {
     ) {
         let T = Self.tapsPerPhase
         let F = Self.factor
+        // Phase 0 coefficients are the only subfilter applied per output sample.
+        // Polyphase decimation by factor F: load F new input samples, then evaluate
+        // a single polyphase branch (phase 0) to produce one output sample.
+        // Summing all F branches (the previous code) gives gain ≈ sum(h) instead of 1.
+        let phaseCoeffs = downCoeffs[0]
         for i in 0..<frameCount {
             // Load F upsampled samples into the circular delay line.
             for p in 0..<F {
                 delay[(delayIdx + p) % T] = src[i * F + p]
             }
-            // Sum all F polyphase subfilters.
+            // Apply phase 0 only.
             var acc: Float = 0
-            for p in 0..<F {
-                let phaseCoeffs = downCoeffs[p]
-                let base = delayIdx + p
-                for k in 0..<T {
-                    acc += phaseCoeffs[k] * delay[(base - k + T) % T]
-                }
+            for k in 0..<T {
+                acc += phaseCoeffs[k] * delay[(delayIdx - k + T) % T]
             }
             dst[i] = acc
             delayIdx = (delayIdx + F) % T
