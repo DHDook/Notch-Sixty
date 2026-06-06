@@ -697,8 +697,6 @@ struct DynamicsView: View {
                 .disabled(!store.dynamicsConfig.limiter.isEnabled)
                 .opacity(!store.dynamicsConfig.limiter.isEnabled ? 0.4 : 1.0)
 
-            Divider()
-
             Toggle("Auto-Headroom", isOn: autoHeadroomEnabledBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
