@@ -65,11 +65,28 @@ final class OversamplingProcessor {
 
         // Downsampling coefficients: only phase 0 is used per output sample.
         // Store all phases so the array shape is unchanged, but decimation applies phase 0 only.
+        //
+        // GAIN BUDGET — why we multiply by factor here:
+        //
+        // The upsampler inserts (factor − 1) zeros between each input sample and then
+        // filters, which produces `factor` output samples per input sample. Because the
+        // prototype filter was normalised so that sum(h) = factor, dividing each tap by
+        // factor in upCoeffs gives per-phase sums of 1.0 — but the actual amplitude of
+        // each output sample is 1/factor (0.25 for 4×). The upsampled signal is therefore
+        // at 1/4 the input amplitude in the oversampled domain.
+        //
+        // The decimator must compensate by applying a gain of `factor` to recover unity:
+        //   round-trip gain = (1/factor) [upsample] × (factor × phase-0 sum) [downsample]
+        //                   = (1/4) × (4 × 1.0) = 1.0  ✓
+        //
+        // Without this ×factor, the round-trip gain is exactly 1/factor = 0.25 (−12 dB),
+        // which is the audible attenuation reported when oversampling is enabled.
+        let factorF = Float(Self.factor)
         var downC = [[Float]](repeating: [Float](repeating: 0, count: Self.tapsPerPhase),
                             count: Self.factor)
         for p in 0..<Self.factor {
             for k in 0..<Self.tapsPerPhase {
-                downC[p][k] = Float(h[p + k * Self.factor])
+                downC[p][k] = Float(h[p + k * Self.factor]) * factorF
             }
         }
         downCoeffs = downC
