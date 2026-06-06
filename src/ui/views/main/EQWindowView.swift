@@ -10,8 +10,6 @@ struct EQWindowView: View {
     @State private var metersEnabledUI = true
     @State private var showDriverSheet = true
     @State private var showSaveSheet = false
-    @State private var graphMinX: CGFloat = 0
-    @State private var graphMaxX: CGFloat = 0
 
     /// Whether the driver installation overlay should be shown.
     private var needsDriverInstallation: Bool {
@@ -44,15 +42,6 @@ struct EQWindowView: View {
                     .opacity(metersEnabledUI ? 1.0 : 0.35)
                     .saturation(metersEnabledUI ? 1.0 : 0.0)
                     .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear
-                                .preference(
-                                    key: GraphMinXKey.self,
-                                    value: geo.frame(in: .named("mainVStack")).minX
-                                )
-                        }
-                    )
 
                 Spacer(minLength: 64)
 
@@ -70,16 +59,9 @@ struct EQWindowView: View {
                             set: { store.updateChannelBalance($0) }
                         )
                     )
+
+                    EQCurveView(metersEnabled: metersEnabledUI)
                 }
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .preference(
-                                key: GraphMaxXKey.self,
-                                value: geo.frame(in: .named("mainVStack")).maxX
-                            )
-                    }
-                )
 
                 DynamicsInlineView()
                     .padding(.leading, 24)
@@ -115,20 +97,6 @@ struct EQWindowView: View {
                     .frame(minWidth: 376)
                 }
             }
-            .coordinateSpace(name: "topHStack")
-            .coordinateSpace(name: "mainVStack")
-            .onPreferenceChange(GraphMinXKey.self) { graphMinX = $0 }
-            .onPreferenceChange(GraphMaxXKey.self) { graphMaxX = $0 }
-
-            HStack(spacing: 0) {
-                EQCurveView(metersEnabled: metersEnabledUI)
-                Spacer()
-            }
-            .frame(width: graphMaxX - graphMinX, alignment: .leading)
-            .offset(x: graphMinX)
-            .padding(.leading, 0)
-            .padding(.trailing, 4)
-            .padding(.top, 4)
 
             // Dual 31-band real-time spectrum analyser
             RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
@@ -378,22 +346,6 @@ struct SystemEQToggleView: View {
             get: { !store.isBypassed },
             set: { store.isBypassed = !$0 }
         )
-    }
-}
-
-// MARK: - Preference Keys
-
-private struct GraphMinXKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct GraphMaxXKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }
 
