@@ -205,6 +205,7 @@ struct MasterVolumeSlider: View {
             }
             .frame(height: 20)
             .frame(width: 120)
+            .id(volume) // Force re-render when volume changes
             .onAppear {
                 localVolume = volume
             }
