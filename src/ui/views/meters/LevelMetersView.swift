@@ -172,6 +172,7 @@ struct ChannelBalanceSlider: View {
 struct MasterVolumeSlider: View {
     @Binding var volume: Float
     @Binding var isMuted: Bool
+    @State private var isDragging = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -196,15 +197,19 @@ struct MasterVolumeSlider: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
+                            isDragging = true
                             let newValue = valueAt(position: value.location, in: geometry.size)
                             volume = Float(newValue)
 
-                            // Auto-mute at zero volume
+                            // Auto-mute at zero volume (only when dragging)
                             if volume <= 0.0 {
                                 isMuted = true
                             }
-                            // Auto-unmute when volume is increased from 0
-                            else if volume > 0.0 && isMuted {
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                            // Auto-unmute when volume is increased from 0 (only when dragging ends)
+                            if volume > 0.0 && isMuted {
                                 isMuted = false
                             }
                         }
@@ -214,6 +219,14 @@ struct MasterVolumeSlider: View {
             .frame(width: 120)
 
             HStack(spacing: 4) {
+                Button(action: {
+                    isMuted.toggle()
+                }) {
+                    Text("Mute")
+                        .font(.system(size: 8))
+                }
+                .buttonStyle(PressedButtonStyle(isPressed: isMuted))
+                .controlSize(.mini)
                 Spacer()
                 Text(volumePercentage)
                     .font(.system(size: 8))
@@ -221,16 +234,6 @@ struct MasterVolumeSlider: View {
                     .frame(minWidth: 32, alignment: .trailing)
             }
             .frame(width: 120)
-
-            HStack(spacing: 6) {
-                Toggle("", isOn: $isMuted)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
-                Text("Mute")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 120, alignment: .leading)
         }
     }
 
@@ -247,6 +250,19 @@ struct MasterVolumeSlider: View {
     private func valueAt(position: CGPoint, in size: CGSize) -> Double {
         let normalizedPosition = max(0, min(1, position.x / size.width))
         return normalizedPosition // 0.0 to 1.0
+    }
+}
+
+struct PressedButtonStyle: ButtonStyle {
+    let isPressed: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isPressed ? .primary : .secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(isPressed ? Color.accentColor.opacity(0.3) : Color.clear)
+            .cornerRadius(4)
     }
 }
 

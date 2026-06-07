@@ -8,6 +8,8 @@ struct EQWindowView: View {
     @StateObject private var driverManager = DriverManager.shared
     @State private var showCompareHelp = false
     @State private var metersEnabledUI = true
+    @State private var localVolume: Float = 1.0
+    @State private var localIsMuted: Bool = false
     @State private var showDriverSheet = true
     @State private var showSaveSheet = false
 
@@ -70,18 +72,36 @@ struct EQWindowView: View {
 
                     MasterVolumeSlider(
                         volume: Binding(
-                            get: { store.routingCoordinator.masterVolume },
+                            get: {
+                                if store.routingStatus.isActive {
+                                    return store.routingCoordinator.masterVolume
+                                } else {
+                                    return localVolume
+                                }
+                            },
                             set: { newVolume in
-                                store.routingCoordinator.setMasterVolume(newVolume)
-                                // Unmute when volume is increased from 0
-                                if newVolume > 0.0 && store.routingCoordinator.isMuted {
-                                    store.routingCoordinator.setMuted(false)
+                                if store.routingStatus.isActive {
+                                    store.routingCoordinator.setMasterVolume(newVolume)
+                                } else {
+                                    localVolume = newVolume
                                 }
                             }
                         ),
                         isMuted: Binding(
-                            get: { store.routingCoordinator.isMuted },
-                            set: { store.routingCoordinator.setMuted($0) }
+                            get: {
+                                if store.routingStatus.isActive {
+                                    return store.routingCoordinator.isMuted
+                                } else {
+                                    return localIsMuted
+                                }
+                            },
+                            set: { newMuted in
+                                if store.routingStatus.isActive {
+                                    store.routingCoordinator.setMuted(newMuted)
+                                } else {
+                                    localIsMuted = newMuted
+                                }
+                            }
                         )
                     )
                 }
