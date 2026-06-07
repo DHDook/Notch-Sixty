@@ -192,6 +192,9 @@ struct EQWindowView: View {
                         }
                     }
 
+                    Spacer()
+                        .frame(width: 124)
+
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Mode")
