@@ -45,9 +45,9 @@ struct EQWindowView: View {
                         .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
 
                     EQCurveView(metersEnabled: metersEnabledUI)
-                        .frame(width: 120, alignment: .leading)
+                        .frame(width: 300, alignment: .leading)
                         .offset(x: -8)
-                        .padding(.leading, 8)
+                        .padding(.leading, 16)
                         .padding(.top, 4)
                 }
 
