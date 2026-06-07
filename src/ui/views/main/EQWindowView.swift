@@ -193,7 +193,6 @@ struct EQWindowView: View {
                     }
 
                     Spacer()
-                        .frame(width: 64)
 
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
@@ -253,7 +252,6 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
-                .frame(minWidth: 280, maxWidth: 280, alignment: .trailing)
             }
             .padding(.vertical, 4)
 
