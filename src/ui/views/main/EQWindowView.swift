@@ -191,12 +191,8 @@ struct EQWindowView: View {
                             .frame(width: 60)
                         }
                     }
-                }
 
-                Spacer()
-
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .center, spacing: 4) {
+                    VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Mode")
                                 .font(.caption)
@@ -236,9 +232,7 @@ struct EQWindowView: View {
                         .frame(width: 225)
                     }
 
-                    Spacer()
-
-                    VStack(alignment: .center, spacing: 4) {
+                    VStack(spacing: 4) {
                         Text("Flatten")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -254,6 +248,8 @@ struct EQWindowView: View {
                         .help("Reset all gains to 0 dB while keeping current band configuration")
                     }
                 }
+
+                Spacer()
                 .frame(minWidth: 280, maxWidth: 280, alignment: .trailing)
             }
             .padding(.vertical, 4)
