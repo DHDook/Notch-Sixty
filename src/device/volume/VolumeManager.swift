@@ -164,6 +164,14 @@ final class VolumeManager: ObservableObject {
             }
         }
         logger.info("Registered volume listener on driver device \(driverID)")
+
+        // Listen for output device volume changes (external volume controls)
+        volumeService.observeDeviceVolumeChanges(deviceID: outputID) { [weak self] newVolume in
+            Task { @MainActor in
+                self?.handleOutputVolumeChanged(newVolume)
+            }
+        }
+        logger.info("Registered volume listener on output device \(outputID)")
         
         // Listen for mute changes on driver
         volumeService.observeMuteChanges(on: driverID) { [weak self] newMuted in
@@ -204,6 +212,7 @@ final class VolumeManager: ObservableObject {
             volumeService.stopObservingMuteChanges(on: driverID)
         }
         if let outputID = outputDeviceID {
+            volumeService.stopObservingDeviceVolumeChanges(deviceID: outputID)
             volumeService.stopObservingMuteChanges(on: outputID)
         }
 
@@ -255,6 +264,40 @@ final class VolumeManager: ObservableObject {
         onVolumeGainChanged?(volumeGainForSharedMemory())
     }
 
+    /// Handles volume changes from the output device (external controls like keyboard/menu bar).
+    /// Updates internal state immediately, then forwards to driver device.
+    private func handleOutputVolumeChanged(_ newVolume: Float) {
+        // Update internal state immediately (UI needs this)
+        gain = newVolume
+
+        // Skip forwarding during settling window
+        guard !isSettling else {
+            logger.debug("Skipping output volume forward during settling window: \(newVolume)")
+            return
+        }
+
+        // Set flag to suppress mute sync during volume change
+        isProcessingVolumeChange = true
+        defer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.isProcessingVolumeChange = false
+            }
+        }
+
+        // Capture values before dispatching to background queue
+        guard let driverID = driverDeviceID else { return }
+
+        // Dispatch to serial queue for epsilon filtering and driver sync
+        volumeForwardQueue.async { [weak self, driverID] in
+            self?.forwardVolumeToDriver(newVolume, driverID: driverID)
+        }
+
+        // Update boost (brings signal back to unity)
+        let boost = boostGain()
+        onBoostGainChanged?(boost)
+        onVolumeGainChanged?(volumeGainForSharedMemory())
+    }
+
     /// Forwards volume to output device with epsilon filtering.
     /// Called on volumeForwardQueue, not main thread.
     nonisolated private func forwardVolumeToOutput(_ newVolume: Float, outputID: AudioDeviceID) {
@@ -269,6 +312,22 @@ final class VolumeManager: ObservableObject {
         // CoreAudio call on serial queue (isolated from main thread)
         // Note: setDeviceVolumeScalar is nonisolated and thread-safe
         _ = volumeService.setDeviceVolumeScalar(deviceID: outputID, volume: newVolume)
+    }
+
+    /// Forwards volume to driver device with epsilon filtering.
+    /// Called on volumeForwardQueue, not main thread.
+    nonisolated private func forwardVolumeToDriver(_ newVolume: Float, driverID: AudioDeviceID) {
+        // Skip if change is below epsilon threshold for this device
+        if let lastVolume = lastForwardedVolumeByDevice[driverID],
+           abs(newVolume - lastVolume) < volumeEpsilon {
+            return
+        }
+
+        lastForwardedVolumeByDevice[driverID] = newVolume
+
+        // CoreAudio call on serial queue (isolated from main thread)
+        // Note: setDeviceVolumeScalar is nonisolated and thread-safe
+        _ = volumeService.setDeviceVolumeScalar(deviceID: driverID, volume: newVolume)
     }
     
     // MARK: - Mute Change Handlers
