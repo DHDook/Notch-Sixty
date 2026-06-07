@@ -205,17 +205,11 @@ struct MasterVolumeSlider: View {
             .frame(width: 120)
 
             HStack(spacing: 4) {
-                Button(action: {
-                    isMuted.toggle()
-                }) {
+                Toggle(isOn: $isMuted) {
                     Text("Mute")
                         .font(.system(size: 8))
-                        .foregroundStyle(isMuted ? .white : .secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(isMuted ? Color.accentColor : Color.secondary.opacity(0.1))
-                        .cornerRadius(4)
                 }
+                .toggleStyle(.switch)
                 Spacer()
                 Text(volumePercentage)
                     .font(.system(size: 8))
