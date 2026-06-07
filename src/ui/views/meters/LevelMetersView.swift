@@ -258,15 +258,15 @@ struct PressedButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(isPressed ? .primary : .secondary)
+            .foregroundStyle(isPressed ? .white : .secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(isPressed ? Color.accentColor.opacity(0.3) : Color.secondary.opacity(0.1))
-            .cornerRadius(4)
+            .background(isPressed ? Color.accentColor : Color.clear)
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    .stroke(isPressed ? Color.accentColor : Color.accentColor.opacity(0.5), lineWidth: 1)
             )
+            .cornerRadius(4)
     }
 }
 

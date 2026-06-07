@@ -96,12 +96,33 @@ struct EQCurveView: View {
         ]
         for (f, label) in labelFreqs {
             let x = xForFreq(f, width: size.width)
+            let isRightmost = f == 20_000
+            let isLeftmost = f == 50
+
+            let anchor: UnitPoint
+            if isRightmost {
+                anchor = .trailing
+            } else if isLeftmost {
+                anchor = .leading
+            } else {
+                anchor = .center
+            }
+
+            let xOffset: CGFloat
+            if isRightmost {
+                xOffset = -4
+            } else if isLeftmost {
+                xOffset = 4
+            } else {
+                xOffset = 0
+            }
+
             ctx.draw(
                 Text(label)
                     .font(.system(size: 7))
                     .foregroundStyle(.secondary.opacity(0.5)),
-                at: CGPoint(x: x, y: size.height - 12),
-                anchor: .center
+                at: CGPoint(x: x + xOffset, y: size.height - 12),
+                anchor: anchor
             )
         }
     }
