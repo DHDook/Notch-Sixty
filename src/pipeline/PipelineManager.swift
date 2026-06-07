@@ -1,6 +1,7 @@
 // PipelineManager.swift
 // Manages the audio render pipeline lifecycle
 
+import Combine
 import CoreAudio
 import Foundation
 import OSLog
@@ -18,7 +19,7 @@ enum PipelineStartResult {
 /// Manages the RenderPipeline lifecycle: creation, configuration, starting, stopping,
 /// and teardown. Also manages VolumeManager and EQ coefficient staging integration.
 @MainActor
-final class PipelineManager {
+final class PipelineManager: ObservableObject {
 
     // MARK: - Dependencies
 
@@ -31,6 +32,7 @@ final class PipelineManager {
 
     private(set) var renderPipeline: RenderPipeline?
     private(set) var volumeManager: VolumeManager?
+    private var volumeManagerCancellable: AnyCancellable?
 
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "PipelineManager")
 
@@ -86,6 +88,16 @@ final class PipelineManager {
             // Set up volume sync (automatic mode only)
             if isAutomaticMode, let driverID = driverID {
                 volumeManager = VolumeManager(volumeService: volumeService)
+
+                // Forward VolumeManager published changes up through PipelineManager
+                // so that AudioRoutingCoordinator → EqualiserStore → SwiftUI all re-evaluate
+                // the slider binding when system volume changes externally.
+                volumeManagerCancellable = volumeManager?.objectWillChange
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] _ in
+                        self?.objectWillChange.send()
+                    }
+
                 if captureMode == .halInput {
                     volumeManager?.onBoostGainChanged = { [weak self] boostGain in
                         self?.renderPipeline?.updateBoostGain(linear: boostGain)
@@ -119,6 +131,10 @@ final class PipelineManager {
 
         // Clear stager's pipeline reference
         eqStager.setRenderPipeline(nil)
+
+        // Cancel volume manager subscription
+        volumeManagerCancellable?.cancel()
+        volumeManagerCancellable = nil
 
         // Clear callbacks and tear down volume sync
         volumeManager?.onBoostGainChanged = nil
