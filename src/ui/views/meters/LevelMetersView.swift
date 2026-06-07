@@ -172,7 +172,6 @@ struct ChannelBalanceSlider: View {
 struct MasterVolumeSlider: View {
     @Binding var volume: Float
     @Binding var isMuted: Bool
-    @State private var isDragging = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,12 +196,8 @@ struct MasterVolumeSlider: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            isDragging = true
                             let newValue = valueAt(position: value.location, in: geometry.size)
                             volume = Float(newValue)
-                        }
-                        .onEnded { _ in
-                            isDragging = false
                         }
                 )
             }
@@ -210,10 +205,17 @@ struct MasterVolumeSlider: View {
             .frame(width: 120)
 
             HStack(spacing: 4) {
-                Toggle("Mute", isOn: $isMuted)
-                    .font(.system(size: 8))
-                    .toggleStyle(.button)
-                    .controlSize(.small)
+                Button(action: {
+                    isMuted.toggle()
+                }) {
+                    Text("Mute")
+                        .font(.system(size: 8))
+                        .foregroundStyle(isMuted ? .white : .secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(isMuted ? Color.accentColor : Color.secondary.opacity(0.1))
+                        .cornerRadius(4)
+                }
                 Spacer()
                 Text(volumePercentage)
                     .font(.system(size: 8))

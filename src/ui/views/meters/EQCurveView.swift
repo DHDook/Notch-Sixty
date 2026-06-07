@@ -69,7 +69,7 @@ struct EQCurveView: View {
                     Text(label)
                         .font(.system(size: 7, design: .monospaced))
                         .foregroundStyle(.secondary.opacity(0.6)),
-                    at: CGPoint(x: 4, y: y - 6),
+                    at: CGPoint(x: 4, y: y - 12),
                     anchor: .topLeading
                 )
             }
@@ -82,7 +82,7 @@ struct EQCurveView: View {
             let x = xForFreq(f, width: size.width)
             var path = Path()
             path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: size.height - 14)) // leave room for freq labels
+            path.addLine(to: CGPoint(x: x, y: size.height - 16)) // leave room for freq labels
             ctx.stroke(path,
                        with: .color(.secondary.opacity(0.15)),
                        style: StrokeStyle(lineWidth: 0.5, dash: [3, 4]))
@@ -112,7 +112,7 @@ struct EQCurveView: View {
             if isRightmost {
                 xOffset = -4
             } else if isLeftmost {
-                xOffset = 20
+                xOffset = 4
             } else {
                 xOffset = 0
             }
