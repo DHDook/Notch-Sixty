@@ -219,22 +219,10 @@ struct MasterVolumeSlider: View {
             .frame(width: 120)
 
             HStack(spacing: 4) {
-                Button(action: {
-                    isMuted.toggle()
-                }) {
-                    Text("Mute")
-                        .font(.system(size: 8))
-                        .foregroundStyle(isMuted ? .white : .secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(isMuted ? Color.accentColor : Color.clear)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.accentColor, lineWidth: 1)
-                        )
-                        .cornerRadius(4)
-                }
-                .buttonStyle(.plain)
+                Toggle("Mute", isOn: $isMuted)
+                    .font(.system(size: 8))
+                    .toggleStyle(.button)
+                    .controlSize(.small)
                 Spacer()
                 Text(volumePercentage)
                     .font(.system(size: 8))
@@ -258,23 +246,6 @@ struct MasterVolumeSlider: View {
     private func valueAt(position: CGPoint, in size: CGSize) -> Double {
         let normalizedPosition = max(0, min(1, position.x / size.width))
         return normalizedPosition // 0.0 to 1.0
-    }
-}
-
-struct PressedButtonStyle: ButtonStyle {
-    let isPressed: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(isPressed ? .white : .secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(isPressed ? Color.accentColor : Color.clear)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.accentColor, lineWidth: 1)
-            )
-            .cornerRadius(4)
     }
 }
 

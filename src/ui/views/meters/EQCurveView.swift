@@ -112,7 +112,7 @@ struct EQCurveView: View {
             if isRightmost {
                 xOffset = -4
             } else if isLeftmost {
-                xOffset = 12
+                xOffset = 16
             } else {
                 xOffset = 0
             }
