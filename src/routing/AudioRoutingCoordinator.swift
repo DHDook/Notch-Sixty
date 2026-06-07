@@ -157,6 +157,13 @@ final class AudioRoutingCoordinator: ObservableObject {
                 self?.isReconfiguring ?? false
             }
         )
+
+        // Forward VolumeManager gain/mute changes into our own objectWillChange
+        // so that SwiftUI re-evaluates the MasterVolumeSlider binding whenever
+        // the system volume is changed externally (keyboard, menu bar, etc.).
+        pipelineManager.onVolumeStateChanged = { [weak self] in
+            self?.objectWillChange.send()
+        }
     }
     
     // MARK: - Public Methods

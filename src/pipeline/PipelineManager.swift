@@ -19,7 +19,7 @@ enum PipelineStartResult {
 /// Manages the RenderPipeline lifecycle: creation, configuration, starting, stopping,
 /// and teardown. Also manages VolumeManager and EQ coefficient staging integration.
 @MainActor
-final class PipelineManager: ObservableObject {
+final class PipelineManager {
 
     // MARK: - Dependencies
 
@@ -33,6 +33,11 @@ final class PipelineManager: ObservableObject {
     private(set) var renderPipeline: RenderPipeline?
     private(set) var volumeManager: VolumeManager?
     private var volumeManagerCancellable: AnyCancellable?
+
+    /// Called on the main thread whenever the VolumeManager's gain or muted
+    /// state changes. AudioRoutingCoordinator sets this to forward changes
+    /// into its own objectWillChange so SwiftUI re-evaluates the slider binding.
+    var onVolumeStateChanged: (() -> Void)?
 
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "PipelineManager")
 
@@ -89,13 +94,13 @@ final class PipelineManager: ObservableObject {
             if isAutomaticMode, let driverID = driverID {
                 volumeManager = VolumeManager(volumeService: volumeService)
 
-                // Forward VolumeManager published changes up through PipelineManager
-                // so that AudioRoutingCoordinator → EqualiserStore → SwiftUI all re-evaluate
-                // the slider binding when system volume changes externally.
+                // Forward VolumeManager published changes to AudioRoutingCoordinator.
+                // This is the only place VolumeManager is created; the subscription
+                // lifetime is tied to the pipeline lifetime and cancelled in stopPipeline().
                 volumeManagerCancellable = volumeManager?.objectWillChange
                     .receive(on: DispatchQueue.main)
                     .sink { [weak self] _ in
-                        self?.objectWillChange.send()
+                        self?.onVolumeStateChanged?()
                     }
 
                 if captureMode == .halInput {
