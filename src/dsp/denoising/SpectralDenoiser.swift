@@ -45,10 +45,11 @@ final class SpectralDenoiser: @unchecked Sendable {
         fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))!
 
         // Pre-compute N-point Hann window once.
-        // Using N-1 in the denominator gives w[0]=0, w[N-1]=0 (periodic Hann).
+        // Using N in the denominator gives the periodic form, which sums to exactly 1.0
+        // at 50% overlap when used as an analysis-only window (COLA-1).
         var hann = [Float](repeating: 0, count: N)
         for i in 0..<N {
-            hann[i] = 0.5 * (1.0 - cos(2.0 * Float.pi * Float(i) / Float(N - 1)))
+            hann[i] = 0.5 * (1.0 - cos(2.0 * Float.pi * Float(i) / Float(N)))
         }
         hannWindow = hann
 
@@ -156,11 +157,6 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // workReal[0..N-1] now holds the N interleaved real output samples.
                     }
                 }
-
-                // FIX #3: Apply synthesis Hann window before overlap-add (WOLA).
-                // For Hann analysis + Hann synthesis at 50% overlap, the combined
-                // response is Hann² which sums to a constant (COLA-2 / power complementary).
-                for i in 0..<N { workReal[i] *= hannWindow[i] }
 
                 // Overlap-add into outputOverlap.
                 for i in 0..<N { outputOverlap[i] += workReal[i] }
