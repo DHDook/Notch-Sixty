@@ -195,7 +195,7 @@ final class OversamplingProcessor {
             // Apply phase 0 only.
             var acc: Float = 0
             for k in 0..<T {
-                acc += phaseCoeffs[k] * delay[(delayIdx - k + T) % T]
+                acc += phaseCoeffs[k] * delay[(delayIdx + F - 1 - k + T) % T]
             }
             dst[i] = acc
             delayIdx = (delayIdx + F) % T
