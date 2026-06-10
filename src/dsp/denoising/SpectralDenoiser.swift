@@ -78,6 +78,11 @@ final class SpectralDenoiser: @unchecked Sendable {
         workImag      = [Float](repeating: 0, count: N)
         outRing       = [Float](repeating: 0, count: N * 2)
 
+        // Initialize read pointer to lag one hop behind write pointer
+        // to account for the inherent OLA latency of one analysis frame.
+        outWritePos = 0
+        outReadPos  = N * 2 - hop
+
         // Default: noise floor = -60 dBFS, Wiener floor = 0.01 (-40 dB)
         _noiseFloorBits  = ManagedAtomic(Self.floatBits(pow(10.0, -60.0 / 20.0)))
         _wienerFloorBits = ManagedAtomic(Self.floatBits(0.01))
@@ -116,7 +121,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         outputOverlap.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
         outRing.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N * 2)) }
         outWritePos = 0
-        outReadPos  = 0
+        outReadPos  = N * 2 - hop
         accumPos    = 0
     }
 
