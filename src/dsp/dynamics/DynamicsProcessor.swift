@@ -660,7 +660,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setDenoisingThresholdDB(_ db: Float) {
         _denoisingThresholdBits.store(floatBits(max(-80.0, min(-40.0, db))), ordering: .relaxed)
         let linear = pow(10.0, max(-80.0, min(-40.0, db)) / 20.0)
-        denoisers.forEach { $0.setThresholdDB(linear > 0 ? 20.0 * log10(linear) : -80.0) }
+        denoisers.forEach { $0.setNoiseFloorDB(Float(linear > 0 ? 20.0 * log10(linear) : -80.0)) }
     }
     func setChannelBalance(_ balance: Float) {
         _channelBalanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
