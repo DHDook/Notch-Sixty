@@ -21,8 +21,10 @@ final class SpectralDenoiser: @unchecked Sendable {
     // Release = how quickly gain falls when a signal disappears (~80 ms → slow, avoids musical noise)
     // Expressed as per-frame IIR coefficients: alpha = exp(-1 / (tau_ms / frame_ms))
     // At 48 kHz, frame_ms = hopSize / sampleRate * 1000 = 512 / 48000 * 1000 ≈ 10.67 ms
-    private static let gainAttackAlpha:  Float = 0.5866   // tau ≈ 20 ms at 48 kHz
-    private static let gainReleaseAlpha: Float = 0.8752   // tau ≈ 80 ms at 48 kHz
+    private static let gainAttackAlpha:  Float = 0.0      // instantaneous attack — no onset smear
+    private static let gainReleaseAlpha: Float = 0.3      // tau ≈ 2 frames (~21 ms) — just enough
+                                                         // to prevent single-frame gain spikes
+                                                         // without starving spectrally active bins
 
     // MARK: - FFT
     private let log2n:    vDSP_Length
