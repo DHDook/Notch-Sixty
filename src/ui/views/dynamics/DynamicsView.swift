@@ -941,6 +941,24 @@ struct DynamicsView: View {
                 .controlSize(.regular)
                 .font(.system(size: 13))
 
+            // ── Preset picker ─────────────────────────────────────────
+            HStack(spacing: 8) {
+                Text("Character")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 80, alignment: .leading)
+                Picker("", selection: ltiDenoisingPresetBinding) {
+                    ForEach(DenoiserPreset.allCases, id: \.self) { preset in
+                        Text(preset.rawValue).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(!store.dynamicsConfig.advanced.linearDenoisingEnabled)
+                .opacity(!store.dynamicsConfig.advanced.linearDenoisingEnabled ? 0.4 : 1.0)
+            }
+
+            // ── Fine-tune threshold slider ────────────────────────────
             DynamicsSliderRow(
                 label: "Threshold",
                 value: ltiDenoisingThresholdBinding,
@@ -1585,6 +1603,19 @@ struct DynamicsView: View {
         Binding(
             get: { Double(store.dynamicsConfig.advanced.linearDenoisingThresholdDB) },
             set: { val in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingThresholdDB = Float(val); store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiDenoisingPresetBinding: Binding<DenoiserPreset> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.linearDenoisingPreset },
+            set: { preset in
+                var adv = store.dynamicsConfig.advanced
+                adv.linearDenoisingPreset = preset
+                // Seed the threshold slider to the preset's noise floor so the
+                // slider stays in sync when the user switches presets.
+                adv.linearDenoisingThresholdDB = preset.parameters.noiseFloorDB
+                store.updateAdvancedProcessing(adv)
+            }
         )
     }
     private var ltiIRAlignmentEnabledBinding: Binding<Bool> {

@@ -220,6 +220,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     // Linear denoising atomics
     private let _denoisingEnabled:      ManagedAtomic<Int32>
     private let _denoisingThresholdBits: ManagedAtomic<Int32>  // Float bits, dB
+    private let _denoisingWienerFloorBits: ManagedAtomic<Int32>  // Float bits, 0.0–1.0
 
     // Auto-headroom atomics (main thread → audio thread)
     private let _autoHeadroomEnabled:         ManagedAtomic<Int32>
@@ -478,6 +479,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _crosstalkAmountBits  = ManagedAtomic(floatBits(0.5))
         _denoisingEnabled       = ManagedAtomic(0)
         _denoisingThresholdBits = ManagedAtomic(floatBits(-60.0))
+        _denoisingWienerFloorBits = ManagedAtomic(floatBits(0.01))
         _autoHeadroomEnabled          = ManagedAtomic(0)
         _autoHeadroomAlphaBits        = ManagedAtomic(floatBits(
             Float(exp(-Double(512) / (10.0 * sampleRate)))))
@@ -662,6 +664,15 @@ final class DynamicsProcessor: @unchecked Sendable {
         let linear = pow(10.0, max(-80.0, min(-40.0, db)) / 20.0)
         denoisers.forEach { $0.setNoiseFloorDB(Float(linear > 0 ? 20.0 * log10(linear) : -80.0)) }
     }
+    func setDenoisingWienerFloor(_ floor: Float) {
+        _denoisingWienerFloorBits.store(floatBits(max(0.0, min(1.0, floor))), ordering: .relaxed)
+        denoisers.forEach { $0.setWienerFloor(floor) }
+    }
+    func setDenoisingPreset(_ preset: DenoiserPreset) {
+        let (noiseFloorDB, wienerFloor) = preset.parameters
+        setDenoisingThresholdDB(noiseFloorDB)
+        setDenoisingWienerFloor(wienerFloor)
+    }
     func setChannelBalance(_ balance: Float) {
         _channelBalanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
     }
@@ -806,6 +817,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         setStereoMode(adv.stereoMode)
         setDCOffsetFilterEnabled(adv.dcOffsetFilterEnabled)
         setDenoisingEnabled(adv.linearDenoisingEnabled)
+        setDenoisingPreset(adv.linearDenoisingPreset)
+        // Allow the user's manual threshold slider to override the preset's noise floor
+        // only if it differs from the preset's seeded value; otherwise the preset wins.
+        // (The store always writes the most recently set value, so call threshold last
+        // to let it win over the preset if the user has diverged from it.)
         setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
         setDialogueGateEnabled(adv.loudnessDialogueGateEnabled)
         setLoudnessContourEnabled(adv.loudnessContourEnabled)

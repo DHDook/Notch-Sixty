@@ -412,6 +412,35 @@ enum AutoHeadroomSpeed: String, Codable, Equatable, Sendable, CaseIterable {
     }
 }
 
+// MARK: - Denoiser Preset
+
+/// Named noise-reduction operating points for the spectral denoiser.
+/// Each preset encodes a paired noise-floor threshold and Wiener gain floor
+/// so users choose by intent rather than by raw DSP parameters.
+enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
+    /// Minimal processing — passes almost all signal energy, only attenuates
+    /// bins well below the noise floor. Best for clean sources or subtle hiss.
+    case natural    = "Natural"
+    /// Balanced default — effective hiss removal with no audible artefacts
+    /// on music and speech. Matches the original fix defaults.
+    case standard   = "Standard"
+    /// Maximum suppression — pushes the noise floor lower and allows bins
+    /// to be attenuated more deeply. May introduce slight residual smoothing
+    /// on very transient material; best for heavily noise-contaminated sources.
+    case aggressive = "Aggressive"
+
+    /// Returns the `(noiseFloorDB, wienerFloor)` pair for this preset.
+    /// `noiseFloorDB` feeds `setNoiseFloorDB(_:)` on the denoiser.
+    /// `wienerFloor` feeds `setWienerFloor(_:)` on the denoiser.
+    var parameters: (noiseFloorDB: Float, wienerFloor: Float) {
+        switch self {
+        case .natural:    return (noiseFloorDB: -55.0, wienerFloor: 0.05)
+        case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01)
+        case .aggressive: return (noiseFloorDB: -65.0, wienerFloor: 0.002)
+        }
+    }
+}
+
 struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
 
     // ── A. High-Resolution Coefficient Decoupling ───────────────────────
@@ -506,6 +535,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     var linearDenoisingEnabled: Bool = false
     /// Noise floor threshold in dBFS. Range: −80 to −40. Default: −60 dB.
     var linearDenoisingThresholdDB: Float = -60.0
+    /// Active denoiser operating-point preset.
+    /// Seeds the noiseFloorDB and wienerFloor on the SpectralDenoiser.
+    var linearDenoisingPreset: DenoiserPreset = .standard
 
     /// Speaker Impulse Response Alignment — applies fractional-sample delay
     /// compensation to time-align the acoustic centres of multi-driver systems.
@@ -583,7 +615,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         // LTI Suite
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount
-        case linearDenoisingEnabled, linearDenoisingThresholdDB
+        case linearDenoisingEnabled, linearDenoisingThresholdDB, linearDenoisingPreset
         case speakerIRAlignmentEnabled, speakerIRDelayMs
         case crosstalkCancellationEnabled, crosstalkCancellationAmount
         case multiSeatAveragingEnabled, multiSeatCount
@@ -625,6 +657,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         panningCrossfeedAmount: Float = 0.3,
         linearDenoisingEnabled: Bool = false,
         linearDenoisingThresholdDB: Float = -60.0,
+        linearDenoisingPreset: DenoiserPreset = .standard,
         speakerIRAlignmentEnabled: Bool = false,
         speakerIRDelayMs: Float = 0.0,
         crosstalkCancellationEnabled: Bool = false,
@@ -667,6 +700,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.panningCrossfeedAmount           = panningCrossfeedAmount
         self.linearDenoisingEnabled           = linearDenoisingEnabled
         self.linearDenoisingThresholdDB       = linearDenoisingThresholdDB
+        self.linearDenoisingPreset           = linearDenoisingPreset
         self.speakerIRAlignmentEnabled        = speakerIRAlignmentEnabled
         self.speakerIRDelayMs                 = speakerIRDelayMs
         self.crosstalkCancellationEnabled     = crosstalkCancellationEnabled
@@ -711,6 +745,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         panningCrossfeedAmount           = try c.decodeIfPresent(Float.self,                 forKey: .panningCrossfeedAmount)           ?? 0.3
         linearDenoisingEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .linearDenoisingEnabled)           ?? false
         linearDenoisingThresholdDB       = try c.decodeIfPresent(Float.self,                 forKey: .linearDenoisingThresholdDB)       ?? -60.0
+        linearDenoisingPreset           = try c.decodeIfPresent(DenoiserPreset.self,     forKey: .linearDenoisingPreset)           ?? .standard
         speakerIRAlignmentEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .speakerIRAlignmentEnabled)        ?? false
         speakerIRDelayMs                 = try c.decodeIfPresent(Float.self,                 forKey: .speakerIRDelayMs)                 ?? 0.0
         crosstalkCancellationEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .crosstalkCancellationEnabled)     ?? false
@@ -756,6 +791,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(panningCrossfeedAmount,             forKey: .panningCrossfeedAmount)
         try c.encode(linearDenoisingEnabled,             forKey: .linearDenoisingEnabled)
         try c.encode(linearDenoisingThresholdDB,         forKey: .linearDenoisingThresholdDB)
+        try c.encode(linearDenoisingPreset,             forKey: .linearDenoisingPreset)
         try c.encode(speakerIRAlignmentEnabled,          forKey: .speakerIRAlignmentEnabled)
         try c.encode(speakerIRDelayMs,                   forKey: .speakerIRDelayMs)
         try c.encode(crosstalkCancellationEnabled,       forKey: .crosstalkCancellationEnabled)
