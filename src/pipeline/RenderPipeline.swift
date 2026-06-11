@@ -1,4 +1,5 @@
 import AudioToolbox
+import AVFoundation
 import CoreAudio
 import os.log
 import Atomics
@@ -341,6 +342,18 @@ final class RenderPipeline {
 
         callbackContext = context
         latestMeters = .silent
+
+        // Reset convolution engine on pipeline start
+        context.resetConvolution()
+
+        // Configure SRC (placeholder: same input/output format for now)
+        withUnsafePointer(to: streamFormat) { streamFormatPtr in
+            guard let inputFormat = AVAudioFormat(streamDescription: streamFormatPtr),
+                  let outputFormat = AVAudioFormat(streamDescription: streamFormatPtr) else {
+                return
+            }
+            context.configureSRC(inputFormat: inputFormat, outputFormat: outputFormat)
+        }
 
         let contextPtr = UnsafeMutableRawPointer(
             Unmanaged.passUnretained(context).toOpaque()
@@ -975,7 +988,7 @@ final class RenderPipeline {
                 guard ch < inputBuffers.count else { continue }
                 let buf = inputBuffers[ch]
                 let samples = Array(UnsafeBufferPointer(start: buf, count: Int(framesRead)))
-                analyser.processSamples(samples, channel: ch)
+                analyser.recordSamples(samples)
             }
         }
 

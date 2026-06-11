@@ -419,6 +419,16 @@ struct DriverSettingsTab: View {
                 }
             }
 
+            HStack {
+                Text("SRC")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Off")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Text("The driver is ready to use.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -539,6 +549,9 @@ struct RoomCalibrationTab: View {
     @State private var acousticMode   = 0        // 0 = Single Point, 1 = Multi-Seat Avg
     @State private var measuredSeats: Set<Int> = []   // indices of measured positions
     @State private var statusMessage  = "Ambient shield active — monitoring room silence."
+
+    // Loopback measurement state
+    @State private var maxBands: Int = 16
 
     // Microphone selection
     @State private var selectedMicID: AudioDeviceID? = nil
@@ -684,6 +697,103 @@ struct RoomCalibrationTab: View {
                 .padding(.vertical, 4)
             } header: {
                 Text("Measurement")
+            }
+
+            // ── Loopback Measurement ─────────────────────────────────────────
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Automated loopback measurement plays a sweep through your output and captures it via a microphone to measure room response.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Progress indicator
+                    HStack(spacing: 8) {
+                        switch store.measurementState {
+                        case .idle:
+                            Circle()
+                                .fill(Color.gray)
+                                .frame(width: 8, height: 8)
+                            Text("Ready to measure")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .playing:
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Playing sweep...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .capturing:
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Capturing reverb tail...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .computing:
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Computing response...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .done:
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                            Text("Measurement complete")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // Measure button
+                    HStack(spacing: 12) {
+                        Button("Measure") {
+                            Task {
+                                // Check if HAL input mode is active
+                                if store.routingCoordinator.captureMode == .sharedMemory {
+                                    // Prompt to switch to HAL Input mode
+                                    let granted = await store.switchToManualMode()
+                                    if !granted {
+                                        return
+                                    }
+                                }
+                                store.startLoopbackMeasurement()
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(store.measurementState != .idle || !store.routingStatus.isActive)
+
+                        // Max bands stepper
+                        HStack(spacing: 8) {
+                            Text("Max bands:")
+                                .font(.caption)
+                                Stepper("", value: $maxBands, in: 8...20)
+                                .frame(width: 80)
+                            Text("\(maxBands)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 30)
+                        }
+                    }
+
+                    // Apply correction button (shown when done)
+                    if store.measurementState == .done {
+                        Button("Apply Correction (\(maxBands) bands)") {
+                            store.applyRoomCorrection(maxBands: maxBands)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    // Error display
+                    if let error = store.measurementError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Loopback Measurement")
             }
 
             // ── Correction Filters ────────────────────────────────────────

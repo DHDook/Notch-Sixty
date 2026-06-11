@@ -95,6 +95,20 @@ final class EqualiserStore: ObservableObject {
     /// Error message from the most recent IR load attempt.
     @Published var convolutionLoadError: String? = nil
 
+    // MARK: - Loopback Measurement State
+
+    enum MeasurementState {
+        case idle
+        case playing
+        case capturing
+        case computing
+        case done
+    }
+
+    @Published var measurementState: MeasurementState = .idle
+    @Published var measuredResponse: [(frequency: Double, gainDB: Double)] = []
+    @Published var measurementError: String? = nil
+
     // MARK: - Forwarded Properties from RoutingCoordinator
     
     var routingStatus: RoutingStatus { routingCoordinator.routingStatus }
@@ -664,6 +678,72 @@ final class EqualiserStore: ObservableObject {
 
     // MARK: - Room Correction Sweep Measurement
 
+    /// Starts a loopback measurement for room correction.
+    /// Generates a sweep, plays it through the output, captures via mic input,
+    /// and computes the room response.
+    func startLoopbackMeasurement() {
+        measurementState = .playing
+        measurementError = nil
+
+        // Generate 10-second log-swept sine from 20 Hz to 20 kHz
+        let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let analyser = SweepAnalyser(sampleRate: sampleRate, duration: 10.0, startFrequency: 20.0, endFrequency: 20000.0)
+        sweepAnalyser = analyser
+
+        // Store reference sweep signal
+        let sweep = analyser.sweepSignal
+
+        // Start sweep playback
+        routingCoordinator.pipelineManager.renderPipeline?.setSweepAnalyser(analyser)
+        routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = { [weak self] in
+            guard let self = self else { return }
+            Task { @MainActor in
+                // Wait 0.5s for reverb tail
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                self.measurementState = .capturing
+                self.sweepAnalyser?.stopRecording()
+
+                // Compute impulse response and frequency response on background thread
+                self.measurementState = .computing
+
+                // Capture data needed for computation
+                guard let analyser = self.sweepAnalyser else { return }
+                let capturedSweep = sweep
+
+                Task { @MainActor in
+                    let ir = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
+                    let response = analyser.computeFrequencyResponse(ir: ir)
+
+                    self.measuredResponse = response
+                    self.measurementState = .done
+                }
+            }
+        }
+        routingCoordinator.pipelineManager.renderPipeline?.startSweepPlayback(signal: sweep)
+    }
+
+    /// Applies room correction bands to the current EQ.
+    /// - Parameter maxBands: Maximum number of correction bands (8-20, default 16)
+    func applyRoomCorrection(maxBands: Int = 16) {
+        let target = buildTargetCurve()
+        let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let bands = RoomCorrectionEngine.fitBands(
+            measured: measuredResponse,
+            target: target,
+            sampleRate: sampleRate,
+            maxBands: maxBands
+        )
+
+        // Apply bands using the existing stager API
+        routingCoordinator.eqStager.applyRoomCorrectionBands(bands)
+
+        // Enable room correction
+        var adv = dynamicsConfig.advanced
+        adv.roomCorrectionEnabled = true
+        updateAdvancedProcessing(adv)
+        roomCorrectionBandCount = bands.count
+    }
+
     /// Called by the UI "Start Sweep" button.
     func startSweepMeasurement() {
         sweepAnalyser = makeSweepAnalyser()
@@ -679,7 +759,8 @@ final class EqualiserStore: ObservableObject {
         routingCoordinator.pipelineManager.renderPipeline?.stopSweepPlayback()
         sweepAnalyser?.stopRecording()
         guard let analyser = sweepAnalyser else { return }
-        let curve = analyser.computeFrequencyResponse(channel: 0)
+        let ir = analyser.computeImpulseResponse(referenceSweep: analyser.sweepSignal)
+        let curve = analyser.computeFrequencyResponse(ir: ir)
         if seatIndex == 0 || pendingMeasuredCurve == nil {
             pendingMeasuredCurve = curve
         } else {

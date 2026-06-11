@@ -1,5 +1,6 @@
 import AudioToolbox
 import Atomics
+import AVFoundation
 import CoreAudio
 import Darwin
 import os.log
@@ -76,6 +77,9 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     /// Immutable pointers to processingBuffers (avoids array allocation in hot paths).
     private nonisolated(unsafe) var processingBufferPointers: [UnsafePointer<Float>]!
+
+    /// Sample rate conversion processor for upsampling/downsampling.
+    private nonisolated(unsafe) var srcProcessor: SRCProcessor?
 
     // MARK: - Atomic Target Gains
     // Target gains are written by the main thread and read by the audio thread.
@@ -1004,6 +1008,19 @@ final class RenderCallbackContext: @unchecked Sendable {
         convolutionEngine.setEnabled(enabled)
     }
 
+    /// Resets convolution engine state (clears history and overlap buffers).
+    func resetConvolution() {
+        convolutionEngine.reset()
+    }
+
+    /// Configures the sample rate conversion processor.
+    /// - Parameters:
+    ///   - inputFormat: The input audio format.
+    ///   - outputFormat: The desired output audio format.
+    func configureSRC(inputFormat: AVAudioFormat, outputFormat: AVAudioFormat) {
+        srcProcessor = SRCProcessor(inputFormat: inputFormat, outputFormat: outputFormat)
+    }
+
     /// Processes all EQ layers on processing buffers in-place.
     /// Called from audio thread after provideFrames() fills the processing buffers.
     /// - Parameter frameCount: Number of frames to process.
@@ -1089,17 +1106,12 @@ final class RenderCallbackContext: @unchecked Sendable {
 
         // --- Convolution processing (after EQ chain) ---
         if _convolutionEnabled.load(ordering: .relaxed) != 0 {
-            let bufL = processingBuffers[0]
             let bufR = channelCount > 1 ? processingBuffers[1] : nil
-            for i in 0..<Int(frameCount) {
-                let left = bufL[i]
-                let right = bufR?[i] ?? left
-                let processed = convolutionEngine.process(left: left, right: right)
-                bufL[i] = processed.left
-                if let bufR = bufR {
-                    bufR[i] = processed.right
-                }
-            }
+            convolutionEngine.process(
+                bufL: processingBuffers[0],
+                bufR: bufR,
+                frameCount: Int(frameCount)
+            )
         }
     }
 

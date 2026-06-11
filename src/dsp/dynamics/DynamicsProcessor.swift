@@ -114,6 +114,15 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// 2nd-order allpass biquad state for sub-bass phase alignment.
     /// Layout: [ch * 2 + 0] = w1, [ch * 2 + 1] = w2.
     nonisolated(unsafe) var subBassPhaseState: [Float]
+    /// 2nd-order Butterworth lowpass biquad state for mono bass extraction (per channel).
+    /// Layout: [ch * 2 + 0] = w1, [ch * 2 + 1] = w2.
+    nonisolated(unsafe) var monoBassLowpassState: [Float]
+    /// Mono bass lowpass filters (left and right channels).
+    nonisolated(unsafe) var monoBassLowpassL: BiquadFilter
+    nonisolated(unsafe) var monoBassLowpassR: BiquadFilter
+    /// Mains high-pass filters (left and right channels).
+    nonisolated(unsafe) var mainsHighPassL: BiquadFilter
+    nonisolated(unsafe) var mainsHighPassR: BiquadFilter
 
     // Speaker IR alignment per-channel ring buffers (same pattern as timeDelayBufs)
     private let irAlignBufs: [UnsafeMutablePointer<Float>]
@@ -251,6 +260,17 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _subBassPhaseEnabled:  ManagedAtomic<Int32>
     private let _subBassPhaseFreqBits: ManagedAtomic<Int32>   // Float bits, Hz
     private let _oversamplingEnabled: ManagedAtomic<Int32>
+
+    // Mono bass atomics
+    private let _monoBassEnabled:     ManagedAtomic<Int32>
+    private let _monoBassCrossoverBits: ManagedAtomic<Int32>  // Float bits, Hz
+
+    // Mains high-pass atomics
+    private let _mainsHighPassEnabled:     ManagedAtomic<Int32>
+    private let _mainsHighPassFrequencyBits: ManagedAtomic<Int32>  // Float bits, Hz
+
+    // System volume feed atomics
+    private let _systemVolumeBits: ManagedAtomic<Int32>  // Float bits, 0.0–1.0
 
     // MARK: - Advanced Metrics (audio → main)
 
@@ -454,6 +474,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.contourState  = Array(repeating: 0.0, count: 4 * ch)
         self.noiseShapeState = Array(repeating: 0.0, count: ch * 5)
         self.subBassPhaseState = Array(repeating: 0.0, count: ch * 2)
+        self.monoBassLowpassState = Array(repeating: 0.0, count: ch * 2)
         self.irAlignApState = Array(repeating: 0.0, count: ch * 2)
         self.crosstalkFilterState = Array(repeating: 0.0, count: ch)
         self.denoisers = (0..<ch).map { _ in SpectralDenoiser() }
@@ -499,6 +520,43 @@ final class DynamicsProcessor: @unchecked Sendable {
         _subBassPhaseEnabled  = ManagedAtomic(0)
         _subBassPhaseFreqBits = ManagedAtomic(floatBits(80.0))
         _oversamplingEnabled = ManagedAtomic(0)
+
+        // Mono bass atomics
+        _monoBassEnabled = ManagedAtomic(0)
+        _monoBassCrossoverBits = ManagedAtomic(floatBits(80.0))
+
+        // Mains high-pass atomics
+        _mainsHighPassEnabled = ManagedAtomic(0)
+        _mainsHighPassFrequencyBits = ManagedAtomic(floatBits(80.0))
+
+        // System volume feed atomics
+        _systemVolumeBits = ManagedAtomic(floatBits(1.0))
+
+        // Mono bass lowpass filters (2nd-order Butterworth at 80 Hz)
+        monoBassLowpassL = BiquadFilter()
+        monoBassLowpassR = BiquadFilter()
+        let monoBassCoeffs = BiquadMath.calculateCoefficients(
+            type: .lowPass,
+            sampleRate: sampleRate,
+            frequency: 80.0,
+            q: 0.7071,  // Butterworth Q
+            gain: 0.0
+        )
+        monoBassLowpassL.setCoefficients(monoBassCoeffs, resetState: true)
+        monoBassLowpassR.setCoefficients(monoBassCoeffs, resetState: true)
+
+        // Mains high-pass filters (2nd-order Butterworth at 80 Hz)
+        mainsHighPassL = BiquadFilter()
+        mainsHighPassR = BiquadFilter()
+        let mainsHighPassCoeffs = BiquadMath.calculateCoefficients(
+            type: .highPass,
+            sampleRate: sampleRate,
+            frequency: 80.0,
+            q: 0.7071,  // Butterworth Q
+            gain: 0.0
+        )
+        mainsHighPassL.setCoefficients(mainsHighPassCoeffs, resetState: true)
+        mainsHighPassR.setCoefficients(mainsHighPassCoeffs, resetState: true)
 
         // Advanced metric atomics (audio → main)
         _phaseCorrelationBits   = ManagedAtomic(floatBits(0.0))
@@ -602,6 +660,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         lookAheadWriteIndex = 0
         limiterGainCurrent  = 1.0
         lookAheadSize = newSize
+    }
+
+    func setSystemVolume(_ volume: Float) {
+        _systemVolumeBits.store(floatBits(max(0.0, min(1.0, volume))), ordering: .relaxed)
     }
 
     // MARK: - Advanced Processing Setters (main thread)
@@ -996,10 +1058,24 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stage 4: Expander.
         if expOn { processExpander(abl: abl, numCh: numCh, count: count) }
 
+        // Mains high-pass filter (before limiter).
+        if numCh >= 2 {
+            guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                  let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
+            processMainsHighPass(bufL: bufL, bufR: bufR, frameCount: frameCount)
+        }
+
         // Stage 5: Soft Clipper + Brickwall Limiter.
         let oversampleOn = _oversamplingEnabled.load(ordering: .relaxed) != 0
         if !oversampleOn {
             processSoftClipperAndLimiter(abl: abl, numCh: numCh, count: count, softOn: softOn, limOn: limOn)
+        }
+
+        // Mono bass summing (after limiter, before de-harsh).
+        if numCh >= 2 {
+            guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                  let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
+            processMonoBass(bufL: bufL, bufR: bufR, frameCount: frameCount)
         }
 
         // Stage 6: De-Harsh Tilt Filter.
@@ -1094,8 +1170,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
     ) {
         let sr = storedSampleRate
-        let (b0ls, b1ls, b2ls, a1ls, a2ls) = Self.lowShelfCoeffs(fc: 80.0, gainDB:  3.0, sr: sr)
-        let (b0hs, b1hs, b2hs, a1hs, a2hs) = Self.highShelfCoeffs(fc: 6000.0, gainDB: 1.5, sr: sr)
+        let volume = bitsToFloat(_systemVolumeBits.load(ordering: .relaxed))
+
+        // Scale loudness contour based on system volume
+        // At high volumes (1.0), reduce contour strength to avoid over-boosting
+        // At low volumes (0.0), apply full contour strength
+        let volumeScale = 1.0 - (volume * 0.5)  // Scale from 1.0 at vol=0 to 0.5 at vol=1.0
+
+        let lowShelfGain = 3.0 * volumeScale
+        let highShelfGain = 1.5 * volumeScale
+
+        let (b0ls, b1ls, b2ls, a1ls, a2ls) = Self.lowShelfCoeffs(fc: 80.0, gainDB: lowShelfGain, sr: sr)
+        let (b0hs, b1hs, b2hs, a1hs, a2hs) = Self.highShelfCoeffs(fc: 6000.0, gainDB: highShelfGain, sr: sr)
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             var w1ls = contourState[ch * 4]
@@ -1505,6 +1591,102 @@ final class DynamicsProcessor: @unchecked Sendable {
             }
             subBassPhaseState[ch * 2]     = w1
             subBassPhaseState[ch * 2 + 1] = w2
+        }
+    }
+
+    /// Mono bass summing: sums L+R below crossover frequency for subwoofer output.
+    /// - Parameters:
+    ///   - bufL: Left channel buffer (mutable, will be overwritten with mono)
+    ///   - bufR: Right channel buffer (mutable, will be overwritten with mono)
+    ///   - frameCount: Number of frames to process
+    @inline(__always)
+    private func processMonoBass(
+        bufL: UnsafeMutablePointer<Float>,
+        bufR: UnsafeMutablePointer<Float>,
+        frameCount: UInt32
+    ) {
+        guard _monoBassEnabled.load(ordering: .relaxed) != 0 else { return }
+
+        let count = Int(frameCount)
+        let crossover = bitsToFloat(_monoBassCrossoverBits.load(ordering: .relaxed))
+        let sr = storedSampleRate
+
+        // Recompute lowpass coefficients if crossover changed
+        // (Simple approach: recompute every call for now, can optimize with dirty flag later)
+        let coeffs = BiquadMath.calculateCoefficients(
+            type: .lowPass,
+            sampleRate: sr,
+            frequency: Double(crossover),
+            q: 0.7071,  // Butterworth Q
+            gain: 0.0
+        )
+        monoBassLowpassL.setCoefficients(coeffs, resetState: false)
+        monoBassLowpassR.setCoefficients(coeffs, resetState: false)
+
+        // Lowpass-filter both channels
+        var tempL = [Float](repeating: 0, count: count)
+        var tempR = [Float](repeating: 0, count: count)
+
+        tempL.withUnsafeMutableBufferPointer { tempLPtr in
+            monoBassLowpassL.process(input: bufL, output: tempLPtr.baseAddress!, frameCount: frameCount)
+        }
+
+        tempR.withUnsafeMutableBufferPointer { tempRPtr in
+            monoBassLowpassR.process(input: bufR, output: tempRPtr.baseAddress!, frameCount: frameCount)
+        }
+
+        // Sum the filtered outputs and write mono to both channels
+        for i in 0..<count {
+            let mono = tempL[i] + tempR[i]
+            bufL[i] = mono
+            bufR[i] = mono
+        }
+    }
+
+    /// Mains high-pass filter: removes sub-bass from main speakers when using subwoofer.
+    /// - Parameters:
+    ///   - bufL: Left channel buffer (mutable, will be filtered in-place)
+    ///   - bufR: Right channel buffer (mutable, will be filtered in-place)
+    ///   - frameCount: Number of frames to process
+    @inline(__always)
+    private func processMainsHighPass(
+        bufL: UnsafeMutablePointer<Float>,
+        bufR: UnsafeMutablePointer<Float>,
+        frameCount: UInt32
+    ) {
+        guard _mainsHighPassEnabled.load(ordering: .relaxed) != 0 else { return }
+
+        let count = Int(frameCount)
+        let frequency = bitsToFloat(_mainsHighPassFrequencyBits.load(ordering: .relaxed))
+        let sr = storedSampleRate
+
+        // Recompute highpass coefficients if frequency changed
+        let coeffs = BiquadMath.calculateCoefficients(
+            type: .highPass,
+            sampleRate: sr,
+            frequency: Double(frequency),
+            q: 0.7071,  // Butterworth Q
+            gain: 0.0
+        )
+        mainsHighPassL.setCoefficients(coeffs, resetState: false)
+        mainsHighPassR.setCoefficients(coeffs, resetState: false)
+
+        // Highpass-filter both channels in-place
+        var tempL = [Float](repeating: 0, count: count)
+        var tempR = [Float](repeating: 0, count: count)
+
+        tempL.withUnsafeMutableBufferPointer { tempLPtr in
+            mainsHighPassL.process(input: bufL, output: tempLPtr.baseAddress!, frameCount: frameCount)
+        }
+
+        tempR.withUnsafeMutableBufferPointer { tempRPtr in
+            mainsHighPassR.process(input: bufR, output: tempRPtr.baseAddress!, frameCount: frameCount)
+        }
+
+        // Write filtered outputs back to buffers
+        for i in 0..<count {
+            bufL[i] = tempL[i]
+            bufR[i] = tempR[i]
         }
     }
 

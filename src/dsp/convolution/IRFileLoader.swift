@@ -46,8 +46,8 @@ enum IRFileLoader {
             throw IRError.emptyFile
         }
         
-        // Limit IR length to 10 seconds at target sample rate
-        let maxFrames = Int(targetSampleRate * 10.0)
+        // Limit IR length to 30 seconds at target sample rate
+        let maxFrames = Int(targetSampleRate * 30.0)
         let framesToRead = Int(frameCount) > maxFrames ? maxFrames : Int(frameCount)
         
         guard let buffer = AVAudioPCMBuffer(
@@ -100,42 +100,39 @@ enum IRFileLoader {
         )
     }
     
-    /// Resamples audio from one sample rate to another.
+    /// Resamples audio from one sample rate to another using AVAudioConverter.
     private static func resample(
         left: [Float],
         right: [Float],
         fromRate: Double,
         toRate: Double
     ) throws -> (left: [Float], right: [Float]) {
-        // Simple linear interpolation for now
-        // TODO: Use proper resampling (e.g., vDSP or AVAudioConverter)
-        let ratio = fromRate / toRate
-        let outputLength = Int(Double(left.count) / ratio)
-        
-        var leftResampled = [Float](repeating: 0, count: outputLength)
-        var rightResampled = [Float](repeating: 0, count: outputLength)
-        
-        for i in 0..<outputLength {
-            let srcIndex = Double(i) * ratio
-            let srcIndexFloor = Int(srcIndex)
-            let srcIndexCeil = min(srcIndexFloor + 1, left.count - 1)
-            let fraction = Float(srcIndex - Double(srcIndexFloor))
-            
-            let leftFloor = left[srcIndexFloor]
-            let leftCeil = left[srcIndexCeil]
-            let oneMinusFraction = 1.0 - fraction
-            let leftLerp = leftFloor * oneMinusFraction
-            let leftLerpFinal = leftLerp + leftCeil * fraction
-            leftResampled[i] = leftLerpFinal
-            
-            let rightFloor = right[srcIndexFloor]
-            let rightCeil = right[srcIndexCeil]
-            let rightLerp = rightFloor * oneMinusFraction
-            let rightLerpFinal = rightLerp + rightCeil * fraction
-            rightResampled[i] = rightLerpFinal
+        let isStereo = true
+        let inFormat  = AVAudioFormat(standardFormatWithSampleRate: fromRate, channels: 2)!
+        let outFormat = AVAudioFormat(standardFormatWithSampleRate: toRate,   channels: 2)!
+        guard let converter = AVAudioConverter(from: inFormat, to: outFormat) else {
+            throw IRError.unsupportedFormat
         }
-        
-        return (leftResampled, rightResampled)
+        let inFrames  = AVAudioFrameCount(left.count)
+        let outFrames = AVAudioFrameCount(Double(inFrames) * toRate / fromRate + 1)
+        guard let inBuf  = AVAudioPCMBuffer(pcmFormat: inFormat,  frameCapacity: inFrames),
+              let outBuf = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: outFrames)
+        else { throw IRError.bufferCreationFailed }
+        inBuf.frameLength = inFrames
+        left.withUnsafeBufferPointer  { inBuf.floatChannelData![0].initialize(from: $0.baseAddress!, count: left.count) }
+        right.withUnsafeBufferPointer { inBuf.floatChannelData![1].initialize(from: $0.baseAddress!, count: right.count) }
+        var inputConsumed = false
+        let status = converter.convert(to: outBuf, error: nil) { _, outStatus in
+            if inputConsumed { outStatus.pointee = .noDataNow; return nil }
+            outStatus.pointee = .haveData
+            inputConsumed = true
+            return inBuf
+        }
+        guard status != .error else { throw IRError.unsupportedFormat }
+        let n = Int(outBuf.frameLength)
+        let leftOut  = Array(UnsafeBufferPointer(start: outBuf.floatChannelData![0], count: n))
+        let rightOut = Array(UnsafeBufferPointer(start: outBuf.floatChannelData![1], count: n))
+        return (leftOut, rightOut)
     }
     
     enum IRError: LocalizedError {

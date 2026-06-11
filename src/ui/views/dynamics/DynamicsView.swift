@@ -55,7 +55,7 @@ struct DynamicsView: View {
                         spectralEnhancementSection
                         systemUtilitiesSection
                         ltiDenoisingSection
-                        ltiSubBassSection
+                        bassManagementSection
                         ltiConvolutionSection
                     }
                     .formStyle(.grouped)
@@ -494,6 +494,13 @@ struct DynamicsView: View {
             )
 
             Toggle("Dialogue Gate", isOn: dialogueGateBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+                .disabled(!store.dynamicsConfig.loudnessMatch.isEnabled)
+                .opacity(!store.dynamicsConfig.loudnessMatch.isEnabled ? 0.4 : 1.0)
+
+            Toggle("Volume-Dependent Loudness", isOn: volumeDependentLoudnessBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
                 .font(.system(size: 13))
@@ -972,6 +979,18 @@ struct DynamicsView: View {
         }
     }
 
+    // MARK: - LTI: Bass Management Section
+
+    private var bassManagementSection: some View {
+        Section {
+            ltiSubBassSection
+            ltiMonoBassSection
+            ltiMainsHighPassSection
+        } header: {
+            Text("Bass Management")
+        }
+    }
+
     // MARK: - LTI: Sub-Bass Phase Alignment Section
 
     private var ltiSubBassSection: some View {
@@ -991,6 +1010,58 @@ struct DynamicsView: View {
             )
         } header: {
             Text("Sub-Bass Phase Alignment")
+        } footer: {
+            Text("Applies allpass filter to align sub-bass phase with mains.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - LTI: Mono Bass Summing Section
+
+    private var ltiMonoBassSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiMonoBassEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Crossover",
+                value: ltiMonoBassCrossoverBinding,
+                range: 40.0...200.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f Hz", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.monoBassEnabled
+            )
+        } footer: {
+            Text("Sums L+R below crossover frequency for subwoofer output.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - LTI: Mains High-Pass Section
+
+    private var ltiMainsHighPassSection: some View {
+        Section {
+            Toggle("Enabled", isOn: ltiMainsHighPassEnabledBinding)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Crossover",
+                value: ltiMainsHighPassFrequencyBinding,
+                range: 40.0...200.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f Hz", $0) },
+                isDisabled: !store.dynamicsConfig.advanced.mainsHighPassEnabled
+            )
+        } footer: {
+            Text("Removes sub-bass from main speakers when using subwoofer.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1367,6 +1438,12 @@ struct DynamicsView: View {
             set: { val in var adv = store.dynamicsConfig.advanced; adv.loudnessDialogueGateEnabled = val; store.updateAdvancedProcessing(adv) }
         )
     }
+    private var volumeDependentLoudnessBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.volumeDependentLoudnessEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.volumeDependentLoudnessEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
     private var deesserDynModeBinding: Binding<Bool> {
         Binding(
             get: { store.dynamicsConfig.advanced.deesserDynamicModeEnabled },
@@ -1663,7 +1740,41 @@ struct DynamicsView: View {
     private var ltiSubBassFreqBinding: Binding<Double> {
         Binding(
             get: { Double(store.dynamicsConfig.advanced.subBassAlignmentFrequencyHz) },
-            set: { val in var adv = store.dynamicsConfig.advanced; adv.subBassAlignmentFrequencyHz = Float(val); store.updateAdvancedProcessing(adv) }
+            set: { val in
+                var adv = store.dynamicsConfig.advanced
+                adv.subBassAlignmentFrequencyHz = Float(val)
+                adv.monoBassCrossover = Float(val)  // Sync with mono bass crossover
+                store.updateAdvancedProcessing(adv)
+            }
+        )
+    }
+    private var ltiMonoBassEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.monoBassEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.monoBassEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiMonoBassCrossoverBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.monoBassCrossover) },
+            set: { val in
+                var adv = store.dynamicsConfig.advanced
+                adv.monoBassCrossover = Float(val)
+                adv.subBassAlignmentFrequencyHz = Float(val)  // Sync with sub-bass phase alignment
+                store.updateAdvancedProcessing(adv)
+            }
+        )
+    }
+    private var ltiMainsHighPassEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.mainsHighPassEnabled },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.mainsHighPassEnabled = val; store.updateAdvancedProcessing(adv) }
+        )
+    }
+    private var ltiMainsHighPassFrequencyBinding: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.mainsHighPassFrequency) },
+            set: { val in var adv = store.dynamicsConfig.advanced; adv.mainsHighPassFrequency = Float(val); store.updateAdvancedProcessing(adv) }
         )
     }
     private var convolutionEnabledBinding: Binding<Bool> {

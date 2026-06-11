@@ -19,6 +19,9 @@ final class SweepAnalyser {
     /// Sweep signal buffer.
     var sweepSignal: [Float]
 
+    /// Reference sweep for deconvolution (stored during measurement).
+    private var referenceSweep: [Float] = []
+
     /// Inverse sweep for deconvolution.
     private var inverseSweep: [Float]
 
@@ -43,7 +46,7 @@ final class SweepAnalyser {
         let frameCount = Int(sampleRate * duration)
         self.sweepSignal = Array(repeating: 0.0, count: frameCount)
         self.inverseSweep = Array(repeating: 0.0, count: frameCount)
-        self.recordedResponse = Array(repeating: 0.0, count: frameCount * channelCount)
+        self.recordedResponse = Array(repeating: 0.0, count: frameCount)
 
         generateSweep()
     }
@@ -78,64 +81,105 @@ final class SweepAnalyser {
     func startRecording() {
         isRecording = true
         recordedResponse = Array(repeating: 0.0, count: recordedResponse.count)
+        currentSampleIndex = 0
     }
 
     func stopRecording() {
         isRecording = false
     }
 
-    func processSamples(_ samples: [Float], channel: Int) {
-        guard isRecording else { return }
-        guard channel < channelCount else { return }
-
-        let offset = channel * sweepSignal.count
-        let copyCount = min(samples.count, sweepSignal.count)
-
-        for i in 0..<copyCount {
-            if offset + i < recordedResponse.count {
-                recordedResponse[offset + i] = samples[i]
-            }
-        }
+    /// Sets the reference sweep signal for deconvolution.
+    func setReferenceSweep(_ sweep: [Float]) {
+        referenceSweep = sweep
     }
+
+    /// Accumulates captured mic audio.
+    func recordSamples(_ samples: [Float]) {
+        guard isRecording else { return }
+
+        let copyCount = min(samples.count, recordedResponse.count - currentSampleIndex)
+        for i in 0..<copyCount {
+            recordedResponse[currentSampleIndex + i] = samples[i]
+        }
+        currentSampleIndex += copyCount
+    }
+
+    private var currentSampleIndex: Int = 0
 
     // MARK: - Analysis
 
-    /// Computes the impulse response from the recorded sweep.
-    /// - Parameter channel: Channel to analyse
-    /// - Returns: Impulse response
-    func computeImpulseResponse(channel: Int = 0) -> [Float] {
-        guard channel < channelCount else { return [] }
+    /// Computes the impulse response from the recorded sweep via deconvolution.
+    /// - Parameter referenceSweep: The reference sweep signal that was played
+    /// - Returns: Impulse response (causal portion, max 1 second)
+    func computeImpulseResponse(referenceSweep: [Float]) -> [Float] {
+        let captured = recordedResponse
+        let reference = referenceSweep
 
-        let offset = channel * sweepSignal.count
-        var channelResponse = Array(repeating: Float(0.0), count: sweepSignal.count)
+        // Zero-pad both to next power of two ≥ captured.count + reference.count
+        let outputLen = captured.count + reference.count - 1
+        let fftSize = nextPowerOfTwo(outputLen)
 
-        for i in 0..<sweepSignal.count {
-            if offset + i < recordedResponse.count {
-                channelResponse[i] = recordedResponse[offset + i]
-            }
+        var paddedCaptured = Array(repeating: Float(0.0), count: fftSize)
+        var paddedReference = Array(repeating: Float(0.0), count: fftSize)
+
+        for i in 0..<captured.count {
+            paddedCaptured[i] = captured[i]
+        }
+        for i in 0..<reference.count {
+            paddedReference[i] = reference[i]
         }
 
-        // Convolve with inverse sweep to get impulse response
-        let fftSize = nextPowerOfTwo(2 * sweepSignal.count)
+        // Forward FFT both
         let fftEngine = FFTEngine(fftSize: fftSize)
+        let capturedFFT = fftEngine.forwardFFT(input: paddedCaptured)
+        let referenceFFT = fftEngine.forwardFFT(input: paddedReference)
 
-        return fftEngine.convolve(signal: channelResponse, impulse: inverseSweep)
+        // Complex division with regularisation: IR(f) = Captured(f) / Reference(f)
+        var realResult = Array(repeating: Float(0.0), count: fftSize / 2)
+        var imagResult = Array(repeating: Float(0.0), count: fftSize / 2)
+
+        for i in 0..<(fftSize / 2) {
+            let ar = capturedFFT.real[i]
+            let ai = capturedFFT.imag[i]
+            let br = referenceFFT.real[i]
+            let bi = referenceFFT.imag[i]
+
+            // Regularise denominator to avoid division by near-zero
+            let denomMag = br * br + bi * bi + 1e-6
+
+            // Complex division: (a+bi) / (c+di) = ((ac+bd) + i(bc-ad)) / (c²+d²)
+            realResult[i] = (ar * br + ai * bi) / denomMag
+            imagResult[i] = (ai * br - ar * bi) / denomMag
+        }
+
+        // Inverse FFT to get time-domain IR
+        let ir = fftEngine.inverseFFT(real: realResult, imag: imagResult)
+
+        // Window with Hann window to suppress pre-ringing
+        let windowSize = min(ir.count, Int(sampleRate * 1.0)) // Max 1 second
+        var windowedIR = Array(repeating: Float(0.0), count: windowSize)
+        for i in 0..<windowSize {
+            let hann = 0.5 * (1.0 - cos(2.0 * .pi * Double(i) / Double(windowSize - 1)))
+            windowedIR[i] = ir[i] * Float(hann)
+        }
+
+        // Return causal portion (trim to min(captured.count, sampleRate * 1.0))
+        let causalLength = min(captured.count, Int(sampleRate * 1.0))
+        return Array(windowedIR.prefix(causalLength))
     }
 
     /// Computes the frequency response from the impulse response.
-    /// - Parameter channel: Channel to analyse
-    /// - Returns: Frequency response data (frequency in Hz, gain in dB)
-    func computeFrequencyResponse(channel: Int = 0) -> [(frequency: Double, gainDB: Double)] {
-        let impulseResponse = computeImpulseResponse(channel: channel)
-
+    /// - Parameter ir: Impulse response
+    /// - Returns: Frequency response data (frequency in Hz, gain in dB) covering 20 Hz–20 kHz
+    func computeFrequencyResponse(ir: [Float]) -> [(frequency: Double, gainDB: Double)] {
         // FFT to get frequency response
-        let fftSize = nextPowerOfTwo(impulseResponse.count)
+        let fftSize = nextPowerOfTwo(ir.count)
         let fftEngine = FFTEngine(fftSize: fftSize)
 
-        // Pad impulse response to FFT size
+        // Pad IR to FFT size
         var paddedIR = Array(repeating: Float(0.0), count: fftSize)
-        for i in 0..<impulseResponse.count {
-            paddedIR[i] = impulseResponse[i]
+        for i in 0..<ir.count {
+            paddedIR[i] = ir[i]
         }
 
         let fftResult = fftEngine.forwardFFT(input: paddedIR)
@@ -151,7 +195,11 @@ final class SweepAnalyser {
             let magnitudeDB = magnitude > 0 ? 20.0 * log10(magnitude) : -100.0
 
             let frequency = Double(i) * sampleRate / Double(fftSize)
-            response.append((frequency, magnitudeDB))
+
+            // Only include 20 Hz–20 kHz range
+            if frequency >= 20.0 && frequency <= 20000.0 {
+                response.append((frequency, magnitudeDB))
+            }
         }
 
         return response

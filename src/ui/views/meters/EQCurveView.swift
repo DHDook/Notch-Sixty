@@ -178,6 +178,33 @@ struct EQCurveView: View {
         ctx.stroke(strokePath,
                    with: .color(Color.accentColor.opacity(0.90)),
                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+
+        // --- Phase overlay ---
+        drawPhaseOverlay(ctx: ctx, size: size, snapshot: snapshot)
+    }
+
+    private func drawPhaseOverlay(ctx: GraphicsContext, size: CGSize, snapshot: CurveSnapshot) {
+        let phases = computePhaseResponse(snapshot: snapshot,
+                                         resolution: resolution,
+                                         freqMin: freqMin,
+                                         freqMax: freqMax)
+        guard phases.count == resolution else { return }
+
+        // Normalize phase to fit in the plot range (-π to π mapped to ±maxDB)
+        let phaseScale = maxDB / Double.pi
+
+        var phasePath = Path()
+        for i in 0..<resolution {
+            let t = Double(i) / Double(resolution - 1)
+            let x = CGFloat(t) * size.width
+            let y = yForDB(phases[i] * phaseScale, height: size.height)
+            if i == 0 { phasePath.move(to: CGPoint(x: x, y: y)) }
+            else       { phasePath.addLine(to: CGPoint(x: x, y: y)) }
+        }
+
+        ctx.stroke(phasePath,
+                   with: .color(.secondary.opacity(0.5)),
+                   style: StrokeStyle(lineWidth: 1.0, dash: [4, 4]))
     }
 
     // MARK: - Coordinate Helpers
@@ -270,6 +297,52 @@ struct EQCurveView: View {
             }
 
             return totalDB
+        }
+    }
+
+    // MARK: - Phase Response Computation
+
+    private func computePhaseResponse(snapshot: CurveSnapshot,
+                                     resolution: Int,
+                                     freqMin: Double,
+                                     freqMax: Double) -> [Double] {
+        let sr = snapshot.sampleRate
+        let logMin = log10(freqMin)
+        let logMax = log10(freqMax)
+
+        return (0..<resolution).map { i in
+            let t   = Double(i) / Double(resolution - 1)
+            let f   = pow(10.0, logMin + t * (logMax - logMin))
+            let w   = 2.0 * Double.pi * f / sr
+            let cosW  = cos(w)
+            let cos2W = cos(2*w)
+
+            var totalPhase = 0.0
+
+            // --- EQ bands ---
+            for bandIdx in 0..<snapshot.activeBandCount {
+                let band = snapshot.bands[bandIdx]
+                guard !band.bypass else { continue }
+
+                let sections = BiquadMath.calculateSections(
+                    type:       band.filterType,
+                    sampleRate: sr,
+                    frequency:  Double(band.frequency),
+                    q:          Double(band.q),
+                    gain:       Double(band.gain),
+                    slope:      band.slope
+                )
+
+                for c in sections {
+                    // Phase formula: φ(f) = atan2(b1 + 2b2 cos(2πf/fs), b0 + b1 cos(2πf/fs) + b2 cos(4πf/fs))
+                    //                - atan2(a1 + 2a2 cos(2πf/fs), 1 + a1 cos(2πf/fs) + a2 cos(4πf/fs))
+                    let numPhase = atan2(c.b1 + 2*c.b2*cos2W, c.b0 + c.b1*cosW + c.b2*cos2W)
+                    let denPhase = atan2(c.a1 + 2*c.a2*cos2W, 1.0 + c.a1*cosW + c.a2*cos2W)
+                    totalPhase += numPhase - denPhase
+                }
+            }
+
+            return totalPhase
         }
     }
 }

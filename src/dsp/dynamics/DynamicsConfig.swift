@@ -577,6 +577,19 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Target curve type: flat, house curve, or custom imported from REW.
     var targetCurveType: TargetCurveType = .flat
 
+    /// Mono Bass Summing — sums L+R below crossover frequency for subwoofer output.
+    var monoBassEnabled: Bool = false
+    /// Mono bass crossover frequency in Hz. Range: 40 – 200 Hz. Default: 80 Hz.
+    var monoBassCrossover: Float = 80.0
+
+    /// Mains High-Pass Filter — removes sub-bass from main speakers when using subwoofer.
+    var mainsHighPassEnabled: Bool = false
+    /// Mains high-pass crossover frequency in Hz. Range: 40 – 200 Hz. Default: 80 Hz.
+    var mainsHighPassFrequency: Float = 80.0
+
+    /// Volume-Dependent Loudness — adjusts loudness contour based on system volume.
+    var volumeDependentLoudnessEnabled: Bool = false
+
     // MARK: - Codable
 
     static let `default` = AdvancedProcessingConfig()
@@ -612,6 +625,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case linearPhaseEQEnabled
         case roomCorrectionEnabled
         case targetCurveType
+        case monoBassEnabled, monoBassCrossover
+        case mainsHighPassEnabled, mainsHighPassFrequency
+        case volumeDependentLoudnessEnabled
         // LTI Suite
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount
@@ -665,7 +681,16 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         multiSeatAveragingEnabled: Bool = false,
         multiSeatCount: Int = 2,
         subBassPhaseAlignmentEnabled: Bool = false,
-        subBassAlignmentFrequencyHz: Float = 80.0
+        subBassAlignmentFrequencyHz: Float = 80.0,
+        oversamplingEnabled: Bool = false,
+        linearPhaseEQEnabled: Bool = false,
+        roomCorrectionEnabled: Bool = false,
+        targetCurveType: TargetCurveType = .flat,
+        monoBassEnabled: Bool = false,
+        monoBassCrossover: Float = 80.0,
+        mainsHighPassEnabled: Bool = false,
+        mainsHighPassFrequency: Float = 80.0,
+        volumeDependentLoudnessEnabled: Bool = false
     ) {
         self.highResDecouplingActive          = highResDecouplingActive
         self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
@@ -709,6 +734,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.multiSeatCount                   = multiSeatCount
         self.subBassPhaseAlignmentEnabled     = subBassPhaseAlignmentEnabled
         self.subBassAlignmentFrequencyHz      = subBassAlignmentFrequencyHz
+        self.oversamplingEnabled              = oversamplingEnabled
+        self.linearPhaseEQEnabled             = linearPhaseEQEnabled
+        self.roomCorrectionEnabled            = roomCorrectionEnabled
+        self.targetCurveType                  = targetCurveType
+        self.monoBassEnabled                  = monoBassEnabled
+        self.monoBassCrossover                = monoBassCrossover
+        self.mainsHighPassEnabled             = mainsHighPassEnabled
+        self.mainsHighPassFrequency           = mainsHighPassFrequency
+        self.volumeDependentLoudnessEnabled   = volumeDependentLoudnessEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -754,6 +788,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         multiSeatCount                   = try c.decodeIfPresent(Int.self,                   forKey: .multiSeatCount)                   ?? 2
         subBassPhaseAlignmentEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .subBassPhaseAlignmentEnabled)     ?? false
         subBassAlignmentFrequencyHz      = try c.decodeIfPresent(Float.self,                 forKey: .subBassAlignmentFrequencyHz)      ?? 80.0
+        oversamplingEnabled              = try c.decodeIfPresent(Bool.self,                  forKey: .oversamplingEnabled)              ?? false
+        linearPhaseEQEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .linearPhaseEQEnabled)             ?? false
+        roomCorrectionEnabled            = try c.decodeIfPresent(Bool.self,                  forKey: .roomCorrectionEnabled)            ?? false
+        targetCurveType                  = try c.decodeIfPresent(TargetCurveType.self,       forKey: .targetCurveType)                  ?? .flat
+        monoBassEnabled                  = try c.decodeIfPresent(Bool.self,                  forKey: .monoBassEnabled)                  ?? false
+        monoBassCrossover                = try c.decodeIfPresent(Float.self,                 forKey: .monoBassCrossover)                ?? 80.0
+        mainsHighPassEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .mainsHighPassEnabled)             ?? false
+        mainsHighPassFrequency           = try c.decodeIfPresent(Float.self,                 forKey: .mainsHighPassFrequency)           ?? 80.0
+        volumeDependentLoudnessEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .volumeDependentLoudnessEnabled)   ?? false
         highResDecouplingActive          = false  // always computed at runtime
     }
 
@@ -800,6 +843,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(multiSeatCount,                     forKey: .multiSeatCount)
         try c.encode(subBassPhaseAlignmentEnabled,       forKey: .subBassPhaseAlignmentEnabled)
         try c.encode(subBassAlignmentFrequencyHz,        forKey: .subBassAlignmentFrequencyHz)
+        try c.encode(oversamplingEnabled,                forKey: .oversamplingEnabled)
+        try c.encode(linearPhaseEQEnabled,               forKey: .linearPhaseEQEnabled)
+        try c.encode(roomCorrectionEnabled,              forKey: .roomCorrectionEnabled)
+        try c.encode(targetCurveType,                    forKey: .targetCurveType)
+        try c.encode(monoBassEnabled,                    forKey: .monoBassEnabled)
+        try c.encode(monoBassCrossover,                  forKey: .monoBassCrossover)
+        try c.encode(mainsHighPassEnabled,               forKey: .mainsHighPassEnabled)
+        try c.encode(mainsHighPassFrequency,             forKey: .mainsHighPassFrequency)
+        try c.encode(volumeDependentLoudnessEnabled,     forKey: .volumeDependentLoudnessEnabled)
     }
 }
 
