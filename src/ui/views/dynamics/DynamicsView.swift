@@ -2344,6 +2344,7 @@ struct DynamicsInlineView: View {
             InlineBitStreamView(bridge: inlineMeterBridge)
             InlineBitRateView()
             InlineTruePeakView(bridge: inlineMeterBridge)
+            TruePeakMeterView(truePeakDB: -90.0, isOversampled: false)
         }
         .frame(minWidth: 110)
     }
