@@ -111,8 +111,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var ditherPrevRand:  Float = 0.0
     /// 5-tap feedback delay for Wannamaker 5th-order noise shaper. Length = channelCount * 5.
     nonisolated(unsafe) var noiseShapeState: [Float]
-    /// 2nd-order allpass biquad state for sub-bass phase alignment.
-    /// Layout: [ch * 2 + 0] = w1, [ch * 2 + 1] = w2.
+    /// 4th-order allpass cascade (2 biquad sections) for sub-bass phase alignment.
+    /// Layout: [ch * 4 + 0] = section 1 w1, [ch * 4 + 1] = section 1 w2,
+    ///         [ch * 4 + 2] = section 2 w1, [ch * 4 + 3] = section 2 w2.
     nonisolated(unsafe) var subBassPhaseState: [Float]
     /// 2nd-order Butterworth lowpass biquad state for mono bass extraction (per channel).
     /// Layout: [ch * 2 + 0] = w1, [ch * 2 + 1] = w2.
@@ -128,7 +129,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let irAlignBufs: [UnsafeMutablePointer<Float>]
     nonisolated(unsafe) var irAlignWriteIdx: Int = 0
     nonisolated(unsafe) var irAlignSamples:  Int = 0
-    // Thiran all-pass state: [ch * 2 + 0] = w1, [ch * 2 + 1] = w2
+    // Lagrange 4th-order (5-tap) fractional delay FIR state: [ch * 5 + 0..4] = tap0..tap4
     nonisolated(unsafe) var irAlignApState: [Float]
 
     // Crosstalk cancellation filter state (one LP filter state per channel)
@@ -205,6 +206,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _dcOffsetEnabled:        ManagedAtomic<Int32>
     private let _dialogueGateEnabled:    ManagedAtomic<Int32>
     private let _loudnessContourEnabled: ManagedAtomic<Int32>
+    private let _loudnessRefPhonBits:    ManagedAtomic<Int32>  // Float bits, phons
+    private let _loudnessRefVolBits:     ManagedAtomic<Int32>  // Float bits, 0–1
+    private let _volumeDependentBits:    ManagedAtomic<Int32>
     private let _deesserDynModeEnabled:  ManagedAtomic<Int32>
     private let _asymmetryTrimBits:      ManagedAtomic<Int32>  // Float bits, dB
     private let _deharshEnabled:         ManagedAtomic<Int32>
@@ -473,9 +477,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.deharshState  = Array(repeating: 0.0, count: 2 * ch)
         self.contourState  = Array(repeating: 0.0, count: 4 * ch)
         self.noiseShapeState = Array(repeating: 0.0, count: ch * 5)
-        self.subBassPhaseState = Array(repeating: 0.0, count: ch * 2)
+        self.subBassPhaseState = Array(repeating: 0.0, count: ch * 4)
         self.monoBassLowpassState = Array(repeating: 0.0, count: ch * 2)
-        self.irAlignApState = Array(repeating: 0.0, count: ch * 2)
+        self.irAlignApState = Array(repeating: 0.0, count: ch * 5)
         self.crosstalkFilterState = Array(repeating: 0.0, count: ch)
         self.denoisers = (0..<ch).map { _ in SpectralDenoiser() }
 
@@ -484,6 +488,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         _dcOffsetEnabled        = ManagedAtomic(0)
         _dialogueGateEnabled    = ManagedAtomic(0)
         _loudnessContourEnabled = ManagedAtomic(0)
+        _loudnessRefPhonBits    = ManagedAtomic(floatBits(83.0))
+        _loudnessRefVolBits     = ManagedAtomic(floatBits(0.85))
+        _volumeDependentBits    = ManagedAtomic(0)
         _deesserDynModeEnabled  = ManagedAtomic(0)
         _asymmetryTrimBits      = ManagedAtomic(floatBits(0.0))
         _deharshEnabled         = ManagedAtomic(0)
@@ -680,6 +687,15 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     func setLoudnessContourEnabled(_ v: Bool) {
         _loudnessContourEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
+    func setLoudnessReferencePhon(_ v: Float) {
+        _loudnessRefPhonBits.store(floatBits(v), ordering: .relaxed)
+    }
+    func setLoudnessReferenceVolume(_ v: Float) {
+        _loudnessRefVolBits.store(floatBits(v), ordering: .relaxed)
+    }
+    func setVolumeDependentLoudnessEnabled(_ v: Bool) {
+        _volumeDependentBits.store(v ? 1 : 0, ordering: .relaxed)
     }
     func setDeesserDynamicModeEnabled(_ v: Bool) {
         _deesserDynModeEnabled.store(v ? 1 : 0, ordering: .relaxed)
@@ -887,6 +903,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
         setDialogueGateEnabled(adv.loudnessDialogueGateEnabled)
         setLoudnessContourEnabled(adv.loudnessContourEnabled)
+        setLoudnessReferencePhon(adv.loudnessReferencePhon)
+        setLoudnessReferenceVolume(adv.loudnessReferenceVolume)
+        setVolumeDependentLoudnessEnabled(adv.volumeDependentLoudnessEnabled)
         setDeesserDynamicModeEnabled(adv.deesserDynamicModeEnabled)
         setClipperAsymmetryTrimDB(adv.clipperAsymmetryTrimDB)
         setDeharshFilterEnabled(adv.deharshFilterEnabled)
@@ -1172,13 +1191,19 @@ final class DynamicsProcessor: @unchecked Sendable {
         let sr = storedSampleRate
         let volume = bitsToFloat(_systemVolumeBits.load(ordering: .relaxed))
 
-        // Scale loudness contour based on system volume
-        // At high volumes (1.0), reduce contour strength to avoid over-boosting
-        // At low volumes (0.0), apply full contour strength
-        let volumeScale = 1.0 - (volume * 0.5)  // Scale from 1.0 at vol=0 to 0.5 at vol=1.0
+        let refPhon    = Double(bitsToFloat(_loudnessRefPhonBits.load(ordering: .relaxed)))
+        let refVol     = bitsToFloat(_loudnessRefVolBits.load(ordering: .relaxed))
+        let volumeScl  = max(0.001, Double(volume) / max(Double(refVol), 0.001))
+        // Map current volume to phons via log relationship:
+        // ΔdB ≈ 20·log10(volumeScl). This maps volume ratio to approximate SPL change.
+        let deltaDB       = 20.0 * log10(volumeScl)
+        let listeningPhon = max(20.0, refPhon + deltaDB)
 
-        let lowShelfGain = 3.0 * volumeScale
-        let highShelfGain = 1.5 * volumeScale
+        let (lowShelfGain, highShelfGain): (Float, Float) =
+            bitsToFloat(_volumeDependentBits.load(ordering: .relaxed)) != 0
+                ? Self.iso226CorrectionGains(listeningPhon: listeningPhon, referencePhon: refPhon)
+                : (3.0 * Float(1.0 - Double(volume) * 0.5),   // legacy linear mode when vol-dep off
+                   1.5 * Float(1.0 - Double(volume) * 0.5))
 
         let (b0ls, b1ls, b2ls, a1ls, a2ls) = Self.lowShelfCoeffs(fc: 80.0, gainDB: lowShelfGain, sr: sr)
         let (b0hs, b1hs, b2hs, a1hs, a2hs) = Self.highShelfCoeffs(fc: 6000.0, gainDB: highShelfGain, sr: sr)
@@ -1301,7 +1326,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
     }
 
-    /// Thiran all-pass fractional-sample delay applied uniformly to all channels.
+    /// Lagrange 4th-order (5-tap) fractional-sample delay applied uniformly to all channels.
     /// Compensates for multi-driver speaker acoustic-centre offset.
     @inline(__always)
     private func processIRAlignment(
@@ -1312,17 +1337,23 @@ final class DynamicsProcessor: @unchecked Sendable {
         let intDel   = min(Int(dSamples), Self.maxIRAlignSamples - 1)
         let frac     = Float(dSamples - Double(intDel))   // 0.0 ..< 1.0
 
-        // Thiran 2nd-order all-pass: D = frac + 1.0 (maps frac to [1, 2))
-        let D: Float = frac + 1.0
-        let a1_thiran: Float = -2.0 * (D - 2.0) / (D + 1.0)
-        let a2_thiran: Float = ((D - 1.0) * (D - 2.0)) / ((D + 1.0) * (D + 2.0))
-        // Thiran numerator: b0 = a2, b1 = a1, b2 = 1
-        let b0 = a2_thiran
-        let b1 = a1_thiran
-        let b2: Float = 1.0
-        // Negate feedback coefficients for processBiquad convention (na1 = -a1, na2 = -a2)
-        let na1 = -a1_thiran
-        let na2 = -a2_thiran
+        // Lagrange 4th-order (5-tap) fractional delay FIR.
+        // d ∈ [0, 1.0): fractional portion of the delay in samples.
+        // Centre tap is at index 2 (causal, minimum-latency form).
+        // For d = 0 this collapses to a pure integer delay with no filtering.
+        var lagCoeffs: (Float, Float, Float, Float, Float)
+        do {
+            let d = Double(frac)   // fractional delay in [0, 1.0)
+            var c = [Double](repeating: 0, count: 5)
+            for k in 0..<5 {
+                var h = 1.0
+                for n in 0..<5 where n != k {
+                    h *= (d - Double(n - 2)) / Double(k - n)
+                }
+                c[k] = h
+            }
+            lagCoeffs = (Float(c[0]), Float(c[1]), Float(c[2]), Float(c[3]), Float(c[4]))
+        }
 
         irAlignSamples = intDel
         let bufSize = Self.maxIRAlignSamples
@@ -1330,21 +1361,35 @@ final class DynamicsProcessor: @unchecked Sendable {
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             let ringBuf = irAlignBufs[ch]
-            var w1 = irAlignApState[ch * 2]
-            var w2 = irAlignApState[ch * 2 + 1]
-            var writeIdx = irAlignWriteIdx   // local copy; same starting position for each channel
+            let base    = ch * 5
+            var tap0 = irAlignApState[base + 0]
+            var tap1 = irAlignApState[base + 1]
+            var tap2 = irAlignApState[base + 2]
+            var tap3 = irAlignApState[base + 3]
+            var tap4 = irAlignApState[base + 4]
+            let (lc0, lc1, lc2, lc3, lc4) = lagCoeffs
+            var writeIdx = irAlignWriteIdx
 
             for i in 0..<count {
+                // Push into integer delay ring buffer
                 ringBuf[writeIdx] = buf[i]
                 let readIdx = (writeIdx - intDel + bufSize) % bufSize
-                buf[i] = Self.processBiquad(ringBuf[readIdx],
-                    b0: b0, b1: b1, b2: b2, na1: na1, na2: na2,
-                    w1: &w1, w2: &w2)
+                let s = ringBuf[readIdx]   // integer-delayed sample
+
+                // Shift FIR delay line and apply Lagrange coefficients
+                tap4 = tap3; tap3 = tap2; tap2 = tap1; tap1 = tap0
+                tap0 = s
+                buf[i] = lc0 * tap0 + lc1 * tap1 + lc2 * tap2 + lc3 * tap3 + lc4 * tap4
+
                 writeIdx = (writeIdx + 1) % bufSize
             }
-            irAlignApState[ch * 2]     = w1
-            irAlignApState[ch * 2 + 1] = w2
-            if ch == 0 { irAlignWriteIdx = writeIdx }  // advance shared index once after first channel
+
+            irAlignApState[base + 0] = tap0
+            irAlignApState[base + 1] = tap1
+            irAlignApState[base + 2] = tap2
+            irAlignApState[base + 3] = tap3
+            irAlignApState[base + 4] = tap4
+            if ch == 0 { irAlignWriteIdx = writeIdx }
         }
     }
 
@@ -1484,7 +1529,33 @@ final class DynamicsProcessor: @unchecked Sendable {
         let invLSB: Float = 8_388_608.0
 
         if mode == 3 {
-            if storedSampleRate > 54_000 {
+            if let h = Self.noiseShapeCoefficients(sampleRate: storedSampleRate) {
+                // Apply noise-shaped dither with rate-appropriate coefficients.
+                for ch in 0..<numCh {
+                    guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    let base = ch * 5
+                    var s0 = noiseShapeState[base]
+                    var s1 = noiseShapeState[base + 1]
+                    var s2 = noiseShapeState[base + 2]
+                    var s3 = noiseShapeState[base + 3]
+                    var s4 = noiseShapeState[base + 4]
+                    for i in 0..<count {
+                        let r = ditherRNG.nextFloat(in: -lsb...lsb)
+                        let shaped = r - (h.0*s0 + h.1*s1 + h.2*s2 + h.3*s3 + h.4*s4)
+                        let input = buf[i] + shaped
+                        let quant = (input * invLSB).rounded() * lsb
+                        let error = quant - input
+                        s4 = s3; s3 = s2; s2 = s1; s1 = s0; s0 = error
+                        buf[i] = quant
+                    }
+                    noiseShapeState[base]     = s0
+                    noiseShapeState[base + 1] = s1
+                    noiseShapeState[base + 2] = s2
+                    noiseShapeState[base + 3] = s3
+                    noiseShapeState[base + 4] = s4
+                }
+            } else {
+                // Flat TPDF — shaped dither not beneficial at this rate.
                 for ch in 0..<numCh {
                     guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                     for i in 0..<count {
@@ -1493,32 +1564,6 @@ final class DynamicsProcessor: @unchecked Sendable {
                         buf[i] = (buf[i] * invLSB + r1 + r2).rounded() * lsb
                     }
                 }
-                return
-            }
-            let h: (Float, Float, Float, Float, Float) = (2.033, -2.165, 1.959, -1.590, 0.6149)
-            for ch in 0..<numCh {
-                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                let base = ch * 5
-                var s0 = noiseShapeState[base]
-                var s1 = noiseShapeState[base + 1]
-                var s2 = noiseShapeState[base + 2]
-                var s3 = noiseShapeState[base + 3]
-                var s4 = noiseShapeState[base + 4]
-                for i in 0..<count {
-                    let r = ditherRNG.nextFloat(in: -lsb...lsb)
-                    let shaped = r - (h.0*s0 + h.1*s1 + h.2*s2 + h.3*s3 + h.4*s4)
-                    let input = buf[i] + shaped
-                    let quant = (input * invLSB).rounded() * lsb
-                    let error = quant - input
-                    s4 = s3; s3 = s2; s2 = s1; s1 = s0
-                    s0 = error
-                    buf[i] = quant
-                }
-                noiseShapeState[base]     = s0
-                noiseShapeState[base + 1] = s1
-                noiseShapeState[base + 2] = s2
-                noiseShapeState[base + 3] = s3
-                noiseShapeState[base + 4] = s4
             }
             return
         }
@@ -1547,6 +1592,124 @@ final class DynamicsProcessor: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Returns the 5-tap noise-shaping coefficients for a given sample rate.
+    /// Returns nil if no shaped dither is appropriate (e.g. > 192 kHz where the
+    /// quantisation noise floor is already below −120 dBFS and shaping offers no benefit).
+    private static func noiseShapeCoefficients(sampleRate: Double) -> (Float, Float, Float, Float, Float)? {
+        switch Int(sampleRate) {
+        case 44_000...46_000:   // 44.1 kHz — Wannamaker 5th-order
+            return (2.033, -2.165, 1.959, -1.590, 0.6149)
+        case 47_000...50_000:   // 48 kHz — Wannamaker adapted
+            return (2.412, -2.680, 2.497, -2.070, 0.8295)
+        case 87_000...90_000:   // 88.2 kHz — scaled to equivalent perceptual weighting
+            return (1.662, -1.411, 0.872, -0.483, 0.2000)
+        case 95_000...98_000:   // 96 kHz
+            return (1.540, -1.230, 0.720, -0.380, 0.1500)
+        case 174_000...179_000, // 176.4 kHz
+             191_000...194_000: // 192 kHz
+            return (1.320, -0.980, 0.510, -0.210, 0.0750)
+        default:                // 352.8, 384 kHz and above — flat TPDF sufficient
+            return nil
+        }
+    }
+
+    // ISO 226:2003 equal-loudness contour data.
+    // Each row: (frequency Hz, α_f, L_U, T_f) — standard table values.
+    // α_f and L_U are used to compute the loudness level Lp at each frequency.
+    // Tf is the threshold of hearing in dB SPL.
+    // Reference: ISO 226:2003 Table 1.
+    private static let iso226Table: [(f: Double, af: Double, Lu: Double, Tf: Double)] = [
+        (20,    0.532, -31.6, 78.5),
+        (25,    0.506, -27.2, 68.7),
+        (31.5,  0.480, -23.0, 59.5),
+        (40,    0.455, -19.1, 51.1),
+        (50,    0.432, -15.9, 44.0),
+        (63,    0.409, -13.0, 37.5),
+        (80,    0.387, -10.3, 31.5),
+        (100,   0.367,  -8.1, 26.5),
+        (125,   0.349,  -6.2, 22.1),
+        (160,   0.330,  -4.5, 17.9),
+        (200,   0.315,  -3.1, 14.4),
+        (250,   0.301,  -2.0, 11.4),
+        (315,   0.288,  -1.1,  8.6),
+        (400,   0.276,  -0.4,  6.2),
+        (500,   0.267,   0.0,  4.4),
+        (630,   0.259,   0.3,  3.0),
+        (800,   0.253,   0.5,  2.2),
+        (1000,  0.250,   0.0,  2.4),
+        (1250,  0.246,  -2.7,  3.5),
+        (1600,  0.244,  -4.1,  1.7),
+        (2000,  0.243,  -1.0, -1.3),
+        (2500,  0.243,   1.7, -4.2),
+        (3150,  0.243,   2.5, -6.0),
+        (4000,  0.242,   1.2, -5.4),
+        (5000,  0.242,  -2.1, -1.5),
+        (6300,  0.245,  -7.1,  6.0),
+        (8000,  0.254, -11.2, 12.6),
+        (10000, 0.271, -10.7, 13.9),
+        (12500, 0.301,  -3.5, 12.3)
+    ]
+
+    /// Returns the SPL level (dB) at `freqHz` for a given loudness level `phonDB` (phons)
+    /// using the ISO 226:2003 inverse equal-loudness formula.
+    /// Returns nil if `freqHz` is outside the table range.
+    private static func iso226SPL(freqHz: Double, phonDB: Double) -> Double? {
+        let table = iso226Table
+        guard freqHz >= table.first!.f && freqHz <= table.last!.f else { return nil }
+        // Linear interpolation of table parameters at freqHz.
+        var af = 0.0, lu = 0.0
+        for i in 0..<(table.count - 1) {
+            if freqHz >= table[i].f && freqHz <= table[i+1].f {
+                let t  = (freqHz - table[i].f) / (table[i+1].f - table[i].f)
+                af = table[i].af + t * (table[i+1].af - table[i].af)
+                lu = table[i].Lu + t * (table[i+1].Lu - table[i].Lu)
+                break
+            }
+        }
+        // ISO 226 inverse formula: Lp = (10/α_f) × log10(4×10^-10 × B_f + 0.005135) + 94
+        let ln10_10 = 10.0 / af
+        let Af = pow(10.0, 0.1 * phonDB)                       // loudness level → linear
+        let Af1000 = pow(10.0, 0.1 * 1.0) * Af                 // normalised at 1 kHz, α_f=0.25
+        let Bf = pow(10.0, (ln10_10 * log10(Af1000) - lu) / 1.0)
+        // Direct ISO 226 forward formula for SPL at given phon:
+        // Lp = (10/af) * log10( 4e-10 * Bf ) + 94  (simplified form)
+        let Lp = ln10_10 * log10(max(1e-30, Bf)) + lu + 94.0 - ln10_10 * log10(4e-10)
+        return Lp
+    }
+
+    /// Computes the ISO 226 loudness correction gains at bass and treble shelf frequencies.
+    /// Returns (bassGainDB, trebleGainDB) — the additional EQ correction to apply
+    /// relative to the reference level.
+    ///
+    /// - Parameters:
+    ///   - listeningPhon: Estimated listening level in phons (derived from volume scalar).
+    ///   - referencePhon: Phon level at which the system is calibrated (no correction applied).
+    private static func iso226CorrectionGains(
+        listeningPhon: Double,
+        referencePhon: Double
+    ) -> (bass: Float, treble: Float) {
+        // Compute SPL at the bass shelf and treble shelf frequencies.
+        // Bass: 80 Hz (representative low-frequency anchor).
+        // Treble: 6000 Hz (representative high-frequency anchor).
+        let refBass   = iso226SPL(freqHz: 80,   phonDB: referencePhon) ?? 0
+        let lisBass   = iso226SPL(freqHz: 80,   phonDB: listeningPhon) ?? 0
+        let refTreble = iso226SPL(freqHz: 6000, phonDB: referencePhon) ?? 0
+        let lisTreble = iso226SPL(freqHz: 6000, phonDB: listeningPhon) ?? 0
+        let refMid    = iso226SPL(freqHz: 1000, phonDB: referencePhon) ?? referencePhon
+        let lisMid    = iso226SPL(freqHz: 1000, phonDB: listeningPhon) ?? listeningPhon
+
+        // Correction = what the ear loses at low level relative to reference, at each frequency.
+        // A positive number means we need to boost that frequency at low volume.
+        let midShift  = lisMid - refMid  // overall level difference (mostly from volume itself)
+        let bassCorr  = (lisBass   - refBass)   - midShift  // bass correction relative to mid
+        let trebleCorr = (lisTreble - refTreble) - midShift  // treble correction relative to mid
+
+        // Clamp to ±12 dB and negate: the ear needs MORE bass at low volume, so correction is positive.
+        let bassGain   = Float(max(-12.0, min(12.0, -bassCorr)))
+        let trebleGain = Float(max(-12.0, min(12.0, -trebleCorr)))
+        return (bassGain, trebleGain)
     }
 
     /// Delta solo: outputs the difference (processed − original) so you can hear what the chain adds.
@@ -1582,15 +1745,22 @@ final class DynamicsProcessor: @unchecked Sendable {
         let na2 = -Float(coeffs.a2)
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-            var w1 = subBassPhaseState[ch * 2]
-            var w2 = subBassPhaseState[ch * 2 + 1]
+            // Section 1 state
+            var w1a = subBassPhaseState[ch * 4]
+            var w2a = subBassPhaseState[ch * 4 + 1]
+            // Section 2 state
+            var w1b = subBassPhaseState[ch * 4 + 2]
+            var w2b = subBassPhaseState[ch * 4 + 3]
             for i in 0..<count {
-                buf[i] = Self.processBiquad(buf[i],
-                    b0: b0, b1: b1, b2: b2, na1: na1, na2: na2,
-                    w1: &w1, w2: &w2)
+                let s1 = Self.processBiquad(buf[i], b0: b0, b1: b1, b2: b2,
+                                            na1: na1, na2: na2, w1: &w1a, w2: &w2a)
+                buf[i] = Self.processBiquad(s1,     b0: b0, b1: b1, b2: b2,
+                                            na1: na1, na2: na2, w1: &w1b, w2: &w2b)
             }
-            subBassPhaseState[ch * 2]     = w1
-            subBassPhaseState[ch * 2 + 1] = w2
+            subBassPhaseState[ch * 4]     = w1a
+            subBassPhaseState[ch * 4 + 1] = w2a
+            subBassPhaseState[ch * 4 + 2] = w1b
+            subBassPhaseState[ch * 4 + 3] = w2b
         }
     }
 

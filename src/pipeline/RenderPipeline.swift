@@ -230,13 +230,15 @@ final class RenderPipeline {
 
             logger.info("Input format: \(inputFormat.mSampleRate) Hz, \(inputFormat.mChannelsPerFrame) ch")
 
-            // Check sample rates - they must match for our pipeline
+            // Check sample rates - SRC handles conversion, so only warn on mismatch
             if inputFormat.mSampleRate != outputFormat.mSampleRate {
-                logger.error("Sample rate mismatch: input=\(inputFormat.mSampleRate), output=\(outputFormat.mSampleRate)")
-                return .failure(.sampleRateMismatch(
-                    inputRate: inputFormat.mSampleRate,
-                    outputRate: outputFormat.mSampleRate
-                ))
+                logger.warning("Sample rate mismatch (SRC active): \(inputFormat.mSampleRate) → \(outputFormat.mSampleRate)")
+                // Not an error — SRC handles conversion.
+            }
+
+            // Keep the error only for rates above 384 kHz:
+            if outputFormat.mSampleRate > 384_000 || inputFormat.mSampleRate > 384_000 {
+                return .failure(.unsupportedSampleRate)
             }
 
             // Check channel counts - warn but allow mismatch
@@ -346,14 +348,19 @@ final class RenderPipeline {
         // Reset convolution engine on pipeline start
         context.resetConvolution()
 
-        // Configure SRC (placeholder: same input/output format for now)
-        withUnsafePointer(to: streamFormat) { streamFormatPtr in
-            guard let inputFormat = AVAudioFormat(streamDescription: streamFormatPtr),
-                  let outputFormat = AVAudioFormat(streamDescription: streamFormatPtr) else {
-                return
+        // Configure SRC with actual input and output rates.
+        let driverRate: Double
+        if captureMode == .halInput, let inputManager = inputHALManager {
+            guard case .success(let inputFormat) = inputManager.getClientFormat() else {
+                return .failure(.formatQueryFailed(0))
             }
-            context.configureSRC(inputFormat: inputFormat, outputFormat: outputFormat)
+            driverRate = inputFormat.mSampleRate
+        } else {
+            // Shared memory mode: driver rate equals output rate (no SRC needed)
+            driverRate = streamFormat.mSampleRate
         }
+        let outputRate = streamFormat.mSampleRate  // output device rate
+        context.configureSRC(inputRate: driverRate, outputRate: outputRate)
 
         let contextPtr = UnsafeMutableRawPointer(
             Unmanaged.passUnretained(context).toOpaque()
@@ -712,12 +719,14 @@ final class RenderPipeline {
     ///   - bandIndex: Band index within the layer.
     ///   - coefficients: New biquad coefficients.
     ///   - bypass: Whether this band is bypassed.
+    ///   - needsDoublePrecision: Whether this band requires double-precision processing.
     func updateBandCoefficients(
         channel: EQChannelTarget,
         layerIndex: Int,
         bandIndex: Int,
         sections: [BiquadCoefficients],
-        bypass: Bool
+        bypass: Bool,
+        needsDoublePrecision: Bool = false
     ) {
         guard let context = callbackContext else { return }
         guard layerIndex >= 0 && layerIndex < EQLayerConstants.maxLayerCount else { return }
@@ -727,19 +736,21 @@ final class RenderPipeline {
             context.leftEQChains[layerIndex].stageBandUpdate(
                 index: bandIndex,
                 sections: sections,
-                bypass: bypass
+                bypass: bypass,
+                needsDoublePrecision: needsDoublePrecision
             )
         case .right:
             context.rightEQChains[layerIndex].stageBandUpdate(
                 index: bandIndex,
                 sections: sections,
-                bypass: bypass
+                bypass: bypass,
+                needsDoublePrecision: needsDoublePrecision
             )
         case .both:
             context.leftEQChains[layerIndex].stageBandUpdate(
-                index: bandIndex, sections: sections, bypass: bypass)
+                index: bandIndex, sections: sections, bypass: bypass, needsDoublePrecision: needsDoublePrecision)
             context.rightEQChains[layerIndex].stageBandUpdate(
-                index: bandIndex, sections: sections, bypass: bypass)
+                index: bandIndex, sections: sections, bypass: bypass, needsDoublePrecision: needsDoublePrecision)
         }
     }
 
@@ -751,13 +762,15 @@ final class RenderPipeline {
     ///   - bypassFlags: Per-band bypass flags.
     ///   - activeBandCount: Number of active bands.
     ///   - layerBypass: Whether the entire layer is bypassed.
+    ///   - needsDoublePrecision: Per-band flags for double-precision processing.
     func stageFullEQUpdate(
         channel: EQChannelTarget,
         layerIndex: Int,
         sections: [[BiquadCoefficients]],
         bypassFlags: [Bool],
         activeBandCount: Int,
-        layerBypass: Bool
+        layerBypass: Bool,
+        needsDoublePrecision: [Bool] = [Bool](repeating: false, count: EQConfiguration.maxBandCount)
     ) {
         guard let context = callbackContext else { return }
         guard layerIndex >= 0 && layerIndex < EQLayerConstants.maxLayerCount else { return }
@@ -768,27 +781,31 @@ final class RenderPipeline {
                 sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
-                layerBypass: layerBypass
+                layerBypass: layerBypass,
+                needsDoublePrecision: needsDoublePrecision
             )
         case .right:
             context.rightEQChains[layerIndex].stageFullUpdate(
                 sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
-                layerBypass: layerBypass
+                layerBypass: layerBypass,
+                needsDoublePrecision: needsDoublePrecision
             )
         case .both:
             context.leftEQChains[layerIndex].stageFullUpdate(
                 sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
-                layerBypass: layerBypass
+                layerBypass: layerBypass,
+                needsDoublePrecision: needsDoublePrecision
             )
             context.rightEQChains[layerIndex].stageFullUpdate(
                 sections: sections,
                 bypassFlags: bypassFlags,
                 activeBandCount: activeBandCount,
-                layerBypass: layerBypass
+                layerBypass: layerBypass,
+                needsDoublePrecision: needsDoublePrecision
             )
         }
     }
@@ -980,6 +997,11 @@ final class RenderPipeline {
         context.writeRTAInput(frameCount: Int(framesRead))
         context.writeGoniometer(frameCount: Int(framesRead))
 
+        // 0.5. Apply SRC if input/output rates differ
+        let workFrames = context.applySRC(frameCount: Int(framesRead))
+        // workFrames may differ from framesRead when rates differ.
+        // Pass workFrames to all downstream calls (applyDCBlock, processEQ, etc.)
+
         // 0.5. Route microphone input to SweepAnalyser during recording
         if context.isSweepActive,
            let analyser = context.sweepAnalyser {
@@ -993,7 +1015,7 @@ final class RenderPipeline {
         }
 
         // If we got no samples, zero-fill output
-        if framesRead == 0 {
+        if workFrames == 0 {
             // DEBUG: To troubleshoot idle state, uncomment:
             // outputCallCount &+= 1
             // if outputCallCount % 1000 == 1 { staticLogger.debug("Output #\(outputCallCount): No input audio (idle)") }
@@ -1005,20 +1027,20 @@ final class RenderPipeline {
         // 1. DC-offset removal — fixed 0.5 Hz high-pass applied per channel before
         // any EQ or gain stage.  Eliminates sub-Hz electrical bias that would
         // otherwise accumulate through the downstream biquad sections.
-        context.applyDCBlock(frameCount: frameCount)
+        context.applyDCBlock(frameCount: UInt32(workFrames))
 
         // 2. Process EQ on the output buffers in-place
         // Processing mode: 0 = full bypass, 1 = normal (EQ + gains), 2 = gains only (compare flat)
         if context.processingMode == 1 {
-            context.updatePreEQPeak(frameCount: frameCount)
-            context.processEQ(frameCount: frameCount)
-            context.updatePostEQPeak(frameCount: frameCount)
+            context.updatePreEQPeak(frameCount: UInt32(workFrames))
+            context.processEQ(frameCount: UInt32(workFrames))
+            context.updatePostEQPeak(frameCount: UInt32(workFrames))
         }
 
         // 3. Copy processed audio to output buffer list
         let outputBuffers = context.outputBufferPointers
         let abl = UnsafeMutableAudioBufferListPointer(ioData)
-        let framesToCopy = Int(frameCount)
+        let framesToCopy = workFrames
 
         for (index, buffer) in abl.enumerated() {
             if let destData = buffer.mData?.assumingMemoryBound(to: Float.self) {
@@ -1035,7 +1057,7 @@ final class RenderPipeline {
             let sweepBuf = context.sweepBuffer
             let sweepPos = context.sweepReadPos
             let remaining = sweepBuf.count - sweepPos
-            let toCopy = min(Int(frameCount), remaining)
+            let toCopy = min(workFrames, remaining)
 
             for (index, buffer) in abl.enumerated() {
                 if let destData = buffer.mData?.assumingMemoryBound(to: Float.self) {

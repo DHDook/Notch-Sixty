@@ -27,19 +27,38 @@ final class BiquadFilter {
     /// Size = 2 * (sections + 1) as required by vDSP.
     private var delay: [Float]
 
+    /// Double-precision setup — used when `useDoublePrecision` is true.
+    private var setupD: vDSP_biquad_SetupD?
+
+    /// Double-precision delay elements (length = 2 * (sections + 1)).
+    private var delayD: [Double]
+
     /// Number of sections currently configured.
     private var sectionCount: Int = 1
 
     /// Whether the setup is valid (coefficients have been set).
     private var isValid: Bool = false
 
+    /// Whether to use double-precision processing.
+    /// Set to true by EQChain when any active band has Q > 4.0 or frequency < 300 Hz.
+    var useDoublePrecision: Bool = false
+
+    /// Scratch buffer for double-precision processing (Float ↔ Double conversion).
+    /// Sized to accommodate maximum callback frames.
+    private var scratchD: [Double]
+
     // MARK: - Initialization
 
-    init() {
+    init(maxFrameCount: Int = 4096) {
         // Pre-allocate for maximum supported sections (8) to avoid runtime reallocation.
         // vDSP requires delay = 2 * (sections + 1) → 2*(8+1) = 18 for 8 sections (96 dB/oct).
         let maxSections = 8
         delay = [Float](repeating: 0, count: 2 * (maxSections + 1))
+        delayD = [Double](repeating: 0, count: 2 * (maxSections + 1))
+
+        // Scratch buffer for double-precision processing (Float ↔ Double conversion).
+        // Sized to accommodate maximum callback frames.
+        scratchD = [Double](repeating: 0, count: maxFrameCount)
 
         // Start with identity (passthrough), resetting delay state on init
         setCoefficients([BiquadCoefficients.identity], resetState: true)
@@ -48,6 +67,9 @@ final class BiquadFilter {
     deinit {
         if let s = setup {
             vDSP_biquad_DestroySetup(s)
+        }
+        if let s = setupD {
+            vDSP_biquad_DestroySetupD(s)
         }
     }
 
@@ -82,8 +104,12 @@ final class BiquadFilter {
         if let s = setup {
             vDSP_biquad_DestroySetup(s)
         }
+        if let s = setupD {
+            vDSP_biquad_DestroySetupD(s)
+        }
 
         setup = vDSP_biquad_CreateSetup(&coeffsD, vDSP_Length(count))
+        setupD = vDSP_biquad_CreateSetupD(&coeffsD, vDSP_Length(count))
 
         // Only reset delay elements when explicitly requested.
         // For incremental coefficient changes (slider drags), preserving delay state
@@ -91,6 +117,7 @@ final class BiquadFilter {
         if resetState {
             let delaySize = 2 * (count + 1)
             for i in 0..<delaySize { delay[i] = 0 }
+            for i in 0..<delaySize { delayD[i] = 0 }
         }
 
         isValid = true
@@ -116,15 +143,44 @@ final class BiquadFilter {
         output: UnsafeMutablePointer<Float>,
         frameCount: UInt32
     ) {
-        guard isValid, let s = setup else {
+        guard isValid else {
             if input != output {
                 memcpy(output, input, Int(frameCount) * MemoryLayout<Float>.size)
             }
             return
         }
 
-        delay.withUnsafeMutableBufferPointer { delayPtr in
-            vDSP_biquad(s, delayPtr.baseAddress!, input, 1, output, 1, vDSP_Length(frameCount))
+        if useDoublePrecision, let sd = setupD {
+            // Convert input to Double, process with vDSP_biquadD, convert back to Float.
+            let n = Int(frameCount)
+            guard n <= scratchD.count else {
+                // Fallback to single precision if scratch buffer is too small
+                if let s = setup {
+                    delay.withUnsafeMutableBufferPointer { delayPtr in
+                        vDSP_biquad(s, delayPtr.baseAddress!, input, 1, output, 1, vDSP_Length(frameCount))
+                    }
+                }
+                return
+            }
+            scratchD.withUnsafeMutableBufferPointer { scratchPtr in
+                // Float → Double input conversion
+                vDSP_vspdp(input, 1, scratchPtr.baseAddress!, 1, vDSP_Length(n))
+                // Double-precision biquad processing (in-place)
+                delayD.withUnsafeMutableBufferPointer { delayPtr in
+                    vDSP_biquadD(sd, delayPtr.baseAddress!, scratchPtr.baseAddress!, 1,
+                                 scratchPtr.baseAddress!, 1, vDSP_Length(n))
+                }
+                // Double → Float output conversion
+                vDSP_vdpsp(scratchPtr.baseAddress!, 1, output, 1, vDSP_Length(n))
+            }
+        } else if let s = setup {
+            delay.withUnsafeMutableBufferPointer { delayPtr in
+                vDSP_biquad(s, delayPtr.baseAddress!, input, 1, output, 1, vDSP_Length(frameCount))
+            }
+        } else {
+            if input != output {
+                memcpy(output, input, Int(frameCount) * MemoryLayout<Float>.size)
+            }
         }
     }
 }

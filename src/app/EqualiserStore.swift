@@ -108,6 +108,9 @@ final class EqualiserStore: ObservableObject {
     @Published var measurementState: MeasurementState = .idle
     @Published var measuredResponse: [(frequency: Double, gainDB: Double)] = []
     @Published var measurementError: String? = nil
+    @Published var firCorrectionTapCount: Int = 4096
+    @Published var targetCurve: [(frequency: Double, gainDB: Double)] = TargetCurveLibrary.flat
+    @Published var selectedTargetCurveName: String = "Flat"
 
     // MARK: - Forwarded Properties from RoutingCoordinator
     
@@ -725,11 +728,10 @@ final class EqualiserStore: ObservableObject {
     /// Applies room correction bands to the current EQ.
     /// - Parameter maxBands: Maximum number of correction bands (8-20, default 16)
     func applyRoomCorrection(maxBands: Int = 16) {
-        let target = buildTargetCurve()
         let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
         let bands = RoomCorrectionEngine.fitBands(
             measured: measuredResponse,
-            target: target,
+            target: targetCurve,
             sampleRate: sampleRate,
             maxBands: maxBands
         )
@@ -742,6 +744,68 @@ final class EqualiserStore: ObservableObject {
         adv.roomCorrectionEnabled = true
         updateAdvancedProcessing(adv)
         roomCorrectionBandCount = bands.count
+    }
+
+    /// Computes and loads a minimum-phase FIR correction from the most recent loopback measurement.
+    /// Call after `applyRoomCorrection()` to upgrade from IIR to FIR correction.
+    /// - Parameters:
+    ///   - tapCount: IR length in samples. Must be a power of two. 4096 ≈ 85 ms at 48 kHz.
+    func applyFIRRoomCorrection(tapCount: Int = 4096) {
+        guard !measuredResponse.isEmpty else { return }
+        let sr  = Double(streamSampleRate)
+        let measured = measuredResponse
+        let tgt = targetCurve
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let (left, right) = RoomCorrectionEngine.minimumPhaseFIRCorrection(
+                measured:              measured,
+                target:                tgt,
+                sampleRate:            sr,
+                tapCount:              tapCount
+            )
+            await MainActor.run {
+                self.routingCoordinator.pipelineManager.renderPipeline?
+                    .callbackContext?.updateConvolutionIR(left: left, right: right)
+                self.routingCoordinator.pipelineManager.renderPipeline?
+                    .callbackContext?.setConvolutionEnabled(true)
+            }
+        }
+    }
+
+    /// Loads a target curve from a CSV file.
+    /// Expected format: one row per point, comma-separated: `frequency_hz,gain_db`
+    /// Lines beginning with '#' are treated as comments and ignored.
+    func importTargetCurveFromCSV(url: URL) throws {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        var points: [(frequency: Double, gainDB: Double)] = []
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
+            let parts = trimmed.components(separatedBy: ",")
+            guard parts.count >= 2,
+                  let f = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+                  let g = Double(parts[1].trimmingCharacters(in: .whitespaces)),
+                  f > 0 else { continue }
+            points.append((frequency: f, gainDB: g))
+        }
+        guard points.count >= 2 else { throw TargetCurveError.insufficientPoints }
+        targetCurve = points.sorted { $0.frequency < $1.frequency }
+        selectedTargetCurveName = url.deletingPathExtension().lastPathComponent
+    }
+
+    /// Exports the current EQ band configuration to REW (Room EQ Wizard) filter text format.
+    func exportREW(channel: EQChannelTarget = .left) -> String {
+        let bands = channel == .left ? eqConfiguration.leftState.userEQ.bands : eqConfiguration.rightState.userEQ.bands
+        return REWExporter.export(bands: bands, channelLabel: channel == .left ? "Left" : "Right")
+    }
+
+    /// Exports the current EQ configuration to AutoEQ ParametricEQ text format.
+    func exportAutoEQ() -> String {
+        // Export left channel (or linked if in linked mode)
+        let bands = eqConfiguration.leftState.userEQ.bands
+        let preampDB = -max(0, bands.map { $0.gain }.filter { !$0.isNaN }.max() ?? 0)
+        return AutoEQExporter.exportParametricEQ(bands: bands, preampDB: preampDB)
     }
 
     /// Called by the UI "Start Sweep" button.
@@ -1145,4 +1209,8 @@ final class EqualiserStore: ObservableObject {
             return customREWTargetCurve ?? [(20, 0), (20000, 0)]
         }
     }
+}
+
+enum TargetCurveError: Error {
+    case insufficientPoints
 }

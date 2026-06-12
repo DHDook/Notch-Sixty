@@ -571,6 +571,48 @@ struct RoomCalibrationTab: View {
                 Text("About Room Calibration")
             }
 
+            // ── Target Curve ───────────────────────────────────────────────
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Select a target curve for room correction.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("Target curve", selection: $store.selectedTargetCurveName) {
+                        ForEach(TargetCurveLibrary.allCurves, id: \.name) { curve in
+                            Text(curve.name).tag(curve.name)
+                        }
+                        Text("Custom…").tag("Custom…")
+                    }
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    .onChange(of: store.selectedTargetCurveName) { _, newValue in
+                        if newValue == "Custom…" {
+                            // Open file panel for CSV import
+                            let panel = NSOpenPanel()
+                            panel.allowedContentTypes = [.commaSeparatedText]
+                            panel.allowsMultipleSelection = false
+                            panel.title = "Select Target Curve CSV"
+                            if panel.runModal() == .OK, let url = panel.url {
+                                do {
+                                    try store.importTargetCurveFromCSV(url: url)
+                                } catch {
+                                    print("Failed to import target curve: \(error)")
+                                }
+                            }
+                        } else {
+                            // Select library curve
+                            if let curve = TargetCurveLibrary.allCurves.first(where: { $0.name == newValue }) {
+                                store.targetCurve = curve.curve
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Target Curve")
+            }
+
             // ── Microphone ────────────────────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 8) {
@@ -782,6 +824,32 @@ struct RoomCalibrationTab: View {
                             store.applyRoomCorrection(maxBands: maxBands)
                         }
                         .buttonStyle(.bordered)
+
+                        // FIR correction controls
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("FIR Correction")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Picker("IR length", selection: $store.firCorrectionTapCount) {
+                                ForEach([1024, 2048, 4096, 8192, 16384], id: \.self) { taps in
+                                    let ms = Double(taps) * 1000.0 / store.streamSampleRate
+                                    Text("\(taps) taps (\(Int(round(ms))) ms)").tag(taps)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .controlSize(.small)
+
+                            Button("Apply FIR correction (\(store.firCorrectionTapCount) taps)") {
+                                store.applyFIRRoomCorrection(tapCount: store.firCorrectionTapCount)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Text("FIR correction captures narrow room modes that parametric bands cannot address. Longer IRs correct lower frequencies and longer decays but add more latency.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 8)
                     }
 
                     // Error display

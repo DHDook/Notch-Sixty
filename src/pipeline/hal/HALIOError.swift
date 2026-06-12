@@ -51,6 +51,9 @@ enum HALIOError: Error, LocalizedError, Sendable {
     /// Input and output channel counts do not match.
     case channelCountMismatch(inputChannels: UInt32, outputChannels: UInt32)
 
+    /// Sample rate exceeds maximum supported (384 kHz).
+    case unsupportedSampleRate
+
     /// Failed to enable manual rendering mode on the audio engine.
     case manualRenderingFailed(String)
 
@@ -88,6 +91,8 @@ enum HALIOError: Error, LocalizedError, Sendable {
             "Sample rate mismatch: input \(inputRate) Hz, output \(outputRate) Hz"
         case .channelCountMismatch(let inputChannels, let outputChannels):
             "Channel count mismatch: input \(inputChannels), output \(outputChannels)"
+        case .unsupportedSampleRate:
+            "Sample rate exceeds maximum supported (384 kHz)"
         case .manualRenderingFailed(let reason):
             "Failed to enable manual rendering: \(reason)"
         }

@@ -595,6 +595,11 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
 
     /// Volume-Dependent Loudness — adjusts loudness contour based on system volume.
     var volumeDependentLoudnessEnabled: Bool = false
+    /// Listening level in phons at which system calibration was performed.
+    /// At this volume, zero correction is applied. Range: 60–95 phons. Default: 83.
+    var loudnessReferencePhon: Float = 83.0
+    /// Volume scalar (0.0–1.0) that corresponds to the reference phon level.
+    var loudnessReferenceVolume: Float = 0.85
 
     // MARK: - Codable
 
@@ -633,7 +638,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case targetCurveType
         case monoBassEnabled, monoBassCrossover
         case mainsHighPassEnabled, mainsHighPassFrequency
-        case volumeDependentLoudnessEnabled
+        case volumeDependentLoudnessEnabled, loudnessReferencePhon, loudnessReferenceVolume
         // LTI Suite
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount
@@ -700,7 +705,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         monoBassCrossover: Float = 80.0,
         mainsHighPassEnabled: Bool = false,
         mainsHighPassFrequency: Float = 80.0,
-        volumeDependentLoudnessEnabled: Bool = false
+        volumeDependentLoudnessEnabled: Bool = false,
+        loudnessReferencePhon: Float = 83.0,
+        loudnessReferenceVolume: Float = 0.85
     ) {
         self.highResDecouplingActive          = highResDecouplingActive
         self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
@@ -756,6 +763,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.mainsHighPassEnabled             = mainsHighPassEnabled
         self.mainsHighPassFrequency           = mainsHighPassFrequency
         self.volumeDependentLoudnessEnabled   = volumeDependentLoudnessEnabled
+        self.loudnessReferencePhon            = loudnessReferencePhon
+        self.loudnessReferenceVolume          = loudnessReferenceVolume
     }
 
     init(from decoder: Decoder) throws {
@@ -813,6 +822,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         mainsHighPassEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .mainsHighPassEnabled)             ?? false
         mainsHighPassFrequency           = try c.decodeIfPresent(Float.self,                 forKey: .mainsHighPassFrequency)           ?? 80.0
         volumeDependentLoudnessEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .volumeDependentLoudnessEnabled)   ?? false
+        loudnessReferencePhon            = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferencePhon)            ?? 83.0
+        loudnessReferenceVolume          = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferenceVolume)          ?? 0.85
         highResDecouplingActive          = false  // always computed at runtime
     }
 
@@ -871,6 +882,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(mainsHighPassEnabled,               forKey: .mainsHighPassEnabled)
         try c.encode(mainsHighPassFrequency,             forKey: .mainsHighPassFrequency)
         try c.encode(volumeDependentLoudnessEnabled,     forKey: .volumeDependentLoudnessEnabled)
+        try c.encode(loudnessReferencePhon,              forKey: .loudnessReferencePhon)
+        try c.encode(loudnessReferenceVolume,            forKey: .loudnessReferenceVolume)
     }
 }
 

@@ -81,6 +81,12 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// Sample rate conversion processor for upsampling/downsampling.
     private nonisolated(unsafe) var srcProcessor: SRCProcessor?
 
+    /// SRC enabled flag (atomic for audio thread access).
+    private let _srcEnabled: ManagedAtomic<Int32> = ManagedAtomic(0)
+
+    /// Pre-allocated SRC output buffers (capacity = maxFrameCount * 10 for worst-case 44.1k→384k).
+    private let srcOutputBuffers: [UnsafeMutablePointer<Float>]
+
     // MARK: - Atomic Target Gains
     // Target gains are written by the main thread and read by the audio thread.
     // We use atomic Int32 storage with Float bit-casting for thread-safe access.
@@ -564,6 +570,13 @@ final class RenderCallbackContext: @unchecked Sendable {
         }
         self.outputReadBuffers = outputBufs
 
+        // Pre-allocate SRC output buffers (capacity = maxFrameCount * 10 for worst-case 44.1k→384k).
+        var srcBufs: [UnsafeMutablePointer<Float>] = []
+        for _ in 0..<channelCount {
+            srcBufs.append(Self.allocateSIMDAlignedBuffer(capacity: framesPerBuffer * 10))
+        }
+        self.srcOutputBuffers = srcBufs
+
         // Pre-compute output buffer pointers (avoid array allocation on every callback)
         self.outputBufferPointersPrecomputed = outputBufs.map { UnsafePointer($0) }
 
@@ -627,6 +640,11 @@ final class RenderCallbackContext: @unchecked Sendable {
 
         // Free SIMD-aligned output read buffers (same reason as above).
         for buffer in outputReadBuffers {
+            free(UnsafeMutableRawPointer(buffer))
+        }
+
+        // Free SIMD-aligned SRC output buffers.
+        for buffer in srcOutputBuffers {
             free(UnsafeMutableRawPointer(buffer))
         }
 
@@ -1015,10 +1033,37 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     /// Configures the sample rate conversion processor.
     /// - Parameters:
-    ///   - inputFormat: The input audio format.
-    ///   - outputFormat: The desired output audio format.
-    func configureSRC(inputFormat: AVAudioFormat, outputFormat: AVAudioFormat) {
-        srcProcessor = SRCProcessor(inputFormat: inputFormat, outputFormat: outputFormat)
+    ///   - inputRate: Input sample rate in Hz.
+    ///   - outputRate: Output sample rate in Hz.
+    func configureSRC(inputRate: Double, outputRate: Double) {
+        if srcProcessor == nil {
+            srcProcessor = SRCProcessor(maxFrameCount: Int(maxFrameCount))
+        }
+        srcProcessor!.configure(inputRate: inputRate, outputRate: outputRate)
+        _srcEnabled.store(srcProcessor!.needsSRC ? 1 : 0, ordering: .relaxed)
+    }
+
+    /// Applies SRC to the processing buffers.
+    /// Called from the output render callback after provideFrames and before applyDCBlock.
+    /// - Parameter frameCount: Number of input frames.
+    /// - Returns: Number of output frames (may differ from input when rates differ).
+    @inline(__always)
+    func applySRC(frameCount: Int) -> Int {
+        guard _srcEnabled.load(ordering: .relaxed) != 0, let src = srcProcessor else {
+            return frameCount
+        }
+        let outCount = src.process(
+            inL:  processingBuffers[0],
+            inR:  channelCount > 1 ? processingBuffers[1] : nil,
+            outL: srcOutputBuffers[0],
+            outR: channelCount > 1 ? srcOutputBuffers[1] : nil,
+            frameCount: frameCount
+        )
+        // Point processingBuffers at SRC output for all downstream stages.
+        for ch in 0..<Int(channelCount) {
+            processingBuffers[ch] = srcOutputBuffers[ch]
+        }
+        return outCount
     }
 
     /// Processes all EQ layers on processing buffers in-place.

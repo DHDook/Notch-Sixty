@@ -65,9 +65,9 @@ final class EQChain {
     // MARK: - Initialization
 
     /// Creates a new EQ chain with pre-allocated resources.
-    /// - Parameter maxFrameCount: Maximum frames per render call (unused, kept for API compatibility).
+    /// - Parameter maxFrameCount: Maximum frames per render call (used for scratch buffer sizing).
     init(maxFrameCount: UInt32) {
-        filters = (0..<Self.maxBandCount).map { _ in BiquadFilter() }
+        filters = (0..<Self.maxBandCount).map { _ in BiquadFilter(maxFrameCount: Int(maxFrameCount)) }
 
         activeCoefficients = [BiquadCoefficients](repeating: .identity, count: Self.maxBandCount)
             .map { [$0] }
@@ -89,10 +89,12 @@ final class EQChain {
     ///   - index: Band index within this chain.
     ///   - sections: Array of biquad sections (1 section = 12 dB/oct, 2 = 24 dB/oct, etc.)
     ///   - bypass: Whether this band is bypassed.
-    func stageBandUpdate(index: Int, sections: [BiquadCoefficients], bypass: Bool) {
+    ///   - needsDoublePrecision: Whether this band requires double-precision processing.
+    func stageBandUpdate(index: Int, sections: [BiquadCoefficients], bypass: Bool, needsDoublePrecision: Bool = false) {
         guard index >= 0 && index < Self.maxBandCount else { return }
         pendingCoefficients[index] = sections
         pendingBypassFlags[index] = bypass
+        filters[index].useDoublePrecision = needsDoublePrecision
         hasPendingUpdate.store(true, ordering: .releasing)
     }
 
@@ -105,15 +107,18 @@ final class EQChain {
     ///   - bypassFlags: Per-band bypass flags.
     ///   - activeBandCount: Number of active bands.
     ///   - layerBypass: Whether the entire layer is bypassed.
+    ///   - needsDoublePrecision: Per-band flags for double-precision processing.
     func stageFullUpdate(
         sections: [[BiquadCoefficients]],
         bypassFlags: [Bool],
         activeBandCount: Int,
-        layerBypass: Bool
+        layerBypass: Bool,
+        needsDoublePrecision: [Bool] = [Bool](repeating: false, count: maxBandCount)
     ) {
         for i in 0..<Self.maxBandCount {
             pendingCoefficients[i] = i < sections.count ? sections[i] : [.identity]
             pendingBypassFlags[i] = i < bypassFlags.count ? bypassFlags[i] : false
+            filters[i].useDoublePrecision = i < needsDoublePrecision.count ? needsDoublePrecision[i] : false
         }
         pendingActiveBandCount = min(activeBandCount, Self.maxBandCount)
         pendingLayerBypass = layerBypass

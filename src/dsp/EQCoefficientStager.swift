@@ -256,7 +256,8 @@ final class EQCoefficientStager {
             layerIndex: EQLayerConstants.userEQLayerIndex,
             bandIndex: index,
             sections: sections,
-            bypass: config.bypass
+            bypass: config.bypass,
+            needsDoublePrecision: !config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0)
         )
         refreshMixedPhaseIRIfNeeded()
     }
@@ -271,6 +272,7 @@ final class EQCoefficientStager {
         // Build left-channel sections
         var leftSections: [[BiquadCoefficients]] = []
         var leftBypassFlags: [Bool] = []
+        var leftNeedsDoublePrecision: [Bool] = []
 
         let designRate = BiquadMath.designSampleRate(
             actualRate: currentSampleRate,
@@ -300,6 +302,7 @@ final class EQCoefficientStager {
             )
             leftSections.append(sections)
             leftBypassFlags.append(config.bypass)
+            leftNeedsDoublePrecision.append(!config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0))
         }
 
         let leftTarget: EQChannelTarget = eqConfiguration.channelMode == .linked ? .both : .left
@@ -310,13 +313,15 @@ final class EQCoefficientStager {
             sections: leftSections,
             bypassFlags: leftBypassFlags,
             activeBandCount: activeCount,
-            layerBypass: eqConfiguration.globalBypass
+            layerBypass: eqConfiguration.globalBypass,
+            needsDoublePrecision: leftNeedsDoublePrecision
         )
 
         // In stereo mode, also stage right-channel coefficients
         if eqConfiguration.channelMode == .stereo {
             var rightSections: [[BiquadCoefficients]] = []
             var rightBypassFlags: [Bool] = []
+            var rightNeedsDoublePrecision: [Bool] = []
 
             for index in 0..<activeCount {
                 guard index < rightBands.count else { break }
@@ -341,6 +346,7 @@ final class EQCoefficientStager {
                 )
                 rightSections.append(sections)
                 rightBypassFlags.append(config.bypass)
+                rightNeedsDoublePrecision.append(!config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0))
             }
 
             renderPipeline?.stageFullEQUpdate(
@@ -349,7 +355,8 @@ final class EQCoefficientStager {
                 sections: rightSections,
                 bypassFlags: rightBypassFlags,
                 activeBandCount: activeCount,
-                layerBypass: eqConfiguration.globalBypass
+                layerBypass: eqConfiguration.globalBypass,
+                needsDoublePrecision: rightNeedsDoublePrecision
             )
         }
         refreshLinearPhaseIRIfNeeded()

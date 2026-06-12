@@ -10,6 +10,7 @@ import SwiftUI
 struct EQCurveView: View {
     @EnvironmentObject var store: EqualiserStore
     var metersEnabled: Bool   // dims the view when meters are globally off
+    @State private var showPhase: Bool = false
 
     // MARK: - Constants
     private let plotHeight:  CGFloat = 100   // total canvas height in points
@@ -21,23 +22,44 @@ struct EQCurveView: View {
     var body: some View {
         let snapshot = CurveSnapshot(store: store)
 
-        Canvas { ctx, size in
-            drawBackground(ctx: ctx, size: size)
-            drawGrid(ctx: ctx, size: size)
-            drawFreqLabels(ctx: ctx, size: size)
-            if !store.isBypassed {
-                drawCurve(ctx: ctx, size: size, snapshot: snapshot)
-            } else {
-                drawBypassedLabel(ctx: ctx, size: size)
+        ZStack(alignment: .topTrailing) {
+            Canvas { ctx, size in
+                drawBackground(ctx: ctx, size: size)
+                drawGrid(ctx: ctx, size: size)
+                drawFreqLabels(ctx: ctx, size: size)
+                if !store.isBypassed {
+                    drawCurve(ctx: ctx, size: size, snapshot: snapshot)
+                    if showPhase {
+                        drawPhaseOverlay(ctx: ctx, size: size, snapshot: snapshot)
+                    }
+                } else {
+                    drawBypassedLabel(ctx: ctx, size: size)
+                }
+                drawZeroLine(ctx: ctx, size: size)
             }
-            drawZeroLine(ctx: ctx, size: size)
+            .frame(height: plotHeight)
+            .background(EQGraphBackground())
+            .cornerRadius(4)
+            .opacity(metersEnabled ? 1.0 : 0.4)
+            .id(snapshot.changeToken &+ (showPhase ? 1 : 0))
+
+            Button(action: { showPhase.toggle() }) {
+                Text("φ")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(showPhase ? Color.primary : Color.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(showPhase
+                                ? Color.accentColor.opacity(0.18)
+                                : Color.secondary.opacity(0.10))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+            .padding(.trailing, 6)
         }
-        .frame(height: plotHeight)
-        .background(EQGraphBackground())
-        .cornerRadius(4)
-        .opacity(metersEnabled ? 1.0 : 0.4)
-        // Redraw whenever EQ config changes
-        .id(snapshot.changeToken)
     }
 
     // MARK: - Drawing Functions
@@ -316,6 +338,8 @@ struct EQCurveView: View {
             let w   = 2.0 * Double.pi * f / sr
             let cosW  = cos(w)
             let cos2W = cos(2*w)
+            let sinW  = sin(w)
+            let sin2W = sin(2*w)
 
             var totalPhase = 0.0
 
@@ -334,10 +358,16 @@ struct EQCurveView: View {
                 )
 
                 for c in sections {
-                    // Phase formula: φ(f) = atan2(b1 + 2b2 cos(2πf/fs), b0 + b1 cos(2πf/fs) + b2 cos(4πf/fs))
-                    //                - atan2(a1 + 2a2 cos(2πf/fs), 1 + a1 cos(2πf/fs) + a2 cos(4πf/fs))
-                    let numPhase = atan2(c.b1 + 2*c.b2*cos2W, c.b0 + c.b1*cosW + c.b2*cos2W)
-                    let denPhase = atan2(c.a1 + 2*c.a2*cos2W, 1.0 + c.a1*cosW + c.a2*cos2W)
+                    // Evaluate H(e^{jω}) = (b0 + b1·e^{-jω} + b2·e^{-2jω}) / (1 + a1·e^{-jω} + a2·e^{-2jω})
+                    // Real and imaginary parts of numerator and denominator:
+                    let numRe = c.b0 + c.b1 * cosW  + c.b2 * cos2W
+                    let numIm = -(c.b1 * sinW + c.b2 * sin2W)      // e^{-jω} contributes −sin term
+                    let denRe = 1.0  + c.a1 * cosW  + c.a2 * cos2W
+                    let denIm = -(c.a1 * sinW + c.a2 * sin2W)
+
+                    // Phase of H = arg(num) − arg(den)
+                    let numPhase = atan2(numIm, numRe)
+                    let denPhase = atan2(denIm, denRe)
                     totalPhase += numPhase - denPhase
                 }
             }
