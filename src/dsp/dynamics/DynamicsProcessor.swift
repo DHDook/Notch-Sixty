@@ -30,6 +30,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     static let maxLookAheadSamples: Int = 4096
     static let maxIRAlignSamples:   Int = 12000  // 5 ms at 192 kHz
+    static let maxLowBandDelaySamples: Int = 19200 + 10  // 100 ms at 192 kHz, + safety margin
 
     // MARK: - Audio-Thread State
 
@@ -133,6 +134,18 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Bass Management crossover state (per channel).
     /// Layout: [ch * stateSizePerChannel] where stateSizePerChannel = sectionCount * 4
     nonisolated(unsafe) var bassManagementState: [Float]
+    /// Pending bass management crossover for thread-safe updates.
+    nonisolated(unsafe) var pendingBassCrossover: LinkwitzRileyCrossover
+    /// Pending bass management crossover state.
+    nonisolated(unsafe) var pendingBassManagementState: [Float]
+    /// Pending bass management state size per channel.
+    nonisolated(unsafe) var pendingBassManagementStateSize: Int
+    /// Flag indicating pending bass management crossover update.
+    private let hasBassCrossoverUpdate: ManagedAtomic<Bool>
+    /// Last applied bass management crossover frequency (for change detection).
+    private var lastBassCrossoverHz: Float = 80.0
+    /// Last applied bass management slope (for change detection).
+    private var lastBassCrossoverSlope: BassCrossoverSlope = .lr4
     /// Bass Management enabled flag (atomic).
     private let _bassManagementEnabled: ManagedAtomic<Int32>
     /// Bass Management crossover frequency in Hz (atomic, stored as float bits).
@@ -503,10 +516,9 @@ final class DynamicsProcessor: @unchecked Sendable {
             irBufs.append(irBuf)
         }
         // Low band delay buffer (single channel for mono low signal)
-        // Size for 100 ms maximum delay
-        let lowBandDelaySize = Int(sampleRate * 0.1) + 10  // +10 for safety margin
-        let lowBandBuf = UnsafeMutablePointer<Float>.allocate(capacity: lowBandDelaySize)
-        lowBandBuf.initialize(repeating: 0, count: lowBandDelaySize)
+        // Fixed maximum size for 100 ms at 192 kHz
+        let lowBandBuf = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxLowBandDelaySamples)
+        lowBandBuf.initialize(repeating: 0, count: Self.maxLowBandDelaySamples)
         self.lowBandDelayBuf = lowBandBuf
         self.timeDelayBufs = delays
         self.deltaBufs     = deltas
@@ -533,6 +545,10 @@ final class DynamicsProcessor: @unchecked Sendable {
             slope: defaultSlope,
             sampleRate: sampleRate
         )
+        self.pendingBassManagementState = Array(repeating: 0.0, count: ch * defaultStateSize)
+        self.pendingBassManagementStateSize = defaultStateSize
+        self.pendingBassCrossover = self.bassManagementCrossover
+        self.hasBassCrossoverUpdate = ManagedAtomic(false)
         self.lowBandLowShelfState = Array(repeating: 0.0, count: 2)
         self.lowBandDelayApState = Array(repeating: 0.0, count: 5)
 
@@ -673,6 +689,8 @@ final class DynamicsProcessor: @unchecked Sendable {
             p.deinitialize(count: Self.maxIRAlignSamples)
             p.deallocate()
         }
+        lowBandDelayBuf.deinitialize(count: Self.maxLowBandDelaySamples)
+        lowBandDelayBuf.deallocate()
     }
 
     // MARK: - Parameter Update API (main thread)
@@ -827,6 +845,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         let (noiseFloorDB, wienerFloor) = preset.parameters
         setDenoisingThresholdDB(noiseFloorDB)
         setDenoisingWienerFloor(wienerFloor)
+    }
+    func startNoiseCapture() {
+        denoisers.forEach { $0.startNoiseCapture() }
+    }
+    func resetNoiseProfile() {
+        denoisers.forEach { $0.resetNoiseProfile() }
     }
     func setChannelBalance(_ balance: Float) {
         _channelBalanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
@@ -1049,7 +1073,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setSubBassAlignmentFrequencyHz(adv.subBassAlignmentFrequencyHz)
         setOversamplingEnabled(adv.oversamplingEnabled)
 
-        // Bass Management - rebuild crossover when parameters change
+        // Bass Management - rebuild crossover only when parameters change
         setBassManagementEnabled(adv.bassManagement.enabled)
         setBassManagementCrossoverHz(adv.bassManagement.crossoverHz)
         setBassManagementSlope(adv.bassManagement.slope)
@@ -1060,25 +1084,46 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLowBandLowShelfGainDB(adv.bassManagement.lowBandLowShelfGainDB)
         setLowBandDelaySamples(adv.bassManagement.lowBandDelaySamples)
 
-        // Rebuild LinkwitzRileyCrossover instance on control thread
+        // Stage bass management crossover update if parameters changed
+        if adv.bassManagement.crossoverHz != lastBassCrossoverHz
+            || adv.bassManagement.slope != lastBassCrossoverSlope {
+            stageBassManagementCrossover(crossoverHz: adv.bassManagement.crossoverHz,
+                                       slope: adv.bassManagement.slope)
+            lastBassCrossoverHz = adv.bassManagement.crossoverHz
+            lastBassCrossoverSlope = adv.bassManagement.slope
+        }
+    }
+
+    /// Stage a bass management crossover update for thread-safe application.
+    /// Called from the main thread when bass management parameters change.
+    private func stageBassManagementCrossover(crossoverHz: Float, slope: BassCrossoverSlope) {
         let newCrossover = LinkwitzRileyCrossover(
-            crossoverHz: adv.bassManagement.crossoverHz,
-            slope: adv.bassManagement.slope,
+            crossoverHz: crossoverHz,
+            slope: slope,
             sampleRate: storedSampleRate
         )
         let newStateSize = newCrossover.stateSizePerChannel
-        let ch = 2  // Stereo only
-        var newState = Array(repeating: Float(0.0), count: ch * newStateSize)
-        // Preserve existing state where possible
+        pendingBassCrossover = newCrossover
+        pendingBassManagementStateSize = newStateSize
+        hasBassCrossoverUpdate.store(true, ordering: .releasing)
+    }
+
+    /// Apply pending bass management crossover update on the audio thread.
+    /// Called at the top of processBassManagement before use.
+    @inline(__always)
+    private func applyPendingBassCrossoverUpdate() {
+        guard hasBassCrossoverUpdate.exchange(false, ordering: .acquiringAndReleasing) else { return }
+        let newStateSize = pendingBassManagementStateSize
         let oldStateSize = bassManagementCrossover.stateSizePerChannel
-        let minStateSize = min(oldStateSize, newStateSize)
-        for chIdx in 0..<ch {
-            for i in 0..<minStateSize {
-                newState[chIdx * newStateSize + i] = bassManagementState[chIdx * oldStateSize + i]
+        var newState = [Float](repeating: 0, count: 2 * newStateSize)
+        let minSize = min(oldStateSize, newStateSize)
+        for ch in 0..<2 {
+            for i in 0..<minSize {
+                newState[ch * newStateSize + i] = bassManagementState[ch * oldStateSize + i]
             }
         }
+        bassManagementCrossover = pendingBassCrossover
         bassManagementState = newState
-        bassManagementCrossover = newCrossover
     }
 
     /// Called when the pipeline sample rate changes (main thread).
@@ -1119,6 +1164,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         timeDelayWriteIdx = 0
         for p in irAlignBufs { p.initialize(repeating: 0, count: Self.maxIRAlignSamples) }
         irAlignWriteIdx = 0
+        lowBandDelayBuf.initialize(repeating: 0, count: Self.maxLowBandDelaySamples)
+        lowBandDelayWriteIdx = 0
         for i in 0..<irAlignApState.count { irAlignApState[i] = 0 }
         for i in 0..<crosstalkFilterState.count { crosstalkFilterState[i] = 0 }
         denoisers.forEach { $0.reset() }
@@ -1157,9 +1204,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         let irAlignOn    = _irAlignEnabled.load(ordering: .relaxed) != 0
         let crosstalkOn  = _crosstalkEnabled.load(ordering: .relaxed) != 0
         let denoisingOn  = _denoisingEnabled.load(ordering: .relaxed) != 0
+        let bassMgmtOn  = _bassManagementEnabled.load(ordering: .relaxed) != 0
         guard stereoModeRaw != 0 || dcOn || subPhaseOn || symBalanceOn || panningOn || irAlignOn || crosstalkOn || denoisingOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
-                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn else {
+                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn else {
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
             return
         }
@@ -1916,6 +1964,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         guard _bassManagementEnabled.load(ordering: .relaxed) != 0 else { return }
         guard numCh >= 2 else { return }
 
+        // Apply pending crossover update if available
+        applyPendingBassCrossoverUpdate()
+
         guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
 
@@ -1946,10 +1997,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
 
         // Part 2 sub-band processing chain
-        // Order: EQ → shelf → gain → polarity → delay
-
-        // 2.2: Apply Sub EQ layer (stubbed for now - will be wired in Part 2.2)
-        // monoLow = applyEQLayer(subEQLayerIndex, monoLow)
+        // Order: shelf → gain → polarity → delay
 
         // 2.1: Apply room-gain compensation low shelf if enabled
         let lowShelfEnabled = _lowBandLowShelfEnabled.load(ordering: .relaxed) != 0
@@ -1988,8 +2036,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         // 2.4: Apply fractional delay for subwoofer alignment
         let delaySamples = bitsToFloat(_lowBandDelaySamplesBits.load(ordering: .relaxed))
         if delaySamples > 0 {
-            let intDel = min(Int(delaySamples), Int(storedSampleRate * 0.1) - 1)
-            let frac = Float(delaySamples - Float(intDel))
+            let frac = Float(delaySamples - Float(Int(delaySamples)))
 
             // Lagrange 4th-order (5-tap) fractional delay FIR
             var lagCoeffs: (Float, Float, Float, Float, Float)
@@ -2006,7 +2053,9 @@ final class DynamicsProcessor: @unchecked Sendable {
                 lagCoeffs = (Float(c[0]), Float(c[1]), Float(c[2]), Float(c[3]), Float(c[4]))
             }
 
-            let bufSize = Int(storedSampleRate * 0.1) + 10
+            let bufSize = Self.maxLowBandDelaySamples
+            let maxDelayForRate = Int(storedSampleRate * 0.1) - 1
+            let intDel = min(Int(delaySamples), maxDelayForRate, bufSize - 1)
             var tap0 = lowBandDelayApState[0]
             var tap1 = lowBandDelayApState[1]
             var tap2 = lowBandDelayApState[2]

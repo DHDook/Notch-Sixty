@@ -1113,6 +1113,16 @@ final class EqualiserStore: ObservableObject {
     func setEqualiserWindow(_ window: NSWindow?) {
         meterStore.setEqualiserWindow(window)
     }
+
+    /// Starts noise profile capture on the denoiser.
+    func startNoiseCapture() {
+        routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.startNoiseCapture()
+    }
+
+    /// Resets the noise profile on the denoiser.
+    func resetNoiseProfile() {
+        routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.resetNoiseProfile()
+    }
     
     // MARK: - Preset Management
     

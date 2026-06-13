@@ -23,14 +23,25 @@ struct LinkwitzRileyCrossover {
     ///   - slope: Crossover slope (LR2, LR4, or LR8)
     ///   - sampleRate: Sample rate in Hz
     init(crossoverHz: Float, slope: BassCrossoverSlope, sampleRate: Double) {
-        let q = 0.7071067811865476  // 1/√2 for Butterworth sections
         sectionCount = slope.cascadedStageCount
         stateSizePerChannel = sectionCount * 2 * 2  // sections * 2 state vars * 2 paths (LP + HP)
+
+        let qValues: [Double]
+        switch slope {
+        case .lr2:
+            qValues = [0.5]                                   // critically-damped (1st-order Butterworth)^2
+        case .lr4:
+            qValues = [0.7071067811865476, 0.7071067811865476] // (2nd-order Butterworth)^2
+        case .lr8:
+            // (4th-order Butterworth)^2: each of the 4th-order's two Q values used twice.
+            let pair = FilterSlope.db24.butterworthQValues  // [1.3065629648763766, 0.5411961001063831]
+            qValues = pair + pair
+        }
 
         // Build cascaded sections
         lowPassSections = []
         highPassSections = []
-        for _ in 0..<sectionCount {
+        for q in qValues {
             let lpCoeffs = BiquadMath.calculateCoefficients(
                 type: .lowPass,
                 sampleRate: sampleRate,

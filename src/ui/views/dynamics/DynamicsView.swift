@@ -1008,7 +1008,7 @@ struct DynamicsView: View {
                     .foregroundStyle(store.dynamicsConfig.advanced.denoiserHasCapturedProfile ? Color.accentColor : Color.secondary)
                 Spacer()
                 Button("Capture") {
-                    // TODO: Call startNoiseCapture() on the denoiser
+                    store.startNoiseCapture()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1016,7 +1016,7 @@ struct DynamicsView: View {
                 .disabled(!store.dynamicsConfig.advanced.linearDenoisingEnabled)
                 .opacity(!store.dynamicsConfig.advanced.linearDenoisingEnabled ? 0.4 : 1.0)
                 Button("Reset") {
-                    // TODO: Call resetNoiseProfile() on the denoiser
+                    store.resetNoiseProfile()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1988,11 +1988,10 @@ struct DynamicsView: View {
     }
     private var bassManagementDelayMsBinding: Binding<Double> {
         Binding(
-            get: { Double(store.dynamicsConfig.advanced.bassManagement.lowBandDelaySamples) / 48000.0 * 1000.0 },  // Convert samples to ms (assuming 48kHz)
+            get: { Double(store.dynamicsConfig.advanced.bassManagement.lowBandDelaySamples) / store.streamSampleRate * 1000.0 },
             set: { val in
                 var adv = store.dynamicsConfig.advanced
-                // Convert ms to samples (assuming 48kHz for now - will be updated in Part 3)
-                adv.bassManagement.lowBandDelaySamples = Float(val) / 1000.0 * 48000.0
+                adv.bassManagement.lowBandDelaySamples = Float(val / 1000.0 * store.streamSampleRate)
                 store.updateAdvancedProcessing(adv)
             }
         )
@@ -2031,14 +2030,17 @@ struct DynamicsView: View {
         let speakerAvgDist = (leftDist + rightDist) / 2.0
         let subDelayMs = (subDist - speakerAvgDist) / speedOfSound * 1000.0
 
-        // Convert sub delay to samples (use current sample rate from store if available)
-        let sampleRate: Float = 48000.0  // Default to 48kHz - should get from audio pipeline
+        // Convert sub delay to samples (use current sample rate from store)
+        let sampleRate = Float(store.streamSampleRate)
         let subDelaySamples = subDelayMs / 1000.0 * sampleRate
+
+        // Clamp negative delays to zero (subwoofer is closer than speakers)
+        let clampedSubDelaySamples = max(0.0, subDelaySamples)
 
         // Update config
         var adv = store.dynamicsConfig.advanced
         adv.interChannelDelayMs = interChannelDelayMs
-        adv.bassManagement.lowBandDelaySamples = subDelaySamples
+        adv.bassManagement.lowBandDelaySamples = clampedSubDelaySamples
         store.updateAdvancedProcessing(adv)
     }
 
@@ -2355,9 +2357,9 @@ struct DynamicsInlineView: View {
         VStack(spacing: 8) {
             StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
             LatencyReadoutView(
-                totalLatencyMs: 0.0,
-                alignmentDelayMs: 0.0,
-                sampleRate: 48000.0
+                totalLatencyMs: 0.0,  // TODO: Compute from pipeline stages
+                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
+                sampleRate: store.streamSampleRate
             )
         }
     }

@@ -1059,6 +1059,16 @@ final class RenderCallbackContext: @unchecked Sendable {
         setOversamplingEnabled(config.advanced.oversamplingEnabled)
     }
 
+    /// Starts noise profile capture on the denoiser.
+    func startNoiseCapture() {
+        dynamicsProcessor.startNoiseCapture()
+    }
+
+    /// Resets the noise profile on the denoiser.
+    func resetNoiseProfile() {
+        dynamicsProcessor.resetNoiseProfile()
+    }
+
     /// Updates the convolution engine's impulse response.
     /// - Parameters:
     ///   - left: Left channel impulse response samples.

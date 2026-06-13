@@ -597,4 +597,45 @@ enum BiquadMath {
             a2: a2 * invA0
         )
     }
+
+    // MARK: - Magnitude Response
+
+    /// Computes the magnitude response in dB of a biquad filter at a specific frequency.
+    ///
+    /// Evaluates |H(e^{jω})| from b0,b1,b2,a1,a2 in dB using the standard formula:
+    /// |H(ω)|² = (b0² + b1² + b2² + 2*b0*b1*cos(ω) + 2*b0*b2*cos(2ω) + 2*b1*b2*cos(ω)) /
+    ///          (1 + a1² + a2² + 2*a1*cos(ω) + 2*a2*cos(2ω) + 2*a1*a2*cos(ω))
+    /// - Parameters:
+    ///   - coefficients: Normalised biquad coefficients (a0 is implicitly 1.0)
+    ///   - atFrequency: Frequency at which to evaluate magnitude (Hz)
+    ///   - sampleRate: Sample rate in Hz
+    /// - Returns: Magnitude in dB (20 * log10(|H(ω)|))
+    static func magnitudeDB(
+        coefficients: BiquadCoefficients,
+        atFrequency frequency: Double,
+        sampleRate: Double
+    ) -> Double {
+        let omega = 2.0 * .pi * frequency / sampleRate
+        let cosOmega = cos(omega)
+        let cos2Omega = cos(2.0 * omega)
+
+        // Numerator magnitude squared
+        let num = coefficients.b0 * coefficients.b0
+            + coefficients.b1 * coefficients.b1
+            + coefficients.b2 * coefficients.b2
+            + 2.0 * coefficients.b0 * coefficients.b1 * cosOmega
+            + 2.0 * coefficients.b0 * coefficients.b2 * cos2Omega
+            + 2.0 * coefficients.b1 * coefficients.b2 * cosOmega
+
+        // Denominator magnitude squared (a0 is implicitly 1.0 for normalised coefficients)
+        let den = 1.0
+            + coefficients.a1 * coefficients.a1
+            + coefficients.a2 * coefficients.a2
+            + 2.0 * coefficients.a1 * cosOmega
+            + 2.0 * coefficients.a2 * cos2Omega
+            + 2.0 * coefficients.a1 * coefficients.a2 * cosOmega
+
+        let magnitude = sqrt(num / den)
+        return 20.0 * log10(max(1e-10, magnitude))  // Clamp to avoid log(0)
+    }
 }

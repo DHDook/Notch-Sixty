@@ -14,14 +14,12 @@ enum EQHeadroomCompensator {
     /// - Parameters:
     ///   - eqLayer: Main EQ layer bands
     ///   - roomCorrectionLayer: Room correction bands
-    ///   - subEQLayer: Subwoofer EQ layer bands
     ///   - targetCurve: Target curve for room correction
     ///   - lowBandGainDB: Low band (subwoofer) gain from bass management
     /// - Returns: Static preamp gain in dB (always ≤ 0, never positive)
     static func computeStaticPreampDB(
         eqLayer: [PresetBand],
         roomCorrectionLayer: [PresetBand],
-        subEQLayer: [PresetBand],
         targetCurve: [(frequency: Double, gainDB: Double)],
         lowBandGainDB: Float
     ) -> Float {
@@ -39,14 +37,6 @@ enum EQHeadroomCompensator {
         for (i, freq) in frequencies.enumerated() {
             let gain = computeLayerGain(at: Float(freq), bands: roomCorrectionLayer)
             totalBoostDB[i] += gain
-        }
-
-        // Add sub EQ layer contribution (only affects low frequencies)
-        for (i, freq) in frequencies.enumerated() {
-            if freq < 300.0 {  // Sub EQ only affects low frequencies
-                let gain = computeLayerGain(at: Float(freq), bands: subEQLayer)
-                totalBoostDB[i] += gain
-            }
         }
 
         // Add target curve contribution
@@ -102,31 +92,19 @@ enum EQHeadroomCompensator {
 
     /// Computes the gain of a single band at a specific frequency.
     private static func computeBandGain(at frequency: Float, band: PresetBand) -> Float {
-        // Simplified biquad magnitude response calculation
-        // Full implementation would use the actual biquad coefficients
-        let freqRatio = frequency / band.frequency
-        let q = band.q
-
+        guard !band.bypass else { return 0.0 }
         switch band.filterType {
-        case .parametric:
-            // Peaking EQ magnitude response
-            let numerator = 1.0 + band.gain * q * freqRatio
-            let denominator = 1.0 + q * freqRatio
-            return 20.0 * log10(abs(numerator / denominator))
-        case .lowShelf:
-            // Low shelf (simplified)
-            if frequency < band.frequency {
-                return band.gain
-            } else {
-                return 0.0
-            }
-        case .highShelf:
-            // High shelf (simplified)
-            if frequency > band.frequency {
-                return band.gain
-            } else {
-                return 0.0
-            }
+        case .parametric, .lowShelf, .highShelf, .lowPass, .highPass, .bandPass, .notch:
+            let coeffs = BiquadMath.calculateCoefficients(
+                type: band.filterType,
+                sampleRate: 48_000.0,  // magnitude response is sample-rate-dependent only near Nyquist; 48k is safe reference for headroom calc
+                frequency: Double(band.frequency),
+                q: Double(band.q),
+                gain: Double(band.gain)
+            )
+            return Float(BiquadMath.magnitudeDB(coefficients: coeffs,
+                                                 atFrequency: Double(frequency),
+                                                 sampleRate: 48_000.0))
         default:
             return 0.0
         }
