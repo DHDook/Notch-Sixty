@@ -37,10 +37,12 @@ final class ConvolutionEngine {
     nonisolated(unsafe) private var currentPartitionL: [Float]
     nonisolated(unsafe) private var currentPartitionR: [Float]
     nonisolated(unsafe) private var currentPartitionPos: Int = 0
-    
-    // Output overlap buffer (B samples)
-    nonisolated(unsafe) private var outputOverlapL: [Float]
-    nonisolated(unsafe) private var outputOverlapR: [Float]
+
+    // Output ring buffer (partitionSize * 2 samples)
+    nonisolated(unsafe) private var outputRingL: [Float]
+    nonisolated(unsafe) private var outputRingR: [Float]
+    nonisolated(unsafe) private var outputRingWritePos: Int = 0
+    nonisolated(unsafe) private var outputRingReadPos: Int = 0
     
     // Scratch buffers for FFT/IFFT (N-point)
     nonisolated(unsafe) private var fftReal: [Float]
@@ -60,8 +62,10 @@ final class ConvolutionEngine {
         
         currentPartitionL = [Float](repeating: 0, count: Self.partitionSize)
         currentPartitionR = [Float](repeating: 0, count: Self.partitionSize)
-        outputOverlapL = [Float](repeating: 0, count: Self.partitionSize)
-        outputOverlapR = [Float](repeating: 0, count: Self.partitionSize)
+        outputRingL = [Float](repeating: 0, count: Self.partitionSize * 2)
+        outputRingR = [Float](repeating: 0, count: Self.partitionSize * 2)
+        outputRingWritePos = 0
+        outputRingReadPos = 0
         fftReal = [Float](repeating: 0, count: Self.fftSize)
         fftImag = [Float](repeating: 0, count: Self.fftSize)
         
@@ -136,11 +140,13 @@ final class ConvolutionEngine {
     func reset() {
         currentPartitionPos = 0
         inputHistoryPos = 0
+        outputRingWritePos = 0
+        outputRingReadPos = 0
         
         for i in 0..<currentPartitionL.count { currentPartitionL[i] = 0 }
         for i in 0..<currentPartitionR.count { currentPartitionR[i] = 0 }
-        for i in 0..<outputOverlapL.count { outputOverlapL[i] = 0 }
-        for i in 0..<outputOverlapR.count { outputOverlapR[i] = 0 }
+        for i in 0..<outputRingL.count { outputRingL[i] = 0 }
+        for i in 0..<outputRingR.count { outputRingR[i] = 0 }
         
         // Zero input history spectra
         for sc in leftInputHistory {
@@ -185,16 +191,18 @@ final class ConvolutionEngine {
             }
         }
         
-        // Drain overlap buffer to output
-        let drainCount = min(frameCount, Self.partitionSize)
-        for i in 0..<drainCount {
-            bufL[i] = outputOverlapL[i]
+        // Drain exactly frameCount samples from ring buffer to output
+        let ringSize = Self.partitionSize * 2
+        for i in 0..<frameCount {
+            let readIdx = (outputRingReadPos + i) % ringSize
+            bufL[i] = outputRingL[readIdx]
             if let bufR = bufR {
-                bufR[i] = outputOverlapR[i]
+                bufR[i] = outputRingR[readIdx]
             }
-            outputOverlapL[i] = 0
-            outputOverlapR[i] = 0
+            outputRingL[readIdx] = 0
+            outputRingR[readIdx] = 0
         }
+        outputRingReadPos = (outputRingReadPos + frameCount) % ringSize
     }
     
     // MARK: - Private methods
@@ -354,10 +362,13 @@ final class ConvolutionEngine {
             }
         }
         
-        // Add first B samples to overlap buffer (left channel)
+        // Add first B samples to output ring buffer (left channel)
+        let ringSize = Self.partitionSize * 2
         for i in 0..<Self.partitionSize {
-            outputOverlapL[i] += fftReal[i]
+            let writeIdx = (outputRingWritePos + i) % ringSize
+            outputRingL[writeIdx] += fftReal[i]
         }
+        outputRingWritePos = (outputRingWritePos + Self.partitionSize) % ringSize
         
         // Process right channel if needed
         if let bufR = bufR {
@@ -386,8 +397,10 @@ final class ConvolutionEngine {
             }
             
             for i in 0..<Self.partitionSize {
-                outputOverlapR[i] += fftReal[i]
+                let writeIdx = (outputRingWritePos + i) % ringSize
+                outputRingR[writeIdx] += fftReal[i]
             }
+            outputRingWritePos = (outputRingWritePos + Self.partitionSize) % ringSize
         }
     }
 }

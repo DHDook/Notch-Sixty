@@ -109,16 +109,15 @@ struct BassManagementCrossover {
     ///       [ch * stateSizePerChannel + section * 4 + 1] = LP w2,
     ///       [ch * stateSizePerChannel + section * 4 + 2] = HP w1,
     ///       [ch * stateSizePerChannel + section * 4 + 3] = HP w2
-    mutating func processLowPass(_ buf: inout [Float], state: inout [Float], channelIndex: Int, frameCount: Int) {
-        var temp = buf
+    mutating func processLowPass(_ buf: UnsafeMutablePointer<Float>, count: Int, state: inout [Float], channelIndex: Int) {
         let stateOffset = channelIndex * stateSizePerChannel
         for section in 0..<sectionCount {
             let coeffs = lowPassSections[section]
             var w1 = state[stateOffset + section * 4]
             var w2 = state[stateOffset + section * 4 + 1]
-            for i in 0..<frameCount {
-                temp[i] = Self.processBiquad(
-                    temp[i],
+            for i in 0..<count {
+                buf[i] = Self.processBiquad(
+                    buf[i],
                     b0: coeffs.b0,
                     b1: coeffs.b1,
                     b2: coeffs.b2,
@@ -131,7 +130,6 @@ struct BassManagementCrossover {
             state[stateOffset + section * 4] = w1
             state[stateOffset + section * 4 + 1] = w2
         }
-        buf = temp
     }
 
     /// Process high-pass filter through all cascaded sections.
@@ -144,16 +142,15 @@ struct BassManagementCrossover {
     ///       [ch * stateSizePerChannel + section * 4 + 1] = LP w2,
     ///       [ch * stateSizePerChannel + section * 4 + 2] = HP w1,
     ///       [ch * stateSizePerChannel + section * 4 + 3] = HP w2
-    mutating func processHighPass(_ buf: inout [Float], state: inout [Float], channelIndex: Int, frameCount: Int) {
-        var temp = buf
+    mutating func processHighPass(_ buf: UnsafeMutablePointer<Float>, count: Int, state: inout [Float], channelIndex: Int) {
         let stateOffset = channelIndex * stateSizePerChannel
         for section in 0..<sectionCount {
             let coeffs = highPassSections[section]
             var w1 = state[stateOffset + section * 4 + 2]
             var w2 = state[stateOffset + section * 4 + 3]
-            for i in 0..<frameCount {
-                temp[i] = Self.processBiquad(
-                    temp[i],
+            for i in 0..<count {
+                buf[i] = Self.processBiquad(
+                    buf[i],
                     b0: coeffs.b0,
                     b1: coeffs.b1,
                     b2: coeffs.b2,
@@ -166,6 +163,5 @@ struct BassManagementCrossover {
             state[stateOffset + section * 4 + 2] = w1
             state[stateOffset + section * 4 + 3] = w2
         }
-        buf = temp
     }
 }

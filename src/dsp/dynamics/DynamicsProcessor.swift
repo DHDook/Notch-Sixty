@@ -28,7 +28,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // MARK: - Constants
 
-    static let maxLookAheadSamples: Int = 4096
+    static let maxLookAheadSamples: Int = 8192  // Raised for oversampling + high sample rates
     static let maxIRAlignSamples:   Int = 12000  // 5 ms at 192 kHz
     static let maxLowBandDelaySamples: Int = 19200 + 10  // 100 ms at 192 kHz, + safety margin
 
@@ -39,6 +39,14 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Current sample rate. Written by the main thread before audio starts (or on
     /// quiescent reconfigure). Read only on the audio thread during processing.
     nonisolated(unsafe) var storedSampleRate: Double
+    /// Maximum frame count for per-callback scratch buffers.
+    nonisolated(unsafe) var storedMaxFrameCount: Int = 4096
+    /// Effective sample rate for clipper/limiter (accounts for oversampling).
+    nonisolated(unsafe) var clipperLimiterSampleRate: Double = 48000.0
+    /// Current limiter attack/release/lookahead values for oversampling recompute.
+    nonisolated(unsafe) var currentLimiterAttackMs: Float = 0.0001
+    nonisolated(unsafe) var currentLimiterReleaseMs: Float = 0.020
+    nonisolated(unsafe) var currentLimiterLookAheadMs: Float = 2.0
 
     // ── Look-ahead (limiter) ──────────────────────────────────────────────
     private let lookAheadBufs: [UnsafeMutablePointer<Float>]
@@ -146,6 +154,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var mainsHighPassCrossover: BassManagementCrossover
     /// Mains high-pass crossover state (per channel).
     nonisolated(unsafe) var mainsHighPassState: [Float]
+    /// Bass management scratch buffers (pre-allocated to maxFrameCount to avoid per-callback allocations)
+    private let bmLowL: UnsafeMutablePointer<Float>
+    private let bmLowR: UnsafeMutablePointer<Float>
+    private let bmHighL: UnsafeMutablePointer<Float>
+    private let bmHighR: UnsafeMutablePointer<Float>
+    private let bmMonoLow: UnsafeMutablePointer<Float>
     /// Pending mains high-pass crossover for thread-safe updates.
     nonisolated(unsafe) var pendingMainsHighPassCrossover: BassManagementCrossover
     /// Pending mains high-pass crossover state.
@@ -212,12 +226,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     private var hasDynamicEQUpdate = ManagedAtomic<Bool>(false)
 
     // FIR Impulse Response — runs on full-band signal
-    nonisolated(unsafe) var firLeftIR: [Float]
-    nonisolated(unsafe) var firRightIR: [Float]
-    nonisolated(unsafe) var firLeftDelayLine: [Float]  // Circular buffer for left channel
-    nonisolated(unsafe) var firRightDelayLine: [Float]  // Circular buffer for right channel
-    nonisolated(unsafe) var firDelayLineIndex: Int = 0
-    nonisolated(unsafe) var firTapCount: Int = 4096
+    // Uses ConvolutionEngine for FFT-based partitioned convolution
+    private let firConvolutionEngine: ConvolutionEngine
     private let _firEnabled: ManagedAtomic<Int32>
 
     // Speaker IR alignment per-channel ring buffers (same pattern as timeDelayBufs)
@@ -445,10 +455,15 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // MARK: - Initialization
 
-    init(channelCount: UInt32, sampleRate: Double) {
+    init(channelCount: UInt32, sampleRate: Double, maxFrameCount: Int = 4096) {
         let ch = Int(channelCount)
         self.channelCount    = ch
         self.storedSampleRate = sampleRate
+        self.storedMaxFrameCount = maxFrameCount
+        self.clipperLimiterSampleRate = sampleRate
+        self.currentLimiterAttackMs = 0.0001
+        self.currentLimiterReleaseMs = 0.020
+        self.currentLimiterLookAheadMs = 2.0
 
         // Look-ahead ring buffers
         var labufs: [UnsafeMutablePointer<Float>] = []
@@ -473,8 +488,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         for _ in 0..<3 {
             var chBufs: [UnsafeMutablePointer<Float>] = []
             for _ in 0..<ch {
-                let p = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxLookAheadSamples)
-                p.initialize(repeating: 0, count: Self.maxLookAheadSamples)
+                let p = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+                p.initialize(repeating: 0, count: maxFrameCount)
                 chBufs.append(p)
             }
             bandBufs.append(chBufs)
@@ -495,7 +510,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let limAlphaRel  = Self.computeAlpha(tauSeconds: 0.020,  sampleRate: sampleRate)
 
         // Stereo widener + LUFS processor
-        self.stereoWidener = StereoWidener()
+        self.stereoWidener = StereoWidener(maxFrameCount: maxFrameCount)
         self.lufsProcessor = LoudnessMatchProcessor()
 
         // Lightweight PRNG for dither (seeded with sample rate for determinism)
@@ -565,8 +580,8 @@ final class DynamicsProcessor: @unchecked Sendable {
             let dBuf = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxDelaySamples)
             dBuf.initialize(repeating: 0, count: Self.maxDelaySamples)
             delays.append(dBuf)
-            let dtBuf = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxLookAheadSamples)
-            dtBuf.initialize(repeating: 0, count: Self.maxLookAheadSamples)
+            let dtBuf = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+            dtBuf.initialize(repeating: 0, count: maxFrameCount)
             deltas.append(dtBuf)
             let irBuf = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxIRAlignSamples)
             irBuf.initialize(repeating: 0, count: Self.maxIRAlignSamples)
@@ -621,6 +636,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.pendingMainsHighPassCrossover = self.mainsHighPassCrossover
         self.hasMainsHighPassUpdate = ManagedAtomic(false)
 
+        // Bass management scratch buffers (pre-allocated to maxFrameCount)
+        self.bmLowL = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        self.bmLowL.initialize(repeating: 0, count: maxFrameCount)
+        self.bmLowR = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        self.bmLowR.initialize(repeating: 0, count: maxFrameCount)
+        self.bmHighL = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        self.bmHighL.initialize(repeating: 0, count: maxFrameCount)
+        self.bmHighR = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        self.bmHighR.initialize(repeating: 0, count: maxFrameCount)
+        self.bmMonoLow = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        self.bmMonoLow.initialize(repeating: 0, count: maxFrameCount)
+
         self.lowBandLowShelfState = Array(repeating: 0.0, count: 2)
         self.lowBandDelayApState = Array(repeating: 0.0, count: 5)
 
@@ -634,11 +661,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.dynamicEQGainReductionDB = Array(repeating: 0.0, count: DynamicEQConfig.maxDynamicEQBands)
         self.hasDynamicEQUpdate = ManagedAtomic(false)
 
-        // FIR Impulse Response state
-        self.firLeftIR = Array(repeating: 0.0, count: 4096)
-        self.firRightIR = Array(repeating: 0.0, count: 4096)
-        self.firLeftDelayLine = Array(repeating: 0.0, count: 4096)
-        self.firRightDelayLine = Array(repeating: 0.0, count: 4096)
+        // FIR Impulse Response — ConvolutionEngine for FFT-based partitioned convolution
+        self.firConvolutionEngine = ConvolutionEngine()
         self._firEnabled = ManagedAtomic(0)
 
         // Advanced processing atomics (main → audio)
@@ -764,7 +788,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
         for band in mbBandBufs {
             for p in band {
-                p.deinitialize(count: Self.maxLookAheadSamples)
+                p.deinitialize(count: storedMaxFrameCount)
                 p.deallocate()
             }
         }
@@ -773,7 +797,7 @@ final class DynamicsProcessor: @unchecked Sendable {
             p.deallocate()
         }
         for p in deltaBufs {
-            p.deinitialize(count: Self.maxLookAheadSamples)
+            p.deinitialize(count: storedMaxFrameCount)
             p.deallocate()
         }
         for p in irAlignBufs {
@@ -782,6 +806,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
         lowBandDelayBuf.deinitialize(count: Self.maxLowBandDelaySamples)
         lowBandDelayBuf.deallocate()
+        
+        // Deallocate bass management scratch buffers
+        bmLowL.deinitialize(count: storedMaxFrameCount)
+        bmLowL.deallocate()
+        bmLowR.deinitialize(count: storedMaxFrameCount)
+        bmLowR.deallocate()
+        bmHighL.deinitialize(count: storedMaxFrameCount)
+        bmHighL.deallocate()
+        bmHighR.deinitialize(count: storedMaxFrameCount)
+        bmHighR.deallocate()
+        bmMonoLow.deinitialize(count: storedMaxFrameCount)
+        bmMonoLow.deallocate()
     }
 
     // MARK: - Parameter Update API (main thread)
@@ -847,10 +883,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         let tau = max(ms, 0.0) / 1000.0
         let alpha: Float = tau < 1e-7 ? 0.0 : Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)
         _limiterAlphaAttack.store(floatBits(alpha), ordering: .relaxed)
+        currentLimiterAttackMs = ms
     }
     func setLimiterReleaseMs(_ ms: Float, sampleRate: Double) {
         let tau = ms / 1000.0
         _limiterAlphaRelease.store(floatBits(Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)), ordering: .relaxed)
+        currentLimiterReleaseMs = ms
     }
     func setLimiterLookAheadMs(_ ms: Float, sampleRate: Double) {
         let newSize = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: ms)
@@ -859,6 +897,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         lookAheadWriteIndex = 0
         limiterGainCurrent  = 1.0
         lookAheadSize = newSize
+        currentLimiterLookAheadMs = ms
+    }
+    func setOversamplingActive(_ active: Bool, factor: Int) {
+        clipperLimiterSampleRate = active ? storedSampleRate * Double(factor) : storedSampleRate
+        // Recompute limiter alphas + lookahead at the new effective rate
+        setLimiterAttackMs(currentLimiterAttackMs, sampleRate: clipperLimiterSampleRate)
+        setLimiterReleaseMs(currentLimiterReleaseMs, sampleRate: clipperLimiterSampleRate)
+        setLimiterLookAheadMs(currentLimiterLookAheadMs, sampleRate: clipperLimiterSampleRate)
     }
 
     func setSystemVolume(_ volume: Float) {
@@ -1038,6 +1084,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     func setOversamplingEnabled(_ v: Bool) {
         _oversamplingEnabled.store(v ? 1 : 0, ordering: .relaxed)
+        // Update clipper/limiter effective sample rate
+        setOversamplingActive(v, factor: 4) // 4× oversampling factor
     }
     func setBassManagementEnabled(_ v: Bool) {
         _bassManagementEnabled.store(v ? 1 : 0, ordering: .relaxed)
@@ -1052,14 +1100,26 @@ final class DynamicsProcessor: @unchecked Sendable {
         _firEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
     func setFIRConfig(_ config: FIRImpulseResponseConfig) {
-        firLeftIR = config.leftIR
-        firRightIR = config.rightIR
-        firTapCount = config.tapCount
-        // Resize delay lines if needed
-        if firLeftDelayLine.count != config.tapCount {
-            firLeftDelayLine = Array(repeating: 0.0, count: config.tapCount)
-            firRightDelayLine = Array(repeating: 0.0, count: config.tapCount)
+        // Scale tapCount based on sample rate to preserve constant time duration
+        let baseTapCount48k = 4096  // 85.3 ms @ 48 kHz
+        let scaledTapCount = Int(pow(2.0, ceil(log2(Double(baseTapCount48k) * storedSampleRate / 48000.0))))
+        // Clamp to reasonable maximum (e.g., 32768 for 85.3 ms @ 384 kHz)
+        let finalTapCount = min(scaledTapCount, 32768)
+        
+        // Scale IRs to the target tapCount (pad with zeros or truncate)
+        var scaledLeftIR = config.leftIR
+        var scaledRightIR = config.rightIR
+        
+        if scaledLeftIR.count < finalTapCount {
+            scaledLeftIR.append(contentsOf: Array(repeating: 0.0, count: finalTapCount - scaledLeftIR.count))
+            scaledRightIR.append(contentsOf: Array(repeating: 0.0, count: finalTapCount - scaledRightIR.count))
+        } else if scaledLeftIR.count > finalTapCount {
+            scaledLeftIR = Array(scaledLeftIR.prefix(finalTapCount))
+            scaledRightIR = Array(scaledRightIR.prefix(finalTapCount))
         }
+        
+        // Update ConvolutionEngine with the scaled IR
+        firConvolutionEngine.updateIR(left: scaledLeftIR, right: scaledRightIR)
     }
     func setMainsHighPassHz(_ hz: Float) {
         // Store the mains high-pass frequency for asymmetric mode
@@ -1179,6 +1239,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         // (The store always writes the most recently set value, so call threshold last
         // to let it win over the preset if the user has diverged from it.)
         setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
+        // Set denoiser mode and reduction amount
+        for d in denoisers {
+            d.setMode(adv.denoiserMode, sampleRate: storedSampleRate)
+            d.setReductionAmount(adv.denoiserReductionAmount)
+        }
         setDialogueGateEnabled(adv.loudnessDialogueGateEnabled)
         setLoudnessContourEnabled(adv.loudnessContourEnabled)
         setLoudnessReferencePhon(adv.loudnessReferencePhon)
@@ -1415,7 +1480,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
     }
 
-    /// Process FIR impulse response convolution on the audio signal.
+    /// Process FIR impulse response convolution using ConvolutionEngine.
     /// - Parameters:
     ///   - abl: Audio buffer list (must have at least 2 channels)
     ///   - numCh: Number of channels
@@ -1426,39 +1491,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         numCh: Int,
         count: Int
     ) {
-        guard firTapCount > 0 else { return }
         guard numCh >= 2 else { return }
-
-        let tapCount = firTapCount
-        let leftIR = firLeftIR
-        let rightIR = firRightIR
 
         guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
 
-        var idx = firDelayLineIndex
-
-        for i in 0..<count {
-            // Write input to delay line
-            firLeftDelayLine[idx] = bufL[i]
-            firRightDelayLine[idx] = bufR[i]
-
-            // Convolve
-            var sumL: Float = 0.0
-            var sumR: Float = 0.0
-            for j in 0..<tapCount {
-                let delayIdx = (idx - j + tapCount) % tapCount
-                sumL += firLeftDelayLine[delayIdx] * leftIR[j]
-                sumR += firRightDelayLine[delayIdx] * rightIR[j]
-            }
-
-            bufL[i] = sumL
-            bufR[i] = sumR
-
-            idx = (idx + 1) % tapCount
-        }
-
-        firDelayLineIndex = idx
+        // Use ConvolutionEngine for FFT-based partitioned convolution
+        firConvolutionEngine.process(bufL: bufL, bufR: bufR, frameCount: count)
     }
 
     /// Called when the pipeline sample rate changes (main thread).
@@ -1467,6 +1506,23 @@ final class DynamicsProcessor: @unchecked Sendable {
         for p in lookAheadBufs { p.initialize(repeating: 0, count: Self.maxLookAheadSamples) }
         lookAheadWriteIndex = 0
         lookAheadSize       = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: lookAheadMs)
+        
+        // Update clipper/limiter effective sample rate if oversampling is active
+        let oversamplingActive = _oversamplingEnabled.load(ordering: .relaxed) != 0
+        if oversamplingActive {
+            clipperLimiterSampleRate = sampleRate * 4.0
+            // Recompute limiter alphas + lookahead at the new effective rate
+            setLimiterAttackMs(currentLimiterAttackMs, sampleRate: clipperLimiterSampleRate)
+            setLimiterReleaseMs(currentLimiterReleaseMs, sampleRate: clipperLimiterSampleRate)
+            setLimiterLookAheadMs(currentLimiterLookAheadMs, sampleRate: clipperLimiterSampleRate)
+        } else {
+            clipperLimiterSampleRate = sampleRate
+        }
+        
+        // Update denoiser sample rate
+        for d in denoisers {
+            d.updateSampleRate(sampleRate)
+        }
         limiterGainCurrent  = 1.0
         for i in 0..<deEsserFilterState.count  { deEsserFilterState[i]  = 0 }
         for i in 0..<mbFilterState.count        { mbFilterState[i]        = 0 }
@@ -1655,7 +1711,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private func captureDeltaInput(
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
     ) {
-        let safeCount = min(count, Self.maxLookAheadSamples)
+        let safeCount = count
         for ch in 0..<numCh {
             guard let src = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             let dst = deltaBufs[ch]
@@ -2246,7 +2302,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private func processDeltaSolo(
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
     ) {
-        let safeCount = min(count, Self.maxLookAheadSamples)
+        let safeCount = count
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             let orig = deltaBufs[ch]
@@ -2323,37 +2379,30 @@ final class DynamicsProcessor: @unchecked Sendable {
         guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
 
-        // Process each channel through LP and HP paths
-        var lowL = [Float](repeating: 0, count: count)
-        var lowR = [Float](repeating: 0, count: count)
-        var highL = [Float](repeating: 0, count: count)
-        var highR = [Float](repeating: 0, count: count)
-
-        // Copy input to temp buffers
+        // Copy input to pre-allocated scratch buffers
         for i in 0..<count {
-            lowL[i] = bufL[i]
-            lowR[i] = bufR[i]
-            highL[i] = bufL[i]
-            highR[i] = bufR[i]
+            bmLowL[i] = bufL[i]
+            bmLowR[i] = bufR[i]
+            bmHighL[i] = bufL[i]
+            bmHighR[i] = bufR[i]
         }
 
-        // Process LP and HP for each channel
-        bassManagementCrossover.processLowPass(&lowL, state: &bassManagementState, channelIndex: 0, frameCount: count)
-        bassManagementCrossover.processLowPass(&lowR, state: &bassManagementState, channelIndex: 1, frameCount: count)
+        // Process LP and HP for each channel using pre-allocated buffers
+        bassManagementCrossover.processLowPass(bmLowL, count: count, state: &bassManagementState, channelIndex: 0)
+        bassManagementCrossover.processLowPass(bmLowR, count: count, state: &bassManagementState, channelIndex: 1)
 
         // Use separate high-pass crossover if asymmetric mode is enabled
         if asymmetricEnabled {
-            mainsHighPassCrossover.processHighPass(&highL, state: &mainsHighPassState, channelIndex: 0, frameCount: count)
-            mainsHighPassCrossover.processHighPass(&highR, state: &mainsHighPassState, channelIndex: 1, frameCount: count)
+            mainsHighPassCrossover.processHighPass(bmHighL, count: count, state: &mainsHighPassState, channelIndex: 0)
+            mainsHighPassCrossover.processHighPass(bmHighR, count: count, state: &mainsHighPassState, channelIndex: 1)
         } else {
-            bassManagementCrossover.processHighPass(&highL, state: &bassManagementState, channelIndex: 0, frameCount: count)
-            bassManagementCrossover.processHighPass(&highR, state: &bassManagementState, channelIndex: 1, frameCount: count)
+            bassManagementCrossover.processHighPass(bmHighL, count: count, state: &bassManagementState, channelIndex: 0)
+            bassManagementCrossover.processHighPass(bmHighR, count: count, state: &bassManagementState, channelIndex: 1)
         }
 
         // Sum low bands to get mono low
-        var monoLow = [Float](repeating: 0, count: count)
         for i in 0..<count {
-            monoLow[i] = lowL[i] + lowR[i]
+            bmMonoLow[i] = bmLowL[i] + bmLowR[i]
         }
 
         // Part 2 sub-band processing chain
@@ -2369,7 +2418,7 @@ final class DynamicsProcessor: @unchecked Sendable {
             var w1 = lowBandLowShelfState[0]
             var w2 = lowBandLowShelfState[1]
             for i in 0..<count {
-                monoLow[i] = Self.processBiquad(monoLow[i], b0: b0, b1: b1, b2: b2,
+                bmMonoLow[i] = Self.processBiquad(bmMonoLow[i], b0: b0, b1: b1, b2: b2,
                                                  na1: na1, na2: na2, w1: &w1, w2: &w2)
             }
             lowBandLowShelfState[0] = w1
@@ -2384,7 +2433,7 @@ final class DynamicsProcessor: @unchecked Sendable {
             var w2 = subEQState[idx * 2 + 1]
             let (b0, b1, b2, na1, na2) = coeffs
             for i in 0..<count {
-                monoLow[i] = Self.processBiquad(monoLow[i], b0: b0, b1: b1, b2: b2,
+                bmMonoLow[i] = Self.processBiquad(bmMonoLow[i], b0: b0, b1: b1, b2: b2,
                                                  na1: na1, na2: na2, w1: &w1, w2: &w2)
             }
             subEQState[idx * 2]     = w1
@@ -2396,7 +2445,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let gainLinear = pow(10.0, gainDB / 20.0)
         if gainLinear != 1.0 {
             for i in 0..<count {
-                monoLow[i] *= gainLinear
+                bmMonoLow[i] *= gainLinear
             }
         }
 
@@ -2404,7 +2453,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let polarityInverted = _lowBandPolarityInverted.load(ordering: .relaxed) != 0
         if polarityInverted {
             for i in 0..<count {
-                monoLow[i] *= -1.0
+                bmMonoLow[i] *= -1.0
             }
         }
 
@@ -2441,14 +2490,14 @@ final class DynamicsProcessor: @unchecked Sendable {
 
             for i in 0..<count {
                 // Push into integer delay ring buffer
-                lowBandDelayBuf[writeIdx] = monoLow[i]
+                lowBandDelayBuf[writeIdx] = bmMonoLow[i]
                 let readIdx = (writeIdx - intDel + bufSize) % bufSize
                 let s = lowBandDelayBuf[readIdx]
 
                 // Shift FIR delay line and apply Lagrange coefficients
                 tap4 = tap3; tap3 = tap2; tap2 = tap1; tap1 = tap0
                 tap0 = s
-                monoLow[i] = lc0 * tap0 + lc1 * tap1 + lc2 * tap2 + lc3 * tap3 + lc4 * tap4
+                bmMonoLow[i] = lc0 * tap0 + lc1 * tap1 + lc2 * tap2 + lc3 * tap3 + lc4 * tap4
 
                 writeIdx = (writeIdx + 1) % bufSize
             }
@@ -2463,8 +2512,8 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Recombine: high band + mono low
         for i in 0..<count {
-            bufL[i] = highL[i] + monoLow[i]
-            bufR[i] = highR[i] + monoLow[i]
+            bufL[i] = bmHighL[i] + bmMonoLow[i]
+            bufR[i] = bmHighR[i] + bmMonoLow[i]
         }
     }
 
@@ -2564,7 +2613,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let (lpMHb0, lpMHb1, lpMHb2, lpMHa1, lpMHa2) = Self.lpfCoeffs(fc: crossMH, sr: sr)
         let (hpMHb0, hpMHb1, hpMHb2, hpMHa1, hpMHa2) = Self.hpfCoeffs(fc: crossMH, sr: sr)
 
-        let safeCount = min(count, Self.maxLookAheadSamples)
+        let safeCount = count
 
         // Split into three band buffers and apply LR4 crossover filters per channel.
         // If slope == steep, run two extra cascaded stages from mbFilterStateSteep.

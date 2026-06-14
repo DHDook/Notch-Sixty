@@ -38,6 +38,7 @@ final class SpectralDenoiser: @unchecked Sendable {
     private var fftSize: Int
     private var hopSize: Int
     private var halfN: Int
+    private var sampleRate: Double = 48000.0
 
     // Gain smoother time constants.
     // Attack  = how quickly gain rises when a signal appears  (~20 ms → fast, avoids smearing onsets)
@@ -120,6 +121,9 @@ final class SpectralDenoiser: @unchecked Sendable {
     nonisolated(unsafe) private var captureAccum: [Double]   // length halfN+1, Double for precision
     private static let captureLength: Int = 96   // ~2 seconds at default settings
 
+    // Flag indicating whether a noise profile has been captured.
+    private let _hasCapturedProfile: ManagedAtomic<Int32>
+
     // Reduction amount control with psychoacoustic masking bias.
     private let _reductionAmountBits: ManagedAtomic<Int32>
 
@@ -132,11 +136,12 @@ final class SpectralDenoiser: @unchecked Sendable {
     nonisolated(unsafe) private var maskingBias: [Float]   // length halfN+1
 
     // MARK: - Init
-    init(mode: DenoiserMode = .high) {
+    init(mode: DenoiserMode = .high, sampleRate: Double = 48000.0) {
         self.mode = mode
         self.fftSize = mode.fftSize
         self.hopSize = mode.hopSize
         self.halfN = fftSize / 2
+        self.sampleRate = sampleRate
 
         let N   = self.fftSize
         let hop = self.hopSize
@@ -158,7 +163,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         // Formula: bias[k] = 1.0 - 0.30 × sensitivity(f_k)
         // where sensitivity(f) is derived from a simplified ATH approximation.
         var bias = [Float](repeating: 1.0, count: halfN + 1)
-        let binHz = 48000.0 / Float(N)   // Hz per bin (assuming 48 kHz sample rate)
+        let binHz = Float(sampleRate) / Float(N)   // Hz per bin (using actual sample rate)
         for k in 0...halfN {
             let f = Float(k) * binHz
             bias[k] = Self.athSensitivity(freqHz: f)
@@ -196,6 +201,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         _noiseFloorBits  = ManagedAtomic(Self.floatBits(pow(10.0, -60.0 / 20.0)))
         _wienerFloorBits = ManagedAtomic(Self.floatBits(0.01))
         _captureFramesRemaining = ManagedAtomic(Int32(0))
+        _hasCapturedProfile = ManagedAtomic(Int32(0))
         captureAccum = [Double](repeating: 0.0, count: halfN + 1)
 
         // Default reduction amount: 50%
@@ -204,7 +210,34 @@ final class SpectralDenoiser: @unchecked Sendable {
 
     deinit { vDSP_destroy_fftsetup(fftSetup) }
 
+    // MARK: - Helper Methods
+
+    /// Rebuilds the ATH-based masking bias curve using the current sample rate.
+    /// The curve reduces Wiener floor gain (i.e. allows less suppression) in the
+    /// 1–5 kHz region where the ear is most sensitive to artifacts.
+    private func rebuildMaskingBias() {
+        let N = fftSize
+        var bias = [Float](repeating: 1.0, count: halfN + 1)
+        let binHz = Float(sampleRate) / Float(N)   // Hz per bin (using actual sample rate)
+        for k in 0...halfN {
+            let f = Float(k) * binHz
+            bias[k] = Self.athSensitivity(freqHz: f)
+        }
+        maskingBias = bias
+    }
+
+    /// Updates the sample rate and rebuilds the masking bias curve.
+    func updateSampleRate(_ newSampleRate: Double) {
+        sampleRate = newSampleRate
+        rebuildMaskingBias()
+    }
+
     // MARK: - Main Thread API
+
+    /// Returns whether a noise profile has been captured.
+    var hasCapturedProfile: Bool {
+        _hasCapturedProfile.load(ordering: .relaxed) != 0
+    }
 
     /// Sets the noise floor in dBFS.
     /// Bins whose magnitude is at or below this level are considered noise-dominated.
@@ -259,7 +292,7 @@ final class SpectralDenoiser: @unchecked Sendable {
     /// Changes the processing mode. This reinitialises all internal state and
     /// must only be called from the main thread while the audio engine is stopped
     /// or while the denoiser is bypassed.
-    func setMode(_ newMode: DenoiserMode) {
+    func setMode(_ newMode: DenoiserMode, sampleRate: Double) {
         // Reinitialise with the new mode
         let N   = newMode.fftSize
         let hop = newMode.hopSize
@@ -269,6 +302,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         fftSize = N
         hopSize = hop
         halfN = N / 2
+        self.sampleRate = sampleRate
 
         // Update FFT setup
         log2n    = vDSP_Length(log2(Double(N)).rounded())
@@ -280,6 +314,9 @@ final class SpectralDenoiser: @unchecked Sendable {
             hann[i] = 0.5 * (1.0 - cos(2.0 * Float.pi * Float(i) / Float(N)))
         }
         hannWindow = hann
+
+        // Rebuild masking bias with new sample rate and FFT size
+        rebuildMaskingBias()
 
         // Reallocate buffers
         prevHop       = [Float](repeating: 0, count: hop)
@@ -427,6 +464,8 @@ final class SpectralDenoiser: @unchecked Sendable {
                                         noisePowerHistory[f][k] = avgPow
                                     }
                                 }
+                                // Mark that a profile has been captured
+                                _hasCapturedProfile.store(1, ordering: .relaxed)
                             }
                         }
 

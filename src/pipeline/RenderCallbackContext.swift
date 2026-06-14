@@ -540,7 +540,7 @@ final class RenderCallbackContext: @unchecked Sendable {
 
         // Create the dynamics processor with the current sample rate and initial config.
         // applyConfig() is called immediately so the processor starts in the correct state.
-        let dp = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate)
+        let dp = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate, maxFrameCount: Int(maxFrameCount))
         dp.applyConfig(dynamicsConfig, sampleRate: sampleRate)
         self.dynamicsProcessor = dp
 

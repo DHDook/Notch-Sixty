@@ -25,7 +25,8 @@ final class StereoWidener: @unchecked Sendable {
 
     // MARK: - Constants
 
-    private static let maxFrames: Int = 4096
+    private static let defaultMaxFrames: Int = 4096
+    private var storedMaxFrames: Int = 4096
 
     // MARK: - Atomic Parameters
 
@@ -63,21 +64,22 @@ final class StereoWidener: @unchecked Sendable {
 
     // MARK: - Initialisation
 
-    init() {
+    init(maxFrameCount: Int = 4096) {
         _enabled             = ManagedAtomic(0)
         _widthLowBits        = ManagedAtomic(floatBitsW(0.0))
         _widthMidBits        = ManagedAtomic(floatBitsW(1.4))
         _widthHighBits       = ManagedAtomic(floatBitsW(1.25))
         _phaseCorrelationBits = ManagedAtomic(floatBitsW(0.0))
 
+        storedMaxFrames = maxFrameCount
         filterState = Array(repeating: 0.0, count: 2 * 16)
 
         var bands: [[UnsafeMutablePointer<Float>]] = []
         for _ in 0..<3 {
             var chBufs: [UnsafeMutablePointer<Float>] = []
             for _ in 0..<2 {
-                let p = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxFrames)
-                p.initialize(repeating: 0, count: Self.maxFrames)
+                let p = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+                p.initialize(repeating: 0, count: maxFrameCount)
                 chBufs.append(p)
             }
             bands.append(chBufs)
@@ -86,7 +88,7 @@ final class StereoWidener: @unchecked Sendable {
     }
 
     deinit {
-        for band in bandBufs { for p in band { p.deinitialize(count: Self.maxFrames); p.deallocate() } }
+        for band in bandBufs { for p in band { p.deinitialize(count: storedMaxFrames); p.deallocate() } }
     }
 
     // MARK: - Parameter API (main thread)
@@ -144,7 +146,7 @@ final class StereoWidener: @unchecked Sendable {
         count: Int,
         sampleRate: Double
     ) {
-        guard numCh >= 2, count > 0, count <= Self.maxFrames,
+        guard numCh >= 2, count > 0, count <= storedMaxFrames,
               sampleRate > 0, sampleRate.isFinite else { return }
         guard _enabled.load(ordering: .relaxed) != 0 else { return }
 

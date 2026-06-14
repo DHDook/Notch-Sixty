@@ -19,9 +19,9 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     // MARK: - Constants
 
-    /// Maximum blocks in the 3-second FIFO (covers 384 kHz @ 256 frames per block).
-    /// Derivation: 384000 Hz × 3 s / 256 frames = 4500 blocks (worst case)
-    private static let maxFIFOBlocks: Int = 4500
+    /// Maximum blocks in the 3-second FIFO (covers 384 kHz @ 128 frames per block).
+    /// Derivation: 384000 Hz × 3 s / 128 frames = 9000 blocks (worst case)
+    private static let maxFIFOBlocks: Int = 9000
 
     /// Gate threshold: blocks with mean power below this value are excluded from integration.
     private static let gateThreshold: Float = 1e-7  // ≈ −70 dBFS (relative full-scale)
