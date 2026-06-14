@@ -37,6 +37,7 @@ struct BassManagementCrossover {
                 // BiquadMath.firstOrderLowPass/firstOrderHighPass return degenerate
                 // biquads (b2 = a2 = 0) that implement true 1st-order 6 dB/oct sections.
                 // Two cascaded sections give the LR2 -6 dB crossover with flat LP+HP sum.
+                qValues = [] // Not used for LR2 (uses first-order filters directly)
                 for _ in 0..<2 {
                     let lpCoeffs = BiquadMath.firstOrderLowPass(
                         sampleRate: sampleRate, frequency: Double(crossoverHz))

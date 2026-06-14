@@ -90,10 +90,10 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                   sampleRate: Double) {
         let newFFTSize: Int
         switch sampleRate {
-        case ..<= 48_000:  newFFTSize = 4096
-        case ..<= 96_000:  newFFTSize = 8192
-        case ..<= 192_000: newFFTSize = 16384
-        default:           newFFTSize = 32768   // 384 kHz: ~85 ms, ~11.7 Hz/bin
+        case ...48_000:  newFFTSize = 4096
+        case ...96_000:  newFFTSize = 8192
+        case ...192_000: newFFTSize = 16384
+        default:         newFFTSize = 32768   // 384 kHz: ~85 ms, ~11.7 Hz/bin
         }
         if newFFTSize != fftSize {
             fftSize = newFFTSize

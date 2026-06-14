@@ -70,7 +70,7 @@ final class SRCProcessor {
         let protoSum = proto.reduce(0.0, +)
         if protoSum > 0 {
             let normFactor = Double(Self.phases) / protoSum  // target: sum = phases (for upsampling gain)
-            for i in 0..<proto.count { proto[i] *= Float(normFactor) }
+            for i in 0..<proto.count { proto[i] *= normFactor }
         }
 
         // Build polyphase bank: coeffs[phase][tap].

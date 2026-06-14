@@ -550,7 +550,6 @@ final class DynamicsProcessor: @unchecked Sendable {
         _compProgramDependentRelease = ManagedAtomic(0)
         _compSidechainHighPassBits = ManagedAtomic(floatBits(0.0))
         self.compSidechainHPState = Array(repeating: 0.0, count: Int(channelCount) * 2)
-        recomputeCompSidechainHPCoeffs()
 
         // Atomics — expander
         _expEnabled     = ManagedAtomic(0)
@@ -795,6 +794,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         _balanceMeterBits       = ManagedAtomic(floatBits(0.0))
         _truePeakClipperTripped = ManagedAtomic(0)
         _truePeakLimiterTripped = ManagedAtomic(0)
+
+        // Initialize cached coefficients after all properties are set
+        recomputeCompSidechainHPCoeffs()
     }
 
     deinit {
@@ -2380,7 +2382,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
     ) {
         let freq = bitsToFloat(_subBassPhaseFreqBits.load(ordering: .relaxed))
-        let q = Double(_subBassPhaseQBits.load(ordering: .relaxed).bitPatternToFloat)
+        let q = Double(bitsToFloat(_subBassPhaseQBits.load(ordering: .relaxed)))
         let coeffs = BiquadMath.allPass(sampleRate: storedSampleRate,
                                         frequency: Double(freq), q: q)
         let b0  = Float(coeffs.b0)

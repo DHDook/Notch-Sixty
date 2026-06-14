@@ -1,4 +1,5 @@
 import Accelerate
+import Atomics
 
 /// Single biquad filter section — or a cascade of N sections — using vDSP.
 ///

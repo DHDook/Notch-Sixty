@@ -149,7 +149,8 @@ final class ConvolutionEngine {
     func reset() {
         currentPartitionPos = 0
         inputHistoryPos = 0
-        outputRingWritePos = 0
+        outputRingWritePosL = 0
+        outputRingWritePosR = 0
         outputRingReadPos = 0
         
         for i in 0..<currentPartitionL.count { currentPartitionL[i] = 0 }
@@ -380,7 +381,9 @@ final class ConvolutionEngine {
 
         // Normalise: forward FFT of input (×2) × forward FFT of IR (×2) × inverse FFT (×N/2) = 2N.
         var scale: Float = 1.0 / Float(2 * N)
-        vDSP_vsmul(&timeDomainBuf, 1, &scale, &timeDomainBuf, 1, vDSP_Length(N))
+        var scaledBuf = [Float](repeating: 0, count: N)
+        memcpy(&scaledBuf, &timeDomainBuf, N * MemoryLayout<Float>.size)
+        vDSP_vsmul(&scaledBuf, 1, &scale, &timeDomainBuf, 1, vDSP_Length(N))
 
         // OLA: add the SECOND B samples (alias-free region) to the output ring.
         let ringSize = outputRingL.count
@@ -425,7 +428,9 @@ final class ConvolutionEngine {
                     }
                 }
             }
-            vDSP_vsmul(&timeDomainBuf, 1, &scale, &timeDomainBuf, 1, vDSP_Length(N))
+            var scaledBufR = [Float](repeating: 0, count: N)
+            memcpy(&scaledBufR, &timeDomainBuf, N * MemoryLayout<Float>.size)
+            vDSP_vsmul(&scaledBufR, 1, &scale, &timeDomainBuf, 1, vDSP_Length(N))
             for i in 0..<B {
                 let writeIdx = (outputRingWritePosR + i) % ringSize
                 outputRingR[writeIdx] += timeDomainBuf[B + i]
