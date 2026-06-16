@@ -364,6 +364,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         workReal      = [Float](repeating: 0, count: N)
         workImag      = [Float](repeating: 0, count: N)
         outRing       = [Float](repeating: 0, count: ringCapacity)
+        prevGain      = [Float](repeating: 1.0, count: halfN + 1)
 
         let initNoisePower: Float = 1e-12
         noisePowerHistory = [[Float]](
@@ -601,8 +602,10 @@ final class SpectralDenoiser: @unchecked Sendable {
                 // Shift overlap buffer: move second half to first half (memmove; regions may overlap).
                 outputOverlap.withUnsafeMutableBufferPointer { buf in
                     let base = buf.baseAddress!
-                    memmove(base, base + hop, MemoryLayout<Float>.stride * hop)
-                    vDSP_vclr(base + hop, 1, vDSP_Length(hop))
+                    // Shift the remaining (N - hop) samples to the front of the buffer.
+                    memmove(base, base + hop, MemoryLayout<Float>.stride * (N - hop))
+                    // Zero the last `hop` positions to prepare for the next OLA frame.
+                    vDSP_vclr(base + (N - hop), 1, vDSP_Length(hop))
                 }
             }
         }
