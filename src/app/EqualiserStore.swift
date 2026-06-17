@@ -1102,7 +1102,6 @@ final class EqualiserStore: ObservableObject {
         eqConfiguration.updateBandGain(index: index, gain: gain)
         routingCoordinator.updateBandGain(index: index)
         presetManager.markAsModified()
-        recomputeStaticPreamp()
     }
     
     /// Updates the Q factor for a specific EQ band.
@@ -1110,7 +1109,6 @@ final class EqualiserStore: ObservableObject {
         eqConfiguration.updateBandQ(index: index, q: q)
         routingCoordinator.updateBandQ(index: index)
         presetManager.markAsModified()
-        recomputeStaticPreamp()
     }
     
     /// Updates the frequency for a specific EQ band.
@@ -1118,7 +1116,6 @@ final class EqualiserStore: ObservableObject {
         eqConfiguration.updateBandFrequency(index: index, frequency: frequency)
         routingCoordinator.updateBandFrequency(index: index)
         presetManager.markAsModified()
-        recomputeStaticPreamp()
     }
     
     /// Updates the filter type for a specific EQ band.
@@ -1126,7 +1123,6 @@ final class EqualiserStore: ObservableObject {
         eqConfiguration.updateBandFilterType(index: index, filterType: filterType)
         routingCoordinator.updateBandFilterType(index: index)
         presetManager.markAsModified()
-        recomputeStaticPreamp()
     }
 
     /// Updates the filter slope for a specific EQ band.
@@ -1134,7 +1130,6 @@ final class EqualiserStore: ObservableObject {
         eqConfiguration.updateBandSlope(index: index, slope: slope)
         routingCoordinator.updateBandSlope(index: index)
         presetManager.markAsModified()
-        recomputeStaticPreamp()
     }
 
     /// Updates the bypass state for a specific EQ band.
@@ -1142,7 +1137,6 @@ final class EqualiserStore: ObservableObject {
         eqConfiguration.updateBandBypass(index: index, bypass: bypass)
         routingCoordinator.updateBandBypass(index: index)
         presetManager.markAsModified()
-        recomputeStaticPreamp()
     }
     
     /// Updates the band count and marks the preset as modified.

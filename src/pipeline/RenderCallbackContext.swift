@@ -1056,7 +1056,8 @@ final class RenderCallbackContext: @unchecked Sendable {
     ///   - sampleRate: Current pipeline sample rate (needed for time-constant recalculation).
     func updateDynamicsConfig(_ config: DynamicsConfig, sampleRate: Double) {
         dynamicsProcessor.applyConfig(config, sampleRate: sampleRate)
-        setOversamplingEnabled(config.advanced.oversamplingEnabled)
+        // setOversamplingEnabled is already called inside DynamicsProcessor.applyConfig()
+        // via setOversamplingEnabled() → setOversamplingActive()
     }
 
     /// Starts noise profile capture on the denoiser.

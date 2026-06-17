@@ -127,7 +127,7 @@ struct BassManagementCrossover {
     ///       [ch * stateSizePerChannel + section * 4 + 1] = LP w2,
     ///       [ch * stateSizePerChannel + section * 4 + 2] = HP w1,
     ///       [ch * stateSizePerChannel + section * 4 + 3] = HP w2
-    mutating func processLowPass(_ buf: UnsafeMutablePointer<Float>, count: Int, state: inout [Float], channelIndex: Int) {
+    mutating func processLowPass(_ buf: UnsafeMutablePointer<Float>, count: Int, state: UnsafeMutablePointer<Float>, channelIndex: Int) {
         let stateOffset = channelIndex * stateSizePerChannel
         for section in 0..<sectionCount {
             let coeffs = lowPassSections[section]
@@ -160,7 +160,7 @@ struct BassManagementCrossover {
     ///       [ch * stateSizePerChannel + section * 4 + 1] = LP w2,
     ///       [ch * stateSizePerChannel + section * 4 + 2] = HP w1,
     ///       [ch * stateSizePerChannel + section * 4 + 3] = HP w2
-    mutating func processHighPass(_ buf: UnsafeMutablePointer<Float>, count: Int, state: inout [Float], channelIndex: Int) {
+    mutating func processHighPass(_ buf: UnsafeMutablePointer<Float>, count: Int, state: UnsafeMutablePointer<Float>, channelIndex: Int) {
         let stateOffset = channelIndex * stateSizePerChannel
         for section in 0..<sectionCount {
             let coeffs = highPassSections[section]
