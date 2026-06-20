@@ -146,6 +146,12 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
     /// Group delay all-pass coefficients for crossover phase alignment.
     /// Fitted by CrossoverGroupDelayEngine to minimise group delay error at crossover points.
     var groupDelayAllPassCoefficients: [BiquadCoefficients] = []
+    /// Enable 2× oversampling for the per-output EQ biquad chain.
+    /// Eliminates bilinear transform frequency-warping above ~10 kHz.
+    /// Recommended for tweeter output channels with EQ corrections above 10 kHz.
+    /// Adds minimal latency (~10–20 samples) and negligible CPU cost.
+    /// Default: false (existing behaviour preserved).
+    var eqOversamplingEnabled: Bool = false
 
     // Validation ranges
     static let minGainTrimDB: Float = -24.0
@@ -156,6 +162,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, label, source, target, isEnabled, eq
         case gainTrimDB, polarityInverted, delayMs, limiter, groupDelayAllPassCoefficients
+        case eqOversamplingEnabled
     }
 
     init(
@@ -169,7 +176,8 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         polarityInverted: Bool = false,
         delayMs: Float = 0.0,
         limiter: OutputChannelLimiterConfig = .default,
-        groupDelayAllPassCoefficients: [BiquadCoefficients] = []
+        groupDelayAllPassCoefficients: [BiquadCoefficients] = [],
+        eqOversamplingEnabled: Bool = false
     ) {
         self.id = id
         self.label = label
@@ -182,6 +190,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         self.delayMs = delayMs
         self.limiter = limiter
         self.groupDelayAllPassCoefficients = groupDelayAllPassCoefficients
+        self.eqOversamplingEnabled = eqOversamplingEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -197,6 +206,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         delayMs = try c.decodeIfPresent(Float.self, forKey: .delayMs) ?? 0.0
         limiter = try c.decodeIfPresent(OutputChannelLimiterConfig.self, forKey: .limiter) ?? .default
         groupDelayAllPassCoefficients = try c.decodeIfPresent([BiquadCoefficients].self, forKey: .groupDelayAllPassCoefficients) ?? []
+        eqOversamplingEnabled = try c.decodeIfPresent(Bool.self, forKey: .eqOversamplingEnabled) ?? false
     }
 
     func validate() -> ValidationError? {

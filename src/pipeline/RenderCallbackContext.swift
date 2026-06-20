@@ -180,6 +180,33 @@ final class RenderCallbackContext: @unchecked Sendable {
         sweepAnalyserRef
     }
 
+    // MARK: - Combined Multi-Driver Measurement (Part 2 Task AD)
+
+    /// Combined measurement sweep buffer for verification measurement.
+    /// When non-nil, this buffer replaces the main EQ chain output (post-main-EQ, pre-crossover)
+    /// with the sweep signal, so all output channels receive the same sweep simultaneously.
+    private nonisolated(unsafe) var _combinedMeasurementSweepBuffer: [Float]? = nil
+    private nonisolated(unsafe) var _combinedMeasurementSweepReadPos: Int = 0
+    private let _combinedMeasurementActive = ManagedAtomic<Int32>(0)
+
+    var combinedMeasurementSweepBuffer: [Float]? {
+        get { _combinedMeasurementSweepBuffer }
+        set { _combinedMeasurementSweepBuffer = newValue }
+    }
+
+    var combinedMeasurementSweepReadPos: Int {
+        get { _combinedMeasurementSweepReadPos }
+        set { _combinedMeasurementSweepReadPos = newValue }
+    }
+
+    var isCombinedMeasurementActive: Bool {
+        _combinedMeasurementActive.load(ordering: .relaxed) != 0
+    }
+
+    func setCombinedMeasurementActive(_ active: Bool) {
+        _combinedMeasurementActive.store(active ? 1 : 0, ordering: .releasing)
+    }
+
     private let targetVolumeGainAtomic: ManagedAtomic<Int32> = ManagedAtomic(0) // Float 0.0 — silent until VolumeManager sets correct value
 
     /// Stopping flag (stored as Int32 for atomic access).

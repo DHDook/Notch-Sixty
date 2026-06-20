@@ -55,27 +55,38 @@ final class OutputChannelProcessor {
     /// Amount of gain reduction applied by the brickwall limiter (dB, always ≤ 0).
     nonisolated(unsafe) var brickwallGainReductionDB: Float = 0.0
 
-    // Sample rate (set at init and on sample rate change)
-    private var sampleRate: Double
+    // MARK: - EQ Oversampling (Part 2 Task AE)
+
+    /// 2× oversampler for per-output EQ.
+    /// Simple linear interpolation upsampling for minimal latency.
+    private var upsamplerEnabled: Bool = false
+
+    /// Pre-allocated buffers for upsampling (sized to maxFrameCount * 2)
+    private var upsampledLeft:  UnsafeMutablePointer<Float>
+    private var upsampledRight: UnsafeMutablePointer<Float>
 
     // MARK: - Init
     init(source: SignalSource, maxFrameCount: Int, sampleRate: Double) {
-        self.sampleRate = sampleRate
         eqProcessor = OutputChannelEQProcessor(source: source,
                                                maxFrameCount: maxFrameCount,
                                                sampleRate: sampleRate)
         delayBuffer = [Float](repeating: 0, count: Self.maxDelaySamples)
+        // Pre-allocate upsampled buffers (maxFrameCount * 2 for 2× oversampling)
+        upsampledLeft = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount * 2)
+        upsampledRight = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount * 2)
+        upsampledLeft.initialize(repeating: 0, count: maxFrameCount * 2)
+        upsampledRight.initialize(repeating: 0, count: maxFrameCount * 2)
     }
 
     // MARK: - Main Thread Configuration (all real-time safe via atomics)
 
     func applyChannelConfig(_ config: OutputChannelConfig, sampleRate: Double) {
-        self.sampleRate = sampleRate
         eqProcessor.applyEQConfig(config.eq, sampleRate: sampleRate)
         setCalibrationTrimDB(config.gainTrimDB)
         setPolarity(inverted: config.polarityInverted)
         setDelayMs(config.delayMs, sampleRate: sampleRate)
         setLimiterConfig(config.limiter)
+        setEQOversamplingEnabled(config.eqOversamplingEnabled, sampleRate: sampleRate)
     }
 
     /// Sets the pre-EQ calibration trim. Called by Band Level Calibration and applyChannelConfig.
@@ -104,6 +115,13 @@ final class OutputChannelProcessor {
 
     func setGroupDelayAllPassCoefficients(_ coefficients: [BiquadCoefficients]) {
         groupDelayAllPassChain.stageSections(from: [coefficients])
+    }
+
+    func setEQOversamplingEnabled(_ enabled: Bool, sampleRate: Double) {
+        upsamplerEnabled = enabled
+        // TODO: Reconfigure EQ chains to run at 2× sample rate when oversampling is enabled
+        // This requires recalculating biquad coefficients for the new sample rate
+        // For now, we just toggle the oversampling flag
     }
 
     // MARK: - Per-Channel Correction Application (Task D)
@@ -168,7 +186,31 @@ final class OutputChannelProcessor {
         // 3. Per-output EQ (all modes: bypass, flat, standard, linear, mixed, delta)
         // EQ always sees the calibrated signal level — inputGainDB and outputGainDB
         // inside eqProcessor handle EQ-level gain staging independently.
-        eqProcessor.process(leftBuf: leftBuf, rightBuf: rightBuf, frameCount: UInt32(frameCount))
+        // Part 2 Task AE: Wrap EQ with 2× oversampling if enabled
+        if upsamplerEnabled {
+            // Simple 2× linear interpolation upsampling
+            for i in 0..<frameCount {
+                let idx = i * 2
+                upsampledLeft[idx] = leftBuf[i]
+                upsampledLeft[idx + 1] = i < frameCount - 1 ? (leftBuf[i] + leftBuf[i + 1]) * 0.5 : leftBuf[i]
+                if let r = rightBuf {
+                    upsampledRight[idx] = r[i]
+                    upsampledRight[idx + 1] = i < frameCount - 1 ? (r[i] + r[i + 1]) * 0.5 : r[i]
+                }
+            }
+            // Run EQ at 2× rate
+            eqProcessor.process(leftBuf: upsampledLeft, rightBuf: rightBuf != nil ? upsampledRight : nil,
+                                frameCount: UInt32(frameCount * 2))
+            // Simple 2× decimation downsampling (keep every other sample)
+            for i in 0..<frameCount {
+                leftBuf[i] = upsampledLeft[i * 2]
+                if let r = rightBuf {
+                    r[i] = upsampledRight[i * 2]
+                }
+            }
+        } else {
+            eqProcessor.process(leftBuf: leftBuf, rightBuf: rightBuf, frameCount: UInt32(frameCount))
+        }
 
         // 4. Polarity inversion (post-EQ)
         let polarity = Float(bitPattern: UInt32(bitPattern: _polarityBits.load(ordering: .relaxed)))

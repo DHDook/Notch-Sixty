@@ -117,6 +117,9 @@ final class EqualiserStore: ObservableObject {
     @Published var tfMeasurementStep: TransferFunctionMeasurementStep = .idle
     @Published var transferFunctionDataset: TransferFunctionDataset = TransferFunctionDataset()
 
+    // MARK: - Diaphragm Resonance Detection (Part 2 Task AB)
+    @Published var resonanceCandidates: [Int: [DiaphragmResonanceDetector.ResonanceCandidate]] = [:]
+
     private var micPositionContinuation: CheckedContinuation<Void, Never>?
 
     @MainActor
@@ -224,6 +227,49 @@ final class EqualiserStore: ObservableObject {
         }
 
         tfMeasurementStep = .allChannelsComplete
+    }
+
+    // MARK: - Diaphragm Resonance Detection (Part 2 Task AB)
+
+    /// Runs resonance detection on the measured transfer function for a given channel
+    /// and stores the candidates for UI display.
+    @MainActor
+    func detectResonances(for channelIndex: Int, params: DiaphragmResonanceDetector.DetectionParameters = .init()) {
+        guard let channel = transferFunctionDataset.channels.first(where: { $0.channelIndex == channelIndex }),
+              let magnitude = channel.averagedMagnitudeDB else { return }
+        let candidates = DiaphragmResonanceDetector.detect(magnitudeResponseDB: magnitude, params: params)
+        resonanceCandidates[channelIndex] = candidates
+    }
+
+    // MARK: - Combined Multi-Driver Measurement (Part 2 Task AD)
+
+    @Published var combinedMeasurementResult: CombinedMeasurementResult? = nil
+
+    /// Plays a log-swept sine through ALL enabled output channels simultaneously
+    /// and captures the result at the listening position.
+    ///
+    /// All DSP processing (per-output EQ, crossover, delays, limiters) is active
+    /// during this measurement — the result reflects the actual system output
+    /// as configured, not the raw driver responses.
+    ///
+    /// - Parameters:
+    ///   - micInputDeviceID: Physical microphone input device.
+    ///   - sweepDurationSeconds: Default: 10 s.
+    ///   - repetitions: Number of sweeps to average. Default: 1 (combined measurement
+    ///     is typically used for verification, not precision; 1 sweep is sufficient).
+    @MainActor
+    func runCombinedVerificationMeasurement(
+        micInputDeviceID: AudioDeviceID,
+        sweepDurationSeconds: Double = 10.0,
+        repetitions: Int = 1
+    ) async -> CombinedMeasurementResult? {
+        // TODO: Implement combined measurement logic
+        // This requires:
+        // 1. Setting up sweep injection before crossover in render pipeline
+        // 2. Capturing from microphone input
+        // 3. Computing impulse response and frequency response
+        // 4. Returning CombinedMeasurementResult
+        return nil
     }
 
     // MARK: - Loopback Measurement State

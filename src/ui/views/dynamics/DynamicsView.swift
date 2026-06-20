@@ -31,6 +31,7 @@ struct DynamicsView: View {
                 HStack(alignment: .top, spacing: 0) {
                     // ── Left column ──────────────────────────────────────────
                     Form {
+                        infrasonicFilterSection
                         stereoWidenerSection
                         deEsserSection
                         multibandSection
@@ -72,6 +73,50 @@ struct DynamicsView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
+        }
+    }
+
+    // MARK: - Infrasonic Filter Section
+
+    private var infrasonicFilterSection: some View {
+        Section {
+            Toggle("Enabled", isOn: infrasonicFilterEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+
+            DynamicsSliderRow(
+                label: "Cutoff frequency",
+                value: infrasonicCutoffHz,
+                range: 5.0...30.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f Hz", $0) },
+                leftEndLabel: "5 Hz",
+                rightEndLabel: "30 Hz",
+                isDisabled: !store.dynamicsConfig.advanced.infrasonicFilter.isEnabled
+            )
+
+            Picker("Slope", selection: infrasonicSlope) {
+                ForEach(InfrasonicFilterConfig.InfrasonicSlope.allCases, id: \.self) { slope in
+                    Text(slope.displayName).tag(slope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!store.dynamicsConfig.advanced.infrasonicFilter.isEnabled)
+
+            Picker("Apply to", selection: infrasonicTarget) {
+                ForEach(InfrasonicFilterConfig.ApplicationTarget.allCases, id: \.self) { target in
+                    Text(target.displayName).tag(target)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(!store.dynamicsConfig.advanced.infrasonicFilter.isEnabled)
+
+            Text("ⓘ Removes subsonic content below the threshold of hearing. Protects drivers and amplifiers from HVAC turbulence, record warps, and room pressurisation. Does not affect audible content when set at or below 20 Hz.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("INFRASONIC FILTER")
         }
     }
 
@@ -1630,6 +1675,52 @@ struct DynamicsView: View {
         } header: {
             Text("FIR Correction")
         }
+    }
+
+    // MARK: - Infrasonic Filter Bindings
+
+    private var infrasonicFilterEnabled: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.infrasonicFilter.isEnabled },
+            set: { v in
+                var c = store.dynamicsConfig.advanced
+                c.infrasonicFilter.isEnabled = v
+                store.updateAdvancedProcessing(c)
+            }
+        )
+    }
+
+    private var infrasonicCutoffHz: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.advanced.infrasonicFilter.cutoffHz) },
+            set: { v in
+                var c = store.dynamicsConfig.advanced
+                c.infrasonicFilter.cutoffHz = Float(v)
+                store.updateAdvancedProcessing(c)
+            }
+        )
+    }
+
+    private var infrasonicSlope: Binding<InfrasonicFilterConfig.InfrasonicSlope> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.infrasonicFilter.slope },
+            set: { v in
+                var c = store.dynamicsConfig.advanced
+                c.infrasonicFilter.slope = v
+                store.updateAdvancedProcessing(c)
+            }
+        )
+    }
+
+    private var infrasonicTarget: Binding<InfrasonicFilterConfig.ApplicationTarget> {
+        Binding(
+            get: { store.dynamicsConfig.advanced.infrasonicFilter.target },
+            set: { v in
+                var c = store.dynamicsConfig.advanced
+                c.infrasonicFilter.target = v
+                store.updateAdvancedProcessing(c)
+            }
+        )
     }
 
     // MARK: - Stereo Widener Bindings

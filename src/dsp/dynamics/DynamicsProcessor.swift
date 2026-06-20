@@ -152,6 +152,22 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var mainsHighPassL: BiquadFilter
     nonisolated(unsafe) var mainsHighPassR: BiquadFilter
 
+    // ── Infrasonic High-Pass Filter State ─────────────────────────────────────
+    /// Infrasonic HPF state — runs early in the signal chain, before main EQ.
+    /// Sized for worst case: 16th-order (8 sections) × 2 channels × 2 state vars = 32 Floats.
+    nonisolated(unsafe) var infrasonicState: [Float]
+    /// Infrasonic HPF state for sub path (mono channel).
+    /// Sized for worst case: 16th-order (8 sections) × 1 channel × 2 state vars = 16 Floats.
+    nonisolated(unsafe) var infrasonicSubState: [Float]
+    /// Active coefficients staged from main thread via atomic flag.
+    nonisolated(unsafe) var activeInfrasonicSections:  [(b0: Float, b1: Float, b2: Float, na1: Float, na2: Float)]
+    nonisolated(unsafe) var activeInfrasonicSectionCount: Int = 0
+    nonisolated(unsafe) var pendingInfrasonicSections: [(b0: Float, b1: Float, b2: Float, na1: Float, na2: Float)]
+    nonisolated(unsafe) var pendingInfrasonicSectionCount: Int = 0
+    private let hasInfrasonicUpdate = ManagedAtomic<Bool>(false)
+    private let _infrasonicEnabled  = ManagedAtomic<Int32>(0)
+    private let _infrasonicTarget   = ManagedAtomic<Int32>(0)  // InfrasonicFilterConfig.ApplicationTarget rawValue
+
     /// Bass Management crossover instance.
     nonisolated(unsafe) var bassManagementCrossover: BassManagementCrossover
     /// Bass Management crossover state (per channel).
@@ -819,6 +835,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         _lowBandLowShelfGainBits = ManagedAtomic(floatBits(0.0))
         _lowBandDelaySamplesBits = ManagedAtomic(floatBits(0.0))
 
+        // Infrasonic filter state arrays (32 floats for stereo, 16 for sub)
+        self.infrasonicState = Array(repeating: 0.0, count: 32)
+        self.infrasonicSubState = Array(repeating: 0.0, count: 16)
+        self.activeInfrasonicSections = []
+        self.pendingInfrasonicSections = []
+
         // System volume feed atomics
         _systemVolumeBits = ManagedAtomic(floatBits(1.0))
 
@@ -1243,6 +1265,43 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Update clipper/limiter effective sample rate
         setOversamplingActive(v, factor: 4) // 4× oversampling factor
     }
+    func setInfrasonicFilterConfig(_ config: InfrasonicFilterConfig, sampleRate: Double) {
+        _infrasonicEnabled.store(config.isEnabled ? 1 : 0, ordering: .releasing)
+        _infrasonicTarget.store(Int32(config.target.rawValue), ordering: .releasing)
+
+        guard config.isEnabled else {
+            pendingInfrasonicSectionCount = 0
+            hasInfrasonicUpdate.store(true, ordering: .releasing)
+            return
+        }
+
+        // Compute Butterworth HP sections for the selected slope and cutoff.
+        // Use BiquadMath.calculateSections with highPass type and appropriate FilterSlope.
+        let slope = mapToFilterSlope(config.slope)
+        let sections = BiquadMath.calculateSections(
+            type: .highPass,
+            sampleRate: sampleRate,
+            frequency: Double(config.cutoffHz),
+            q: 0.7071,  // Butterworth Q
+            gain: 0.0,
+            slope: slope
+        )
+        pendingInfrasonicSections = sections.map {
+            (Float($0.b0), Float($0.b1), Float($0.b2), Float($0.a1), Float($0.a2))
+        }
+        pendingInfrasonicSectionCount = sections.count
+        hasInfrasonicUpdate.store(true, ordering: .releasing)
+    }
+
+    /// Maps InfrasonicFilterConfig.InfrasonicSlope to FilterSlope for coefficient computation.
+    private func mapToFilterSlope(_ slope: InfrasonicFilterConfig.InfrasonicSlope) -> FilterSlope {
+        switch slope {
+        case .db24: return .db24
+        case .db48: return .db48
+        case .db96: return .db96
+        }
+    }
+
     func setBassManagementEnabled(_ v: Bool) {
         _bassManagementEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
@@ -1483,6 +1542,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setSubBassAlignmentFrequencyHz(adv.subBassAlignmentFrequencyHz)
         setSubBassPhaseQ(adv.subBassPhaseAlignmentQ)
         setOversamplingEnabled(adv.oversamplingEnabled)
+        setInfrasonicFilterConfig(adv.infrasonicFilter, sampleRate: sampleRate)
 
         // Bass Management - rebuild crossover only when parameters change
         setBassManagementEnabled(adv.bassManagement.enabled)
@@ -1825,6 +1885,50 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // MARK: - DSP Processing (audio thread)
 
+    /// Applies the infrasonic high-pass filter to the left and right channel buffers.
+    /// Called at the TOP of the DynamicsProcessor.process() chain, before all other processing.
+    /// The filter is a passthrough (instant return) when disabled.
+    @inline(__always)
+    private func processInfrasonicFilter(
+        abl: UnsafeMutableAudioBufferListPointer,
+        numCh: Int,
+        count: Int
+    ) {
+        guard _infrasonicEnabled.load(ordering: .relaxed) != 0 else { return }
+
+        // Apply pending coefficient update
+        if hasInfrasonicUpdate.exchange(false, ordering: .acquiringAndReleasing) {
+            activeInfrasonicSections     = pendingInfrasonicSections
+            activeInfrasonicSectionCount = pendingInfrasonicSectionCount
+            // Do NOT zero infrasonicState: continuity preserved across updates.
+        }
+
+        let sectionCount = activeInfrasonicSectionCount
+        guard sectionCount > 0 else { return }
+
+        // Check target: .subOutputOnly is handled in processBassManagement, not here.
+        let target = InfrasonicFilterConfig.ApplicationTarget(
+            rawValue: Int(_infrasonicTarget.load(ordering: .relaxed))) ?? .mainChain
+        guard target == .mainChain || target == .both else { return }
+
+        // Apply to all channels (stereo L+R)
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let stateOffset = ch * sectionCount * 2
+            for idx in 0..<sectionCount {
+                let (b0, b1, b2, na1, na2) = activeInfrasonicSections[idx]
+                var w1 = infrasonicState[stateOffset + idx * 2]
+                var w2 = infrasonicState[stateOffset + idx * 2 + 1]
+                for i in 0..<count {
+                    buf[i] = Self.processBiquad(buf[i], b0: b0, b1: b1, b2: b2,
+                                                 na1: na1, na2: na2, w1: &w1, w2: &w2)
+                }
+                infrasonicState[stateOffset + idx * 2]     = w1
+                infrasonicState[stateOffset + idx * 2 + 1] = w2
+            }
+        }
+    }
+
     @inline(__always)
     func process(bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: UInt32) {
         let count = Int(frameCount)
@@ -1832,6 +1936,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         let abl   = UnsafeMutableAudioBufferListPointer(bufferList)
         let numCh = min(channelCount, abl.count)
         guard numCh > 0 else { return }
+
+        // Infrasonic filter — must run first, before any other processing,
+        // to protect all downstream stages including the main EQ and dynamics.
+        processInfrasonicFilter(abl: abl, numCh: numCh, count: count)
 
         let wideOn    = stereoWidener.isEnabled
         let lufsOn    = lufsProcessor.isEnabled
@@ -2674,6 +2782,34 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Sum low bands to get mono low
         for i in 0..<count {
             bmMonoLow[i] = bmLowL[i] + bmLowR[i]
+        }
+
+        // Apply infrasonic filter to sub path if target is .subOutputOnly or .both
+        let infrasonicEnabled = _infrasonicEnabled.load(ordering: .relaxed) != 0
+        let infrasonicTarget = InfrasonicFilterConfig.ApplicationTarget(
+            rawValue: Int(_infrasonicTarget.load(ordering: .relaxed))) ?? .mainChain
+        if infrasonicEnabled && (infrasonicTarget == .subOutputOnly || infrasonicTarget == .both) {
+            // Apply pending coefficient update
+            if hasInfrasonicUpdate.exchange(false, ordering: .acquiringAndReleasing) {
+                activeInfrasonicSections     = pendingInfrasonicSections
+                activeInfrasonicSectionCount = pendingInfrasonicSectionCount
+            }
+
+            let sectionCount = activeInfrasonicSectionCount
+            guard sectionCount > 0 else { return }
+
+            // Apply to mono low buffer using infrasonicSubState
+            for idx in 0..<sectionCount {
+                let (b0, b1, b2, na1, na2) = activeInfrasonicSections[idx]
+                var w1 = infrasonicSubState[idx * 2]
+                var w2 = infrasonicSubState[idx * 2 + 1]
+                for i in 0..<count {
+                    bmMonoLow[i] = Self.processBiquad(bmMonoLow[i], b0: b0, b1: b1, b2: b2,
+                                                         na1: na1, na2: na2, w1: &w1, w2: &w2)
+                }
+                infrasonicSubState[idx * 2]     = w1
+                infrasonicSubState[idx * 2 + 1] = w2
+            }
         }
 
         // Part 2 sub-band processing chain

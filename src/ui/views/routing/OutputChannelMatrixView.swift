@@ -42,6 +42,7 @@ struct OutputChannelMatrixView: View {
         case summation  = "Summation"        // Task R
         case optimise   = "Optimise"         // Task X
         case timeAlign  = "Time Alignment"   // Task V/W/AF
+        case verification = "Verification"   // Task AD - Combined Multi-Driver Measurement
     }
 
     var body: some View {

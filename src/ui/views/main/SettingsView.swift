@@ -11,6 +11,13 @@ enum SettingsTab: String {
     case outputMatrix = "outputMatrix"
 }
 
+// MARK: - Mic Calibration Mode (Part 2 Task AC)
+enum MicCalibrationMode: String, CaseIterable {
+    case none = "none"
+    case single = "single"
+    case dual = "dual"
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: EqualiserStore
     @State private var selectedTab: SettingsTab = .display
@@ -565,6 +572,12 @@ struct RoomCalibrationTab: View {
     @State private var selectedMicID: AudioDeviceID? = nil
     @State private var availableMics: [(id: AudioDeviceID, name: String)] = []
 
+    // Dual-file calibration state (Part 2 Task AC)
+    @State private var micCalibrationMode: MicCalibrationMode = .none
+    @State private var freeFieldURL: URL? = nil
+    @State private var diffuseFieldURL: URL? = nil
+    @State private var schroederFrequency: Double = 300.0
+
     private let positionLabels = ["Centre", "Left", "Right"]
 
     var body: some View {
@@ -604,36 +617,126 @@ struct RoomCalibrationTab: View {
                 Text("Target Curve")
             }
 
-            // ── Microphone Calibration (Part 4.1) ───────────────────────────
+            // ── Microphone Calibration (Part 4.1 + Part 2 Task AC) ───────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Load a microphone calibration file to correct for the measurement mic's frequency response deviation.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    if let calibration = store.micCalibration {
-                        HStack(spacing: 8) {
-                            Text(calibration.filename ?? "Loaded calibration")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                            Button("Clear") {
-                                store.clearMicCalibration()
+                    // Calibration mode picker (Part 2 Task AC)
+                    Picker("Calibration mode", selection: $micCalibrationMode) {
+                        Text("None").tag(MicCalibrationMode.none)
+                        Text("Single file").tag(MicCalibrationMode.single)
+                        Text("Dual file (free-field + diffuse-field)").tag(MicCalibrationMode.dual)
+                    }
+                    .pickerStyle(.segmented)
+
+                    switch micCalibrationMode {
+                    case .none:
+                        Text("No calibration applied.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                    case .single:
+                        if let calibration = store.micCalibration {
+                            HStack(spacing: 8) {
+                                Text(calibration.filename ?? "Loaded calibration")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                Button("Clear") {
+                                    store.clearMicCalibration()
+                                }
+                                .buttonStyle(.borderless)
+                                .font(.system(size: 11))
                             }
-                            .buttonStyle(.borderless)
-                            .font(.system(size: 11))
+                        } else {
+                            Button("Load Mic Calibration File…") {
+                                let panel = NSOpenPanel()
+                                panel.allowedContentTypes = [.plainText]
+                                panel.allowsMultipleSelection = false
+                                panel.title = "Select Microphone Calibration File"
+                                if panel.runModal() == .OK, let url = panel.url {
+                                    store.loadMicCalibration(url: url)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                    } else {
-                        Button("Load Mic Calibration File…") {
-                            let panel = NSOpenPanel()
-                            panel.allowedContentTypes = [.plainText]
-                            panel.allowsMultipleSelection = false
-                            panel.title = "Select Microphone Calibration File"
-                            if panel.runModal() == .OK, let url = panel.url {
-                                store.loadMicCalibration(url: url)
+
+                    case .dual:
+                        VStack(alignment: .leading, spacing: 8) {
+                            // Free field file picker
+                            HStack {
+                                Text("Free field:")
+                                    .font(.caption)
+                                if let url = freeFieldURL {
+                                    Text(url.lastPathComponent)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Button("Clear") {
+                                        freeFieldURL = nil
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.system(size: 10))
+                                } else {
+                                    Button("Load…") {
+                                        let panel = NSOpenPanel()
+                                        panel.allowedContentTypes = [.plainText]
+                                        panel.allowsMultipleSelection = false
+                                        panel.title = "Select Free-Field Calibration File"
+                                        if panel.runModal() == .OK, let url = panel.url {
+                                            freeFieldURL = url
+                                            loadDualCalibration()
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            }
+
+                            // Diffuse field file picker
+                            HStack {
+                                Text("Diffuse field:")
+                                    .font(.caption)
+                                if let url = diffuseFieldURL {
+                                    Text(url.lastPathComponent)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Button("Clear") {
+                                        diffuseFieldURL = nil
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.system(size: 10))
+                                } else {
+                                    Button("Load…") {
+                                        let panel = NSOpenPanel()
+                                        panel.allowedContentTypes = [.plainText]
+                                        panel.allowsMultipleSelection = false
+                                        panel.title = "Select Diffuse-Field Calibration File"
+                                        if panel.runModal() == .OK, let url = panel.url {
+                                            diffuseFieldURL = url
+                                            loadDualCalibration()
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            }
+
+                            // Schroeder frequency slider
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Schroeder frequency: \(Int(schroederFrequency)) Hz")
+                                    .font(.caption)
+                                Slider(value: $schroederFrequency, in: 100...1000, step: 10)
+                                    .onChange(of: schroederFrequency) { _ in
+                                        loadDualCalibration()
+                                    }
+                                Text("ⓘ The Schroeder frequency is where your room transitions from reverberant to direct-sound dominated. Typical range: 200–500 Hz. Leave at 300 Hz if unsure.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     }
 
                     if let error = store.micCalibrationLoadError {
@@ -1094,47 +1197,71 @@ struct RoomCalibrationTab: View {
 
     // MARK: - Input Device Enumeration
 
-    /// Returns all CoreAudio devices that have at least one input stream.
     private static func listInputDevices() -> [(id: AudioDeviceID, name: String)] {
-        var propSize: UInt32 = 0
-        var addr = AudioObjectPropertyAddress(
+        var devices: [(id: AudioDeviceID, name: String)] = []
+        var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
-            mScope:    kAudioObjectPropertyScopeGlobal,
-            mElement:  kAudioObjectPropertyElementMain
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
         )
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &propSize
-        ) == noErr else { return [] }
 
-        let count = Int(propSize) / MemoryLayout<AudioDeviceID>.size
-        var ids   = [AudioDeviceID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &propSize, &ids
-        ) == noErr else { return [] }
+        var deviceIDs: [AudioDeviceID] = []
+        var dataSize: UInt32 = 0
 
-        return ids.compactMap { deviceID in
-            // Filter to devices with input streams.
-            var inputAddr = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyStreams,
-                mScope:    kAudioDevicePropertyScopeInput,
-                mElement:  kAudioObjectPropertyElementMain
-            )
-            var streamSize: UInt32 = 0
-            AudioObjectGetPropertyDataSize(deviceID, &inputAddr, 0, nil, &streamSize)
-            guard streamSize > 0 else { return nil }
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize) == noErr else {
+            return devices
+        }
 
-            // Get the device name.
-            var nameAddr = AudioObjectPropertyAddress(
+        deviceIDs = Array(repeating: AudioDeviceID(), count: Int(dataSize) / MemoryLayout<AudioDeviceID>.size)
+
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize, &deviceIDs) == noErr else {
+            return devices
+        }
+
+        for deviceID in deviceIDs {
+            var nameAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioObjectPropertyName,
-                mScope:    kAudioObjectPropertyScopeGlobal,
-                mElement:  kAudioObjectPropertyElementMain
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
             )
-            var cfName: CFString = "" as CFString
+            var name: CFString = "" as CFString
             var nameSize = UInt32(MemoryLayout<CFString>.stride)
-            AudioObjectGetPropertyData(deviceID, &nameAddr, 0, nil, &nameSize, &cfName)
-            let nameStr = cfName as String
-            guard !nameStr.isEmpty else { return nil }
-            return (id: deviceID, name: nameStr)
+            if AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name) == noErr {
+                let nameStr = name as String
+                guard !nameStr.isEmpty else { continue }
+
+                // Check if this is an input device
+                var streamConfigAddress = AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyStreamConfiguration,
+                    mScope: kAudioDevicePropertyScopeInput,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+                var bufferSize: UInt32 = 0
+                if AudioObjectGetPropertyDataSize(deviceID, &streamConfigAddress, 0, nil, &bufferSize) == noErr, bufferSize > 0 {
+                    devices.append((id: deviceID, name: nameStr))
+                }
+            }
+        }
+
+        return devices
+    }
+
+    // MARK: - Dual-File Calibration (Part 2 Task AC)
+
+    private func loadDualCalibration() {
+        guard let freeFieldURL = freeFieldURL,
+              let diffuseFieldURL = diffuseFieldURL else { return }
+
+        do {
+            var calibration = try MicCalibrationLoader.loadDual(
+                freeFieldURL: freeFieldURL,
+                diffuseFieldURL: diffuseFieldURL
+            )
+            calibration.schroederFrequencyHz = schroederFrequency
+            store.micCalibration = calibration
+            store.micCalibrationLoadError = nil
+        } catch {
+            store.micCalibrationLoadError = error.localizedDescription
         }
     }
 }

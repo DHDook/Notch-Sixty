@@ -215,20 +215,126 @@ struct OutputChannelEQView: View {
     }
 
     @ViewBuilder private var oversamplingToggle: some View {
-        Toggle("EQ Oversampling", isOn: Binding(
-            get: { false },
-            set: { _ in }
-        ))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("EQ Oversampling:")
+                    .font(.caption)
+                Picker("", selection: $channel.eqOversamplingEnabled) {
+                    Text("Off").tag(false)
+                    Text("On").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                Text("(2× recommended for tweeter channels with >10 kHz corrections)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if channel.eqOversamplingEnabled {
+                Text("2× oversampling active — EQ accuracy above 10 kHz is improved. Adds ~1 ms of additional latency.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     @ViewBuilder private var detectedResonancesPanel: some View {
+        let candidates = store.resonanceCandidates[channelIndex] ?? []
+
         VStack(alignment: .leading, spacing: 8) {
-            Text("Detected Resonances")
-                .font(.headline)
-            Text("Detected resonances placeholder")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Detected Resonances (from measurement)")
+                    .font(.headline)
+                Spacer()
+                Button("Re-detect") {
+                    store.detectResonances(for: channelIndex)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if candidates.isEmpty {
+                Text("No resonances detected. Click 'Re-detect' to analyse the measured transfer function.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("\(index + 1)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.secondary)
+                            Text(String(format: "%.0f Hz", candidate.frequencyHz))
+                                .font(.caption)
+                            Text(String(format: "+%.1f dB prominence", candidate.prominenceDB))
+                                .font(.caption)
+                            Text(String(format: "Q ≈ %.1f", candidate.estimatedQ))
+                                .font(.caption)
+
+                            // Confidence indicator
+                            let confidenceDots = candidate.confidence > 0.66 ? "●●●" : (candidate.confidence > 0.33 ? "●●○" : "●○○")
+                            Text(confidenceDots)
+                                .font(.caption)
+                                .foregroundStyle(candidate.confidence > 0.66 ? .green : (candidate.confidence > 0.33 ? .orange : .red))
+                        }
+
+                        HStack {
+                            Text("Suggested: Notch at \(Int(candidate.frequencyHz)) Hz, Q \(String(format: "%.1f", candidate.suggestedNotch.q))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Add to EQ") {
+                                addNotchToEQ(candidate: candidate.suggestedNotch)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Button("Add All to EQ") {
+                    for candidate in candidates {
+                        addNotchToEQ(candidate: candidate.suggestedNotch)
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                // Detection parameters controls
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Detection parameters")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+
+                    HStack {
+                        Text("Search range:")
+                            .font(.caption2)
+                        Text("200 Hz – 20000 Hz")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Text("Min prominence: 3 dB")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("Min Q: 3.0")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .padding(.vertical, 8)
+    }
+
+    private func addNotchToEQ(candidate: EQBandConfiguration) {
+        // Find an available band or add a new one
+        if let availableIndex = channel.eq.bands.firstIndex(where: { $0.bypass }) {
+            channel.eq.bands[availableIndex] = candidate
+        } else if channel.eq.bands.count < 64 {
+            channel.eq.bands.append(candidate)
+        }
     }
 }

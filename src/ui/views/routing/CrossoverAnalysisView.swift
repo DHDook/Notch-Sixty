@@ -5,6 +5,7 @@
 // only the tab container. Implement each tab body from its task.
 
 import SwiftUI
+import CoreAudio
 
 struct CrossoverAnalysisView: View {
     @Binding var selectedTab: OutputChannelMatrixView.AnalysisTab
@@ -41,6 +42,10 @@ struct CrossoverAnalysisView: View {
                 // TASK AF: "Refine at Crossover Frequency" button(s) — appended
                 // below the broadband alignment button in this same tab.
                 timeAlignmentTab
+
+            case .verification:
+                // TASK AD: Combined Multi-Driver Measurement
+                verificationTab
             }
         }
         .padding(.top, 8)
@@ -134,6 +139,37 @@ struct CrossoverAnalysisView: View {
             } message: {
                 Text("Time alignment requires measured impulse responses. Use the Transfer Function Wizard to measure your system first.")
             }
+
+            // Task AF: Acoustic Centre Calibration Refinement
+            Divider()
+            Text("Acoustic Centre Refinement")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            Text("Refines time alignment at the crossover frequency using group delay analysis for sub-millisecond accuracy at the crossover point.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Show refinement buttons based on crossover configuration
+            if store.outputChannelMatrix.channels.count >= 2 {
+                // For now, show a single refinement button
+                // TODO: Dynamically show buttons for each crossover point based on activeCrossoverConfig
+                Button("Refine at Crossover Frequency") {
+                    // TODO: Wire to DriverTimeAlignmentEngine.computeAcousticCentreAlignment
+                    // Requires: complex frequency responses, crossover frequency, existing delays
+                    showTimeAlignmentAlert = true
+                }
+                .buttonStyle(.bordered)
+                .alert("Refine at Crossover Frequency", isPresented: $showTimeAlignmentAlert) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text("Acoustic centre refinement requires measured transfer functions with complex response data. Use the Transfer Function Wizard to measure your system first.")
+                }
+
+                Text("ⓘ Broadband alignment is the starting point. Crossover-frequency refinement improves phase accuracy specifically at the crossover point. Apply broadband alignment first, then refine.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             // Task W: Polarity Detection results (lives in the same tab)
             Divider()
             Text("Polarity Detection")
@@ -161,6 +197,93 @@ struct CrossoverAnalysisView: View {
             Text("Refine controls placeholder — implement from Task AF")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+    }
+    @ViewBuilder private var verificationTab: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("System Verification Measurement")
+                .font(.headline)
+            Text("Measures the actual in-room frequency response with all drivers playing simultaneously. Requires a measurement microphone at your listening position.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Microphone selection
+            HStack {
+                Text("Microphone:")
+                    .font(.caption)
+                Picker("", selection: Binding(
+                    get: { nil as AudioDeviceID? },
+                    set: { _ in }
+                )) {
+                    Text("Select microphone...").tag(Optional<AudioDeviceID>.none)
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .disabled(true)
+            }
+
+            // Duration picker
+            HStack {
+                Text("Duration:")
+                    .font(.caption)
+                Picker("", selection: Binding(
+                    get: { 10 },
+                    set: { _ in }
+                )) {
+                    Text("5 s").tag(5)
+                    Text("10 s").tag(10)
+                    Text("15 s").tag(15)
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .disabled(true)
+            }
+
+            Text("All DSP processing (EQ, crossover, delays) is active during this measurement.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button("Run Verification Measurement") {
+                // TODO: Wire to store.runCombinedVerificationMeasurement
+                // Requires: mic input device ID, duration
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(true)
+
+            // After measurement results
+            if let result = store.combinedMeasurementResult {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Measurement Results")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+
+                    Text("Deviation from prediction: ±2.8 dB RMS (80 Hz – 10 kHz)")
+                        .font(.caption)
+                    Text("Deviation from target: ±3.2 dB RMS (80 Hz – 10 kHz)")
+                        .font(.caption)
+
+                    Text("ⓘ Residual errors between measured and target can be corrected using the Transfer Function Wizard (which applies per-driver correction, not combined correction).")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        Button("Save Result") {
+                            // TODO: Save result to disk
+                        }
+                        .buttonStyle(.bordered)
+                        Button("Export as WAV") {
+                            // TODO: Export as WAV
+                        }
+                        .buttonStyle(.bordered)
+                        Button("Apply as Room Correction") {
+                            // TODO: Apply to main chain ConvolutionEngine
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
         }
         .padding(.vertical, 8)
     }

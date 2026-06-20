@@ -911,6 +911,99 @@ struct PauseGateParameters: Equatable, Sendable {
     var hysteresisDB:  Float  //   0 …   6  dB — open/close threshold separation
 }
 
+// MARK: - Infrasonic Filter Configuration
+
+/// Configuration for the infrasonic high-pass filter.
+struct InfrasonicFilterConfig: Codable, Equatable, Sendable {
+
+    // MARK: - Master Toggle
+    /// Master enable. Default: false. No signal processing occurs when false.
+    var isEnabled: Bool = false
+
+    // MARK: - Cutoff Frequency
+    /// High-pass filter cutoff frequency in Hz.
+    /// Below this frequency, signals are attenuated according to the selected slope.
+    /// Range: 5–30 Hz.
+    /// Default: 18 Hz — below the threshold of hearing for virtually all listeners
+    /// and programme material, while protecting drivers and amplifiers from
+    /// HVAC turbulence, record warps, and room pressurisation artefacts.
+    var cutoffHz: Float = 18.0
+
+    // MARK: - Filter Slope
+    /// Slope of the high-pass filter.
+    /// Range: 24–96 dB/oct (steep slopes only — gentler slopes are insufficient for
+    /// driver protection in the infrasonic range).
+    /// Default: .db48 — provides strong attenuation below the cutoff while
+    /// having negligible effect above 25 Hz for most slope/cutoff combinations.
+    var slope: InfrasonicSlope = .db48
+
+    // MARK: - Application Target
+    /// Which signal path(s) the infrasonic filter is applied to.
+    /// Default: .mainChain — filters the full stereo signal before the main EQ chain.
+    var target: ApplicationTarget = .mainChain
+
+    enum InfrasonicSlope: Int, Codable, Equatable, Sendable, CaseIterable {
+        case db24 = 0   // 4th-order Butterworth — 24 dB/oct
+        case db48 = 1   // 8th-order Butterworth — 48 dB/oct (default)
+        case db96 = 2   // 16th-order Butterworth — 96 dB/oct (maximum protection)
+
+        var displayName: String {
+            switch self {
+            case .db24: return "24 dB/oct"
+            case .db48: return "48 dB/oct (recommended)"
+            case .db96: return "96 dB/oct"
+            }
+        }
+
+        var sectionCount: Int {
+            switch self {
+            case .db24: return 2
+            case .db48: return 4
+            case .db96: return 8
+            }
+        }
+    }
+
+    enum ApplicationTarget: Int, Codable, Equatable, Sendable, CaseIterable {
+        /// Apply to the full stereo signal before the main EQ chain.
+        /// Protects all downstream stages including woofer and sub output channels.
+        /// Recommended for most systems.
+        case mainChain = 0
+
+        /// Apply only to sub output channels (source: .subMono).
+        /// Use when the main speakers have adequate infrasonic rolloff
+        /// from their own high-pass crossover but the subwoofer needs protection.
+        case subOutputOnly = 1
+
+        /// Apply to both the main chain AND sub output channels independently.
+        /// Provides maximum protection at the cost of double filtering in the sub path.
+        /// Appropriate only when the sub path is independently mixed or delayed.
+        case both = 2
+
+        var displayName: String {
+            switch self {
+            case .mainChain:    return "Main signal chain (recommended)"
+            case .subOutputOnly: return "Subwoofer output only"
+            case .both:          return "Main chain + Subwoofer"
+            }
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, cutoffHz, slope, target
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        cutoffHz = try c.decodeIfPresent(Float.self, forKey: .cutoffHz) ?? 18.0
+        slope = try c.decodeIfPresent(InfrasonicSlope.self, forKey: .slope) ?? .db48
+        target = try c.decodeIfPresent(ApplicationTarget.self, forKey: .target) ?? .mainChain
+    }
+
+    init() {}
+}
+
 // MARK: - Auto-Headroom Speed
 
 /// Sets the time constant for the auto-headroom gain rider.
@@ -1124,6 +1217,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Excess-Phase Correction — linear-phase FIR filter flattening group delay in modal region.
     var excessPhaseConfig: ExcessPhaseConfig = ExcessPhaseConfig()
 
+    /// Infrasonic High-Pass Filter — removes subsonic content below the threshold of hearing.
+    var infrasonicFilter: InfrasonicFilterConfig = InfrasonicFilterConfig()
+
     /// Mono Bass Summing — sums L+R below crossover frequency for subwoofer output.
     /// DEPRECATED: Migrated to bassManagement.enabled. Kept for backward compatibility only.
     var monoBassEnabled: Bool = false
@@ -1187,6 +1283,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case bassManagement
         case activeCrossover
         case excessPhaseConfig
+        case infrasonicFilter
         case monoBassEnabled, monoBassCrossover
         case mainsHighPassEnabled, mainsHighPassFrequency
         case volumeDependentLoudnessEnabled, loudnessReferencePhon, loudnessReferenceVolume

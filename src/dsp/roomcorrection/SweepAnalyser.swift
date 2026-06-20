@@ -214,7 +214,7 @@ final class SweepAnalyser {
 
             // Apply microphone calibration correction if available
             if let calibration = micCalibration {
-                let deviation = calibration.deviationAtFrequency(frequency)
+                let deviation = calibration.hybridDeviationAtFrequency(frequency)
                 magnitudeDB -= deviation
                 // Reconstruct magnitude from corrected dB
                 let correctedMagnitude = pow(10.0, magnitudeDB / 20.0)

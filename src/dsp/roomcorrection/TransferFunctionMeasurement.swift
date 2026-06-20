@@ -42,6 +42,20 @@ struct TransferFunctionDataset: Sendable {
     var sweepsPerPosition: Int = 1
 }
 
+// MARK: - Combined Multi-Driver Measurement (Part 2 Task AD)
+
+/// The result of a combined multi-driver measurement.
+struct CombinedMeasurementResult: Sendable {
+    var impulseResponse: [Float]
+    var magnitudeResponseDB: [(frequency: Double, gainDB: Double)]
+    var complexResponse: [(frequency: Double, real: Double, imag: Double)]
+    var sampleRate: Double
+    var capturedAt: Date
+    /// Individual driver measurements used for comparison.
+    /// Nil if individual measurements were not available at capture time.
+    var individualMeasurements: TransferFunctionDataset?
+}
+
 /// Correction result for one channel.
 struct ChannelCorrectionResult: Sendable {
     var channelIndex: Int
