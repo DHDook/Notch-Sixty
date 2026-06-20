@@ -96,6 +96,9 @@ final class EqualiserStore: ObservableObject {
     /// Error message from the most recent IR load attempt.
     @Published var convolutionLoadError: String? = nil
 
+    /// Flag indicating whether app state was reset to defaults on launch due to decode failure.
+    @Published var didResetStateOnLaunch: Bool = false
+
     // MARK: - Transfer Function Measurement State (Task E)
 
     enum TransferFunctionMeasurementStep: Equatable, Sendable {
@@ -755,20 +758,19 @@ final class EqualiserStore: ObservableObject {
     
     init(persistence: AppStatePersistence = AppStatePersistence()) {
         self.persistence = persistence
-        
+
         // Load snapshot if exists
-        let snapshot = persistence.load()
-        
+        let (snapshot, didReset) = persistence.load()
+
         // Initialize EQ configuration
-        if let snapshot = snapshot {
-            self.eqConfiguration = EQConfiguration(from: snapshot)
-        } else {
-            self.eqConfiguration = EQConfiguration()
-        }
-        
+        self.eqConfiguration = EQConfiguration(from: snapshot)
+
         // Initialize other components
         self.presetManager = PresetManager()
-        self.meterStore = MeterStore(metersEnabled: snapshot?.metersEnabled ?? true)
+        self.meterStore = MeterStore(metersEnabled: snapshot.metersEnabled)
+
+        // Set reset flag if state was reset
+        self.didResetStateOnLaunch = didReset
         
         // Create services
         self.volumeService = DeviceVolumeService()
@@ -800,39 +802,31 @@ final class EqualiserStore: ObservableObject {
         } else {
             logger.warning("EqualiserStore.init: No macOS default output device found")
         }
-        
-        // Wire up callbacks
+
+        // Restore app-level state
+        logger.debug("Loading from snapshot: outputDeviceID=\(snapshot.outputDeviceID ?? "nil"), manualMode=\(snapshot.manualModeEnabled)")
+        _bandwidthDisplayMode = Published(initialValue: BandwidthDisplayMode(rawValue: snapshot.bandwidthDisplayMode) ?? .qFactor)
+
+        // Restore capture mode preference
+        routingCoordinator.captureMode = CaptureMode(rawValue: snapshot.captureMode) ?? .sharedMemory
+
+        if snapshot.manualModeEnabled {
+            // Manual mode: load saved devices
+            routingCoordinator.selectedInputDeviceID = snapshot.inputDeviceID
+            routingCoordinator.selectedOutputDeviceID = snapshot.outputDeviceID
+            routingCoordinator.manualModeEnabled = true
+            logger.debug("Manual mode: loaded saved devices")
+        } else {
+            // Automatic mode: use unified selection logic
+            routingCoordinator.manualModeEnabled = false
+            restoreAutomaticOutputDevice(currentSelected: snapshot.outputDeviceID)
+        }
+
         compareModeTimer.onRevert = { [weak self] in
             self?.compareMode = .eq
         }
-        
+
         persistence.setStore(self)
-        
-        // Restore app-level state
-        if let snapshot = snapshot {
-            logger.debug("Loading from snapshot: outputDeviceID=\(snapshot.outputDeviceID ?? "nil"), manualMode=\(snapshot.manualModeEnabled)")
-            _bandwidthDisplayMode = Published(initialValue: BandwidthDisplayMode(rawValue: snapshot.bandwidthDisplayMode) ?? .qFactor)
-
-            // Restore capture mode preference
-            routingCoordinator.captureMode = CaptureMode(rawValue: snapshot.captureMode) ?? .sharedMemory
-
-            if snapshot.manualModeEnabled {
-                // Manual mode: load saved devices
-                routingCoordinator.selectedInputDeviceID = snapshot.inputDeviceID
-                routingCoordinator.selectedOutputDeviceID = snapshot.outputDeviceID
-                routingCoordinator.manualModeEnabled = true
-                logger.debug("Manual mode: loaded saved devices")
-            } else {
-                // Automatic mode: use unified selection logic
-                routingCoordinator.manualModeEnabled = false
-                restoreAutomaticOutputDevice(currentSelected: snapshot.outputDeviceID)
-            }
-        } else {
-            // First launch: automatic mode, use unified selection logic
-            logger.info("First launch, no snapshot")
-            routingCoordinator.manualModeEnabled = false
-            restoreAutomaticOutputDevice(currentSelected: nil)
-        }
         
         // Start observing system default changes
         systemDefaultObserver.startObserving()

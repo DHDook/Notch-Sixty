@@ -156,14 +156,38 @@ final class AppStatePersistence {
         self.store = store
     }
 
-    func load() -> AppStateSnapshot? {
-        guard let data = storage.data(forKey: Keys.appState) else { return nil }
-        do {
-            return try decoder.decode(AppStateSnapshot.self, from: data)
-        } catch {
-            logger.error("Failed to decode app state: \(error.localizedDescription)")
-            return nil
+    func load() -> (snapshot: AppStateSnapshot, didReset: Bool) {
+        guard let data = storage.data(forKey: Keys.appState) else {
+            return (AppStateSnapshot.default, false)   // first launch — no file yet
         }
+
+        do {
+            return (try decoder.decode(AppStateSnapshot.self, from: data), false)
+        } catch {
+            // Log full error detail for diagnosis (DecodingError gives the exact
+            // key path and type mismatch — capture this, don't just log a string).
+            logger.error("Failed to decode persisted app state: \(error). Falling back to defaults.")
+
+            // Preserve the corrupted file for forensic inspection rather than
+            // silently overwriting it — rename with a timestamp suffix.
+            archiveCorruptedStateFile()
+
+            return (AppStateSnapshot.default, true)  // didReset = true
+        }
+    }
+
+    /// Renames an unreadable state file out of the way so the next save()
+    /// doesn't immediately recreate the same problem, and so the file is
+    /// available for later diagnosis if needed.
+    private func archiveCorruptedStateFile() {
+        guard let data = storage.data(forKey: Keys.appState) else { return }
+
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let archiveKey = "\(Keys.appState).corrupted-\(timestamp)"
+        storage.set(data, forKey: archiveKey)
+        storage.removeObject(forKey: Keys.appState)
+
+        logger.info("Archived corrupted state file to key: \(archiveKey)")
     }
 
     func save(_ snapshot: AppStateSnapshot) {

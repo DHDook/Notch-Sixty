@@ -12,6 +12,7 @@ struct EQWindowView: View {
     @State private var localIsMuted: Bool = false
     @State private var showDriverSheet = true
     @State private var showSaveSheet = false
+    @State private var showStateResetAlert = false
 
     /// Whether the driver installation overlay should be shown.
     private var needsDriverInstallation: Bool {
@@ -370,6 +371,7 @@ struct EQWindowView: View {
         .onAppear {
             store.meterStore.windowBecameVisible()
             metersEnabledUI = store.meterStore.metersEnabled
+            showStateResetAlert = store.didResetStateOnLaunch
         }
         .onChange(of: metersEnabledUI) { _, newValue in
             store.meterStore.metersEnabled = newValue
@@ -412,6 +414,13 @@ struct EQWindowView: View {
         .sheet(isPresented: $showSaveSheet) {
             SavePresetSheet()
                 .environmentObject(store)
+        }
+        .alert("Settings Reset to Defaults", isPresented: $showStateResetAlert) {
+            Button("OK") {
+                store.didResetStateOnLaunch = false
+            }
+        } message: {
+            Text("Your saved settings could not be loaded and have been reset to defaults. This can happen after certain app updates. Your previous settings file has been preserved in UserDefaults for diagnosis.")
         }
     }
 }
