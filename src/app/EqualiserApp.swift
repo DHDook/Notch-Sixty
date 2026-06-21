@@ -36,7 +36,7 @@ struct EqualiserMain: App {
 
     var body: some Scene {
         // Main EQ settings window (hidden by default, opened on demand)
-        Window("Equaliser", id: "equaliser") {
+        Window("Notch Sixty", id: "equaliser") {
             EQWindowView()
                 .environmentObject(store)
         }
@@ -59,7 +59,7 @@ struct EqualiserMain: App {
         }
 
         // Menu bar popover (always available)
-        MenuBarExtra("Equaliser", systemImage: "slider.vertical.3") {
+        MenuBarExtra {
             MenuBarContentView()
                 .environmentObject(store)
                 .onAppear {
@@ -67,6 +67,14 @@ struct EqualiserMain: App {
                     // MenuBarExtra is always visible, so this will always fire.
                     appDelegate.setStore(store)
                 }
+        } label: {
+            Image(nsImage: {
+                let img = NSImage(named: "MenuBarIcon")
+                    ?? NSImage(systemSymbolName: "slider.vertical.3",
+                               accessibilityDescription: "Notch Sixty")!
+                img.isTemplate = true
+                return img
+            }())
         }
         .menuBarExtraStyle(.window)
 

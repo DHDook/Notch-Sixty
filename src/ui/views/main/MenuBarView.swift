@@ -35,7 +35,7 @@ struct MenuBarContentView: View {
         HStack(spacing: 8) {
             Image(systemName: "slider.vertical.3")
                 .font(.title3)
-            Text("Equaliser")
+            Text("Notch Sixty")
                 .font(.headline)
             Spacer()
         }
@@ -90,13 +90,13 @@ struct MenuBarContentView: View {
 
     private var actionButtonsSection: some View {
         VStack(spacing: 0) {
-            // Open Equaliser button - full width
+            // Open Notch Sixty button - full width
             Button {
                 openWindow(id: "equaliser")
                 NSApp.activate(ignoringOtherApps: true)
                 dismiss()
             } label: {
-                Text("Open Equaliser")
+                Text("Open Notch Sixty")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(Color.accentColor)

@@ -31,17 +31,17 @@ jobs:
             VERSION="${GITHUB_REF_NAME#v}"
             PRERELEASE="false"
             TAG_NAME="${GITHUB_REF_NAME}"
-            DMG_NAME="equaliser-adv-${VERSION}"
+            DMG_NAME="notch-sixty-${VERSION}"
           elif [[ "${GITHUB_REF_NAME}" == "dev" ]]; then
             VERSION="0.1-dev-$(date -u '+%Y%m%d').${SHORT_SHA}"
             PRERELEASE="true"
             TAG_NAME="latest-dev-build"
-            DMG_NAME="equaliser-adv-dev-${VERSION}"
+            DMG_NAME="notch-sixty-dev-${VERSION}"
           else
             VERSION="0.1-$(date -u '+%Y%m%d').${SHORT_SHA}"
             PRERELEASE="true"
             TAG_NAME="latest-build"
-            DMG_NAME="equaliser-adv-${VERSION}"
+            DMG_NAME="notch-sixty-${VERSION}"
           fi
           echo "version=${VERSION}"       >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
@@ -67,13 +67,13 @@ jobs:
       - name: Create DMG
         run: |
           create-dmg \
-            --volname "Equaliser Advanced" \
+            --volname "Notch Sixty" \
             --app-drop-link 140 120 \
-            --icon "Equaliser Advanced.app" 420 120 \
+            --icon "Notch Sixty.app" 420 120 \
             --window-size 560 400 \
             --icon-size 80 \
             "release/${{ steps.version.outputs.dmg_name }}.dmg" \
-            "release/Equaliser Advanced.app"
+            "release/Notch Sixty.app"
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
