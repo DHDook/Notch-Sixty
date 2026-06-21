@@ -103,6 +103,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     let stereoWidener:  StereoWidener
     let lufsProcessor:  LoudnessMatchProcessor
 
+    // ── Look-ahead limiter (extracted from inline implementation) ─────────────
+    private let mainLimiter: LookAheadLimiter
+
     // ── Lightweight PRNG for dither ─────────────────────────────────────────
     private let ditherRNG: DSPRNG
 
@@ -495,6 +498,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     func clearTruePeakFlags() {
         _truePeakClipperTripped.store(0, ordering: .relaxed)
         _truePeakLimiterTripped.store(0, ordering: .relaxed)
+        mainLimiter.clearTruePeakTripped()
     }
 
     // MARK: - Initialization
@@ -556,6 +560,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stereo widener + LUFS processor
         self.stereoWidener = StereoWidener(maxFrameCount: maxFrameCount)
         self.lufsProcessor = LoudnessMatchProcessor()
+
+        // Look-ahead limiter (extracted from inline implementation)
+        self.mainLimiter = LookAheadLimiter(channelCount: ch, sampleRate: sampleRate, lookAheadMs: 2.0)
 
         // Lightweight PRNG for dither (seeded with sample rate for determinism)
         self.ditherRNG = DSPRNG(seed: UInt64(sampleRate * 1000))
@@ -1050,20 +1057,26 @@ final class DynamicsProcessor: @unchecked Sendable {
         _softClipperKnee.store(floatBits(max(0.001, min(1.0, knee))), ordering: .relaxed)
     }
 
-    func setLimiterEnabled(_ enabled: Bool) { _limiterEnabled.store(enabled ? 1 : 0, ordering: .relaxed) }
+    func setLimiterEnabled(_ enabled: Bool) {
+        _limiterEnabled.store(enabled ? 1 : 0, ordering: .relaxed)
+        mainLimiter.setEnabled(enabled)
+    }
     func setLimiterCeilingDB(_ db: Float) {
         _limiterCeiling.store(floatBits(Self.dbToLinear(db)), ordering: .relaxed)
+        mainLimiter.setCeilingDB(db)
     }
     func setLimiterAttackMs(_ ms: Float, sampleRate: Double) {
         let tau = max(ms, 0.0) / 1000.0
         let alpha: Float = tau < 1e-7 ? 0.0 : Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)
         _limiterAlphaAttack.store(floatBits(alpha), ordering: .relaxed)
         currentLimiterAttackMs = ms
+        mainLimiter.setAttackMs(ms, sampleRate: sampleRate)
     }
     func setLimiterReleaseMs(_ ms: Float, sampleRate: Double) {
         let tau = ms / 1000.0
         _limiterAlphaRelease.store(floatBits(Self.computeAlpha(tauSeconds: tau, sampleRate: sampleRate)), ordering: .relaxed)
         currentLimiterReleaseMs = ms
+        mainLimiter.setReleaseMs(ms, sampleRate: sampleRate)
     }
     func setLimiterLookAheadMs(_ ms: Float, sampleRate: Double) {
         let newSize = Self.computeLookAheadSamples(sampleRate: sampleRate, lookAheadMs: ms)
@@ -1073,6 +1086,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         limiterGainCurrent  = 1.0
         lookAheadSize = newSize
         currentLimiterLookAheadMs = ms
+        mainLimiter.setLookAheadMs(ms, sampleRate: sampleRate)
     }
     func setOversamplingActive(_ active: Bool, factor: Int) {
         clipperLimiterSampleRate = active ? storedSampleRate * Double(factor) : storedSampleRate
@@ -1175,6 +1189,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     func setLimiterTruePeakGuardEnabled(_ v: Bool) {
         _tpGuardEnabled.store(v ? 1 : 0, ordering: .relaxed)
+        mainLimiter.setTruePeakGuardEnabled(v)
     }
     func setAutoHeadroomEnabled(_ v: Bool) {
         _autoHeadroomEnabled.store(v ? 1 : 0, ordering: .relaxed)
@@ -3378,37 +3393,20 @@ final class DynamicsProcessor: @unchecked Sendable {
             }
         }
 
+        // ── Pass 1: Soft clipper only (per-frame, unchanged from original) ─────────
         let driveLinear  = bitsToFloat(_softClipperDrive.load(ordering: .relaxed))
         let threshold    = bitsToFloat(_softClipperThreshold.load(ordering: .relaxed))
         let knee         = bitsToFloat(_softClipperKnee.load(ordering: .relaxed))
-        let alphaAttack  = bitsToFloat(_limiterAlphaAttack.load(ordering: .relaxed))
-        let alphaRelease = bitsToFloat(_limiterAlphaRelease.load(ordering: .relaxed))
-
-        // ── TP Guard ceiling offset ───────────────────────────────────────────────
-        // The four-point FIR interpolator in scanPeak has a theoretical maximum gain
-        // of ≈1.865×. While peak signals that trigger this extreme overshoot are rare,
-        // reducing the effective ceiling by 0.5 dBTP when the guard is active provides
-        // safety headroom for the estimator's uncertainty.
-        let tpGuardOn    = _tpGuardEnabled.load(ordering: .relaxed) != 0
-        let rawCeiling   = bitsToFloat(_limiterCeiling.load(ordering: .relaxed))
-        // 0.5 dBTP offset: 10^(−0.5/20) ≈ 0.9441
-        let ceiling      = tpGuardOn ? rawCeiling * 0.9441 : rawCeiling
 
         let halfKnee   = knee * 0.5
         let xLower     = threshold - halfKnee
         let xUpper     = threshold + halfKnee
         let invTwoKnee = knee > 1e-9 ? 1.0 / (2.0 * knee) : 0.0
-        let la         = max(1, min(lookAheadSize, Self.maxLookAheadSamples))
-        var writeIdx   = lookAheadWriteIndex
-        var gC         = limiterGainCurrent
-        var lastGC     = gC
         var clipperWasActive  = false
         var maxClipInputPeak: Float = 0.0
-        // TP guard: track inter-sample peak of post-limiter output.
-        var postLimiterPeak: Float = 0.0
 
-        for frame in 0..<count {
-            if softOn {
+        if softOn {
+            for frame in 0..<count {
                 for ch in 0..<numCh {
                     guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                     let input    = buf[frame] * driveLinear
@@ -3420,67 +3418,10 @@ final class DynamicsProcessor: @unchecked Sendable {
                     buf[frame] = softClip(input, threshold: threshold,
                                           xLower: xLower, xUpper: xUpper, invTwoKnee: invTwoKnee)
                 }
-
-                // TP guard: check if clipper output could produce inter-sample peaks above ceiling.
-                if tpGuardOn {
-                    for ch in 0..<numCh {
-                        guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                        let s = abs(buf[frame])
-                        if s > postLimiterPeak { postLimiterPeak = s }
-                    }
-                }
-            }
-            if limOn {
-                for ch in 0..<numCh {
-                    guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    lookAheadBufs[ch][writeIdx] = buf[frame]
-                }
-                var peakAmplitude: Float = 0.0
-                for ch in 0..<numCh {
-                    let p = scanPeak(lookAheadBufs[ch], size: la)
-                    if p > peakAmplitude { peakAmplitude = p }
-                }
-                let gTarget: Float = peakAmplitude > ceiling && peakAmplitude > 1e-9
-                    ? ceiling / peakAmplitude : 1.0
-                if gTarget < gC {
-                    gC = alphaAttack < 1e-6 ? gTarget : gC * alphaAttack + gTarget * (1.0 - alphaAttack)
-                } else {
-                    gC = gC * alphaRelease + gTarget * (1.0 - alphaRelease)
-                }
-                let readIdx = (writeIdx + 1) % la
-                for ch in 0..<numCh {
-                    guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    buf[frame] = lookAheadBufs[ch][readIdx] * gC
-                }
-
-                // TP guard: accumulate inter-sample peak of the post-limiter output.
-                if tpGuardOn {
-                    for ch in 0..<numCh {
-                        guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                        let s = abs(buf[frame])
-                        if s > postLimiterPeak { postLimiterPeak = s }
-                    }
-                }
-
-                lastGC   = gC
-                writeIdx = (writeIdx + 1) % la
             }
         }
 
-        lookAheadWriteIndex = writeIdx
-        limiterGainCurrent  = gC
         _clipperActiveBits.store(softOn && clipperWasActive ? 1 : 0, ordering: .relaxed)
-        let grDB = lastGC > 1e-9 ? 20.0 * log10(lastGC) : Float(-90.0)
-        _gainReductionBits.store(floatBits(grDB), ordering: .relaxed)
-
-        // ── TP Guard: set sticky tripped flags ───────────────────────────────────
-        // Check post-processing output for residual inter-sample peaks above rawCeiling.
-        // scanPeak is run on the look-ahead buffer above; here we check the sample-domain
-        // output as a secondary indicator that the guard was needed.
-        if tpGuardOn && postLimiterPeak > rawCeiling {
-            if limOn  { _truePeakLimiterTripped.store(1, ordering: .relaxed) }
-            if softOn { _truePeakClipperTripped.store(1, ordering: .relaxed) }
-        }
 
         // Clipper GR: estimate as difference between pre-clip peak and threshold.
         if softOn && clipperWasActive && maxClipInputPeak > 1e-9 {
@@ -3490,6 +3431,27 @@ final class DynamicsProcessor: @unchecked Sendable {
             _clipperGRBits.store(floatBits(clipperGR), ordering: .relaxed)
         } else {
             _clipperGRBits.store(floatBits(0.0), ordering: .relaxed)
+        }
+
+        // ── Pass 2: Limiter (using extracted LookAheadLimiter) ───────────────────
+        if limOn {
+            // Convert AudioBufferList to array of pointers for LookAheadLimiter
+            var buffers: [UnsafeMutablePointer<Float>] = []
+            for ch in 0..<numCh {
+                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                buffers.append(buf)
+            }
+            mainLimiter.process(buffers: buffers, frameCount: count)
+
+            // Update gain reduction reporting from mainLimiter
+            _gainReductionBits.store(floatBits(mainLimiter.lastGainReductionDB), ordering: .relaxed)
+
+            // Update true-peak tripped flag from mainLimiter
+            if mainLimiter.truePeakTripped {
+                _truePeakLimiterTripped.store(1, ordering: .relaxed)
+            }
+        } else {
+            _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
         }
     }
 

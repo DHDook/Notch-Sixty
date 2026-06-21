@@ -21,4 +21,24 @@ enum AudioMath {
         guard linear > 1e-7 else { return silence }
         return max(silence, 20 * log10(linear))
     }
+
+    /// Generates logarithmically spaced frequencies between two bounds.
+    /// - Parameters:
+    ///   - from: Starting frequency in Hz.
+    ///   - to: Ending frequency in Hz.
+    ///   - count: Number of frequency points to generate.
+    /// - Returns: Array of logarithmically spaced frequencies.
+    static func logSpacedFrequencies(from: Double, to: Double, count: Int) -> [Double] {
+        guard count > 1 else { return [from] }
+        var frequencies: [Double] = []
+        let logFrom = log(from)
+        let logTo = log(to)
+        let step = (logTo - logFrom) / Double(count - 1)
+
+        for i in 0..<count {
+            frequencies.append(exp(logFrom + Double(i) * step))
+        }
+
+        return frequencies
+    }
 }

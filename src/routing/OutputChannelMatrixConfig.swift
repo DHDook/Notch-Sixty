@@ -128,6 +128,40 @@ struct OutputChannelLimiterConfig: Codable, Equatable, Sendable {
     }
 }
 
+struct ExcursionProtectionConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool = false
+    var driverFsHz: Float = 45.0      // Range: 20–500 Hz
+    var driverQts: Float = 0.5        // Range: 0.2–2.0
+    var maxProtectionDB: Float = 12.0 // Range: 6–24 dB
+    var protectionCutoffHz: Float = 135.0  // Default: 3 × driverFsHz
+
+    static let `default` = ExcursionProtectionConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, driverFsHz, driverQts, maxProtectionDB, protectionCutoffHz
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled          = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)          ?? false
+        driverFsHz         = try c.decodeIfPresent(Float.self, forKey: .driverFsHz)         ?? 45.0
+        driverQts          = try c.decodeIfPresent(Float.self, forKey: .driverQts)          ?? 0.5
+        maxProtectionDB    = try c.decodeIfPresent(Float.self, forKey: .maxProtectionDB)    ?? 12.0
+        protectionCutoffHz = try c.decodeIfPresent(Float.self, forKey: .protectionCutoffHz) ?? 135.0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(isEnabled,          forKey: .isEnabled)
+        try c.encode(driverFsHz,         forKey: .driverFsHz)
+        try c.encode(driverQts,          forKey: .driverQts)
+        try c.encode(maxProtectionDB,    forKey: .maxProtectionDB)
+        try c.encode(protectionCutoffHz, forKey: .protectionCutoffHz)
+    }
+}
+
 struct OutputChannelConfig: Codable, Sendable, Identifiable {
     var id: UUID = UUID()
     var label: String = "Output"
@@ -152,6 +186,9 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
     /// Adds minimal latency (~10–20 samples) and negligible CPU cost.
     /// Default: false (existing behaviour preserved).
     var eqOversamplingEnabled: Bool = false
+    /// Excursion protection based on driver Thiele-Small parameters.
+    /// Protects against mechanical overexcursion at frequencies below the driver's resonance.
+    var excursionProtection: ExcursionProtectionConfig = .default
 
     // Validation ranges
     static let minGainTrimDB: Float = -24.0
@@ -162,7 +199,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, label, source, target, isEnabled, eq
         case gainTrimDB, polarityInverted, delayMs, limiter, groupDelayAllPassCoefficients
-        case eqOversamplingEnabled
+        case eqOversamplingEnabled, excursionProtection
     }
 
     init(
@@ -177,7 +214,8 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         delayMs: Float = 0.0,
         limiter: OutputChannelLimiterConfig = .default,
         groupDelayAllPassCoefficients: [BiquadCoefficients] = [],
-        eqOversamplingEnabled: Bool = false
+        eqOversamplingEnabled: Bool = false,
+        excursionProtection: ExcursionProtectionConfig = .default
     ) {
         self.id = id
         self.label = label
@@ -191,6 +229,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         self.limiter = limiter
         self.groupDelayAllPassCoefficients = groupDelayAllPassCoefficients
         self.eqOversamplingEnabled = eqOversamplingEnabled
+        self.excursionProtection = excursionProtection
     }
 
     init(from decoder: Decoder) throws {
@@ -207,6 +246,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         limiter = try c.decodeIfPresent(OutputChannelLimiterConfig.self, forKey: .limiter) ?? .default
         groupDelayAllPassCoefficients = try c.decodeIfPresent([BiquadCoefficients].self, forKey: .groupDelayAllPassCoefficients) ?? []
         eqOversamplingEnabled = try c.decodeIfPresent(Bool.self, forKey: .eqOversamplingEnabled) ?? false
+        excursionProtection = try c.decodeIfPresent(ExcursionProtectionConfig.self, forKey: .excursionProtection) ?? .default
     }
 
     func validate() -> ValidationError? {

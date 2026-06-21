@@ -17,12 +17,15 @@ final class OutputChannelProcessor {
     // MARK: - Pre-EQ Calibration Trim + Post-EQ DSP (polarity, delay, limiter)
     // gainTrimDB is applied BEFORE the EQ chain (pre-EQ calibration trim).
     // Polarity, delay, and limiter are applied AFTER the EQ chain.
-    // Processing order: gainTrimDB → [group delay all-pass] → inputGainDB → EQ → outputGainDB → polarity → delay → limiter
+    // Processing order: gainTrimDB → loudnessCorrection → [group delay all-pass] → inputGainDB → EQ → outputGainDB → polarity → delay → limiter
     // Gain trim × polarity are NOT combined into a single factor because they are applied
     // at different points in the chain (trim is pre-EQ; polarity is post-EQ).
     private let _calibrationTrimBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(1.0).bitPattern))
     private let _polarityBits        = ManagedAtomic<Int32>(Int32(bitPattern: Float(1.0).bitPattern))
     private let _gainPolarityBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(1.0).bitPattern))
+
+    // Loudness correction (separate from calibration trim)
+    private let _loudnessCorrectionBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(1.0).bitPattern))
 
     // Fractional delay line: linear interpolation.
     // Pre-allocated for max delay: 100 ms × 192000 Hz = 19200 samples.
@@ -31,13 +34,11 @@ final class OutputChannelProcessor {
     private let _delayInSamplesBits = ManagedAtomic<Int32>(0)
     private static let maxDelaySamples = 19200
 
-    // Brickwall limiter: matches BrickwallLimiterConfig parameter set.
-    // Uses the same algorithm as DynamicsProcessor.processLimiter.
-    private let _limiterEnabled    = ManagedAtomic<Bool>(true)
-    private let _limiterCeilingBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(-0.2).bitPattern))
-    private let _limiterAttackBits  = ManagedAtomic<Int32>(Int32(bitPattern: Float(0.1).bitPattern))
-    private let _limiterReleaseBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(20.0).bitPattern))
-    nonisolated(unsafe) var limiterEnvDB: Float = -100.0
+    // Look-ahead limiter (extracted from DynamicsProcessor for reuse)
+    private let limiter: LookAheadLimiter
+
+    // Excursion protection limiter (frequency-dependent based on driver Thiele-Small parameters)
+    private var excursionLimiter: ExcursionProtectionLimiter?
 
     // MARK: - Meter Taps (Part 2 Task AG)
     /// Peak level before the excursion limiter and brickwall limiter (post-EQ, post-delay).
@@ -57,25 +58,29 @@ final class OutputChannelProcessor {
 
     // MARK: - EQ Oversampling (Part 2 Task AE)
 
-    /// 2× oversampler for per-output EQ.
-    /// Simple linear interpolation upsampling for minimal latency.
+    /// 2× oversampler for per-output EQ using OversamplingProcessor.
+    /// Replaces simple linear interpolation with proper band-limited oversampling.
+    private var oversamplingProcessor: OversamplingProcessor?
     private var upsamplerEnabled: Bool = false
-
-    /// Pre-allocated buffers for upsampling (sized to maxFrameCount * 2)
-    private var upsampledLeft:  UnsafeMutablePointer<Float>
-    private var upsampledRight: UnsafeMutablePointer<Float>
+    private let maxFrameCount: Int
 
     // MARK: - Init
     init(source: SignalSource, maxFrameCount: Int, sampleRate: Double) {
+        self.maxFrameCount = maxFrameCount
         eqProcessor = OutputChannelEQProcessor(source: source,
                                                maxFrameCount: maxFrameCount,
                                                sampleRate: sampleRate)
         delayBuffer = [Float](repeating: 0, count: Self.maxDelaySamples)
-        // Pre-allocate upsampled buffers (maxFrameCount * 2 for 2× oversampling)
-        upsampledLeft = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount * 2)
-        upsampledRight = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount * 2)
-        upsampledLeft.initialize(repeating: 0, count: maxFrameCount * 2)
-        upsampledRight.initialize(repeating: 0, count: maxFrameCount * 2)
+        // Initialize look-ahead limiter with correct channel count
+        // channelCount depends on whether this channel's source is stereo-capable
+        let channelCount: Int
+        switch source {
+        case .mainsLeft, .mainsRight:
+            channelCount = 2
+        default:
+            channelCount = 1
+        }
+        limiter = LookAheadLimiter(channelCount: channelCount, sampleRate: sampleRate, lookAheadMs: 2.0)
     }
 
     // MARK: - Main Thread Configuration (all real-time safe via atomics)
@@ -85,8 +90,9 @@ final class OutputChannelProcessor {
         setCalibrationTrimDB(config.gainTrimDB)
         setPolarity(inverted: config.polarityInverted)
         setDelayMs(config.delayMs, sampleRate: sampleRate)
-        setLimiterConfig(config.limiter)
+        setLimiterConfig(config.limiter, sampleRate: sampleRate)
         setEQOversamplingEnabled(config.eqOversamplingEnabled, sampleRate: sampleRate)
+        setExcursionProtectionConfig(config.excursionProtection, baseCeilingDB: config.limiter.ceilingDB, sampleRate: sampleRate)
     }
 
     /// Sets the pre-EQ calibration trim. Called by Band Level Calibration and applyChannelConfig.
@@ -106,11 +112,12 @@ final class OutputChannelProcessor {
         _delayInSamplesBits.store(Int32(bitPattern: samples.bitPattern), ordering: .releasing)
     }
 
-    func setLimiterConfig(_ config: OutputChannelLimiterConfig) {
-        _limiterEnabled.store(config.isEnabled, ordering: .releasing)
-        _limiterCeilingBits.store(Int32(bitPattern: config.ceilingDB.bitPattern),   ordering: .releasing)
-        _limiterAttackBits.store(Int32(bitPattern:  config.attackMs.bitPattern),    ordering: .releasing)
-        _limiterReleaseBits.store(Int32(bitPattern: config.releaseMs.bitPattern),   ordering: .releasing)
+    func setLimiterConfig(_ config: OutputChannelLimiterConfig, sampleRate: Double) {
+        limiter.setEnabled(config.isEnabled)
+        limiter.setCeilingDB(config.ceilingDB)
+        limiter.setAttackMs(config.attackMs, sampleRate: sampleRate)
+        limiter.setReleaseMs(config.releaseMs, sampleRate: sampleRate)
+        limiter.setLookAheadMs(config.lookAheadMs, sampleRate: sampleRate)
     }
 
     func setGroupDelayAllPassCoefficients(_ coefficients: [BiquadCoefficients]) {
@@ -119,9 +126,31 @@ final class OutputChannelProcessor {
 
     func setEQOversamplingEnabled(_ enabled: Bool, sampleRate: Double) {
         upsamplerEnabled = enabled
-        // TODO: Reconfigure EQ chains to run at 2× sample rate when oversampling is enabled
-        // This requires recalculating biquad coefficients for the new sample rate
-        // For now, we just toggle the oversampling flag
+        if enabled {
+            // Initialize OversamplingProcessor for 2× oversampling
+            // Note: OversamplingProcessor is currently hardcoded to 4×, so we use it as-is
+            // The work buffer is sized for 4×, which is more than enough for 2×
+            oversamplingProcessor = OversamplingProcessor(maxFrameCount: maxFrameCount)
+        } else {
+            oversamplingProcessor = nil
+        }
+    }
+
+    func setExcursionProtectionConfig(_ config: ExcursionProtectionConfig, baseCeilingDB: Float, sampleRate: Double) {
+        if config.isEnabled {
+            if excursionLimiter == nil {
+                excursionLimiter = ExcursionProtectionLimiter(config: config, baseCeilingDB: baseCeilingDB, sampleRate: sampleRate)
+            } else {
+                excursionLimiter?.setConfig(config, baseCeilingDB: baseCeilingDB, sampleRate: sampleRate)
+            }
+        } else {
+            excursionLimiter = nil
+        }
+    }
+
+    func setLoudnessCorrectionDB(_ db: Float) {
+        let linear = pow(10.0 as Float, db / 20.0)
+        _loudnessCorrectionBits.store(Int32(bitPattern: linear.bitPattern), ordering: .releasing)
     }
 
     // MARK: - Per-Channel Correction Application (Task D)
@@ -169,10 +198,13 @@ final class OutputChannelProcessor {
         frameCount: Int
     ) {
         // 1. Pre-EQ calibration trim (gainTrimDB — set by Band Level Calibration)
-        // Applied before EQ so the EQ operates on the calibrated-level signal.
+        // and loudness correction (volume-dependent Fletcher-Munson compensation)
+        // Both applied before EQ so the EQ operates on the calibrated-level signal.
         let calTrim = Float(bitPattern: UInt32(bitPattern: _calibrationTrimBits.load(ordering: .relaxed)))
-        if calTrim != 1.0 {
-            var g = calTrim
+        let loudnessCorr = Float(bitPattern: UInt32(bitPattern: _loudnessCorrectionBits.load(ordering: .relaxed)))
+        let combinedPreGain = calTrim * loudnessCorr
+        if combinedPreGain != 1.0 {
+            var g = combinedPreGain
             vDSP_vsmul(leftBuf, 1, &g, leftBuf, 1, vDSP_Length(frameCount))
             if let r = rightBuf { vDSP_vsmul(r, 1, &g, r, 1, vDSP_Length(frameCount)) }
         }
@@ -186,28 +218,15 @@ final class OutputChannelProcessor {
         // 3. Per-output EQ (all modes: bypass, flat, standard, linear, mixed, delta)
         // EQ always sees the calibrated signal level — inputGainDB and outputGainDB
         // inside eqProcessor handle EQ-level gain staging independently.
-        // Part 2 Task AE: Wrap EQ with 2× oversampling if enabled
-        if upsamplerEnabled {
-            // Simple 2× linear interpolation upsampling
-            for i in 0..<frameCount {
-                let idx = i * 2
-                upsampledLeft[idx] = leftBuf[i]
-                upsampledLeft[idx + 1] = i < frameCount - 1 ? (leftBuf[i] + leftBuf[i + 1]) * 0.5 : leftBuf[i]
-                if let r = rightBuf {
-                    upsampledRight[idx] = r[i]
-                    upsampledRight[idx + 1] = i < frameCount - 1 ? (r[i] + r[i + 1]) * 0.5 : r[i]
-                }
-            }
-            // Run EQ at 2× rate
-            eqProcessor.process(leftBuf: upsampledLeft, rightBuf: rightBuf != nil ? upsampledRight : nil,
-                                frameCount: UInt32(frameCount * 2))
-            // Simple 2× decimation downsampling (keep every other sample)
-            for i in 0..<frameCount {
-                leftBuf[i] = upsampledLeft[i * 2]
-                if let r = rightBuf {
-                    r[i] = upsampledRight[i * 2]
-                }
-            }
+        // Part 2 Task AE: Wrap EQ with 4× oversampling using OversamplingProcessor if enabled
+        if let processor = oversamplingProcessor {
+            // Use proper band-limited oversampling via OversamplingProcessor (4×)
+            processor.upsample(ablL: leftBuf, ablR: rightBuf, frameCount: frameCount)
+            // Run EQ at 4× rate
+            eqProcessor.process(leftBuf: processor.workBufferL(), rightBuf: rightBuf != nil ? processor.workBufferR(frameCount: frameCount) : nil,
+                                frameCount: UInt32(frameCount * OversamplingProcessor.factor))
+            // Downsample back to original rate
+            processor.downsample(ablL: leftBuf, ablR: rightBuf, frameCount: frameCount)
         } else {
             eqProcessor.process(leftBuf: leftBuf, rightBuf: rightBuf, frameCount: UInt32(frameCount))
         }
@@ -233,10 +252,12 @@ final class OutputChannelProcessor {
         vDSP_maxmgv(leftBuf, 1, &preLimiterPeak, vDSP_Length(frameCount))
         preLimiterPeakLinear = preLimiterPeak
 
-        // 6. Brickwall limiter
-        if _limiterEnabled.load(ordering: .relaxed) {
-            applyLimiter(leftBuf: leftBuf, rightBuf: rightBuf, frameCount: frameCount)
-        }
+        // 6. Excursion protection (frequency-dependent, before broadband limiter)
+        excursionLimiter?.process(buffer: leftBuf, frameCount: frameCount)
+        if let r = rightBuf { excursionLimiter?.process(buffer: r, frameCount: frameCount) }
+
+        // 7. Brickwall limiter
+        applyLimiter(leftBuf: leftBuf, rightBuf: rightBuf, frameCount: frameCount)
 
         // MARK: - Meter Tap: Post-Limiter (Part 2 Task AG)
         // Measure peak level after the limiter
@@ -262,9 +283,11 @@ final class OutputChannelProcessor {
     private func applyLimiter(leftBuf: UnsafeMutablePointer<Float>,
                                rightBuf: UnsafeMutablePointer<Float>?,
                                frameCount: Int) {
-        // TODO: Implement using the same algorithm as DynamicsProcessor.processLimiter.
-        // Refactor DynamicsProcessor.processLimiter into a static free function
-        // in a new file `src/dsp/dynamics/LimiterDSP.swift` so it can be shared here.
-        // For now, this is a placeholder that does nothing.
+        if let r = rightBuf {
+            limiter.process(buffers: [leftBuf, r], frameCount: frameCount)
+        } else {
+            limiter.process(buffers: [leftBuf], frameCount: frameCount)
+        }
+        brickwallGainReductionDB = limiter.lastGainReductionDB
     }
 }

@@ -122,6 +122,18 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     private let peakHoldMax:  Int   = 30    // 1.5 seconds at 20 Hz
     private let peakDecay:    Float = 0.88  // slower fall — each dB step reads as a discrete segment drop
 
+    // MARK: Display Mode
+    enum RTADisplayMode: Sendable {
+        case standard
+        case slowAverage(seconds: Double)
+    }
+
+    @Published var displayMode: RTADisplayMode = .standard
+
+    // MARK: Slow averaging state
+    private var slowAverageBands: [Float] = Array(repeating: -60.0, count: 31)
+    private var slowAverageAlpha: Float = 0.0  // Computed from time constant
+
     // MARK: Published outputs
     let centerFrequencies: [Float] = [
         20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160,
@@ -370,5 +382,23 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
                 bands[i].peakValue = max(minDb, bands[i].peakValue * peakDecay + minDb * (1 - peakDecay))
             }
         }
+
+        // Apply slow averaging if enabled
+        if case .slowAverage(let seconds) = displayMode {
+            // Compute alpha from time constant: alpha = 1 - exp(-dt / tau)
+            // where dt = 1/20 = 0.05s (timer interval) and tau = seconds
+            slowAverageAlpha = 1.0 - Float(exp(-0.05 / seconds))
+
+            for i in 0..<min(slowAverageBands.count, targets.count) {
+                slowAverageBands[i] = slowAverageBands[i] * slowAverageAlpha + targets[i] * (1.0 - slowAverageAlpha)
+            }
+        }
+    }
+
+    /// Returns the current slow-averaged band data as (frequency, gainDB) tuples.
+    /// Returns empty array if slow averaging is not enabled.
+    func getSlowAverageData() -> [(frequency: Double, gainDB: Double)] {
+        guard case .slowAverage = displayMode else { return [] }
+        return zip(centerFrequencies, slowAverageBands).map { (Double($0), Double($1)) }
     }
 }

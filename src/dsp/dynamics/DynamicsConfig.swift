@@ -754,6 +754,49 @@ struct ActiveCrossoverConfig: Codable, Equatable, Sendable {
     static let `default` = ActiveCrossoverConfig()
 }
 
+// MARK: - Per-Band Loudness Configuration
+
+/// Per-band loudness compensation configuration for Fletcher-Munson curve correction.
+/// Independently adjusts bass and treble band levels based on listening volume.
+struct PerBandLoudnessConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool = false
+    var referencePhons: Float = 85.0      // Range: 60–95
+    var maxBoostDB: Float = 12.0         // Range: 6–20
+    var maxCutDB: Float = 6.0            // Range: 0–6
+    var levelSource: LevelSource = .systemVolume
+
+    enum LevelSource: String, Codable, Equatable, Sendable, CaseIterable {
+        case systemVolume = "systemVolume"
+        case integrated = "integrated"
+    }
+
+    static let `default` = PerBandLoudnessConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, referencePhons, maxBoostDB, maxCutDB, levelSource
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        referencePhons = try c.decodeIfPresent(Float.self, forKey: .referencePhons) ?? 85.0
+        maxBoostDB = try c.decodeIfPresent(Float.self, forKey: .maxBoostDB) ?? 12.0
+        maxCutDB = try c.decodeIfPresent(Float.self, forKey: .maxCutDB) ?? 6.0
+        levelSource = try c.decodeIfPresent(LevelSource.self, forKey: .levelSource) ?? .systemVolume
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(isEnabled, forKey: .isEnabled)
+        try c.encode(referencePhons, forKey: .referencePhons)
+        try c.encode(maxBoostDB, forKey: .maxBoostDB)
+        try c.encode(maxCutDB, forKey: .maxCutDB)
+        try c.encode(levelSource, forKey: .levelSource)
+    }
+}
+
 // MARK: - Dynamic EQ Configuration
 
 /// Single dynamic EQ band configuration.
@@ -1242,6 +1285,10 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Volume scalar (0.0–1.0) that corresponds to the reference phon level.
     var loudnessReferenceVolume: Float = 0.85
 
+    /// Per-Band Loudness Compensation — Fletcher-Munson curve correction for multi-amp systems.
+    /// Independently adjusts bass and treble band levels based on listening volume.
+    var perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig()
+
     // MARK: - Codable
 
     static let `default` = AdvancedProcessingConfig()
@@ -1287,6 +1334,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case monoBassEnabled, monoBassCrossover
         case mainsHighPassEnabled, mainsHighPassFrequency
         case volumeDependentLoudnessEnabled, loudnessReferencePhon, loudnessReferenceVolume
+        case perBandLoudness
         // LTI Suite
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount
@@ -1361,7 +1409,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         mainsHighPassFrequency: Float = 80.0,
         volumeDependentLoudnessEnabled: Bool = false,
         loudnessReferencePhon: Float = 83.0,
-        loudnessReferenceVolume: Float = 0.85
+        loudnessReferenceVolume: Float = 0.85,
+        perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig()
     ) {
         self.highResDecouplingActive          = highResDecouplingActive
         self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
@@ -1425,6 +1474,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.volumeDependentLoudnessEnabled   = volumeDependentLoudnessEnabled
         self.loudnessReferencePhon            = loudnessReferencePhon
         self.loudnessReferenceVolume          = loudnessReferenceVolume
+        self.perBandLoudness                 = perBandLoudness
     }
 
     init(from decoder: Decoder) throws {
@@ -1509,6 +1559,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         volumeDependentLoudnessEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .volumeDependentLoudnessEnabled)   ?? false
         loudnessReferencePhon            = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferencePhon)            ?? 83.0
         loudnessReferenceVolume          = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferenceVolume)          ?? 0.85
+        perBandLoudness                 = try c.decodeIfPresent(PerBandLoudnessConfig.self, forKey: .perBandLoudness)                 ?? PerBandLoudnessConfig()
         highResDecouplingActive          = false  // always computed at runtime
     }
 
@@ -1570,6 +1621,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(volumeDependentLoudnessEnabled,     forKey: .volumeDependentLoudnessEnabled)
         try c.encode(loudnessReferencePhon,              forKey: .loudnessReferencePhon)
         try c.encode(loudnessReferenceVolume,            forKey: .loudnessReferenceVolume)
+        try c.encode(perBandLoudness,                    forKey: .perBandLoudness)
     }
 }
 

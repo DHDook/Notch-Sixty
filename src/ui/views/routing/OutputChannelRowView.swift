@@ -219,36 +219,24 @@ struct OutputChannelRowView: View {
             // TASK Y: Excursion Protection sub-section (collapsed by default)
             DisclosureGroup("Excursion Protection", isExpanded: $showExcursionProtection) {
                 VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Enable", isOn: $channel.excursionProtection.isEnabled)
                     HStack {
-                        Text("Attack:")
-                        Slider(value: Binding(
-                            get: { channel.limiter.attackMs },
-                            set: { channel.limiter.attackMs = $0 }
-                        ), in: 0.01...100)
-                        .frame(width: 100)
-                        Text(String(format: "%.2f ms", channel.limiter.attackMs))
-                            .frame(width: 60)
+                        Text("Driver Fs:")
+                        Slider(value: $channel.excursionProtection.driverFsHz, in: 20...500)
+                        Text(String(format: "%.0f Hz", channel.excursionProtection.driverFsHz))
                     }
                     HStack {
-                        Text("Release:")
-                        Slider(value: Binding(
-                            get: { channel.limiter.releaseMs },
-                            set: { channel.limiter.releaseMs = $0 }
-                        ), in: 1...1000)
-                        .frame(width: 100)
-                        Text(String(format: "%.0f ms", channel.limiter.releaseMs))
-                            .frame(width: 60)
+                        Text("Driver Qts:")
+                        Slider(value: $channel.excursionProtection.driverQts, in: 0.2...2.0)
+                        Text(String(format: "%.2f", channel.excursionProtection.driverQts))
                     }
                     HStack {
-                        Text("Look-ahead:")
-                        Slider(value: Binding(
-                            get: { channel.limiter.lookAheadMs },
-                            set: { channel.limiter.lookAheadMs = $0 }
-                        ), in: 0...20)
-                        .frame(width: 100)
-                        Text(String(format: "%.1f ms", channel.limiter.lookAheadMs))
-                            .frame(width: 60)
+                        Text("Max protection:")
+                        Slider(value: $channel.excursionProtection.maxProtectionDB, in: 6...24)
+                        Text(String(format: "%.0f dB", channel.excursionProtection.maxProtectionDB))
                     }
+                    Text("Enter your driver's Thiele-Small Fs and Qts parameters from the datasheet. Protects against mechanical overexcursion at frequencies below the driver's resonance.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
                 .padding(.leading, 16)
             }

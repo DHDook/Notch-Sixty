@@ -375,8 +375,18 @@ final class EqualiserStore: ObservableObject {
     }
 
     // MARK: - Forwarded Properties from RoutingCoordinator
-    
+
     var routingStatus: RoutingStatus { routingCoordinator.routingStatus }
+
+    var listeningRTAEnabled: Bool {
+        get { routingCoordinator.listeningRTAEnabled }
+        set { routingCoordinator.listeningRTAEnabled = newValue }
+    }
+
+    var listeningRTAMicDeviceID: String? {
+        get { routingCoordinator.listeningRTAMicDeviceID }
+        set { routingCoordinator.listeningRTAMicDeviceID = newValue }
+    }
     
     var selectedInputDeviceID: String? {
         get { routingCoordinator.selectedInputDeviceID }
@@ -525,6 +535,12 @@ final class EqualiserStore: ObservableObject {
     let rtaAnalyzer        = AdvancedDualSpectrumAnalyzer()
     let goniometerEngine   = GoniometerBufferEngine()
     private var sweepAnalyser: SweepAnalyser?
+
+    // MARK: - Listening RTA Data
+
+    /// Published listening RTA data for room measurement overlay.
+    /// Contains (frequency, gainDB) tuples for the 31 ISO 1/3-octave bands.
+    @Published var listeningRTAData: [(frequency: Double, gainDB: Double)] = []
 
     // MARK: - Coordinators
     
@@ -799,6 +815,22 @@ final class EqualiserStore: ObservableObject {
     var clipperGainReductionDB: Float {
         routingCoordinator.pipelineManager.renderPipeline?.clipperGainReductionDB ?? 0.0
     }
+
+    // MARK: - Crossover Analysis Accessors
+
+    /// Returns the active crossover coefficients for a given signal source.
+    /// This accessor is used by the CrossoverAnalysisView to compute group delay,
+    /// acoustic summation, and other crossover-related analyses.
+    /// - Parameter source: The signal source to get coefficients for.
+    /// - Returns: A tuple containing the crossover sections and FIR kernel (if any).
+    /// Note: Currently returns nil for all sources since ActiveCrossoverEngine
+    /// is not yet integrated into DynamicsProcessor. This is a placeholder for
+    /// when the crossover engine is integrated (see TODO in RenderCallbackContext.swift).
+    func activeCrossoverCoefficients(for source: SignalSource) -> (sections: ActiveCrossoverEngine.SectionArray?, firKernel: [Float]?) {
+        // TODO: Read from DynamicsProcessor.activeCrossoverEngine once integrated
+        // For now, return nil since the crossover engine is not yet integrated
+        return (nil, nil)
+    }
     
     // MARK: - Initialization
     
@@ -955,6 +987,35 @@ final class EqualiserStore: ObservableObject {
                 }
                 if self.compareMode == .mixedPhase {
                     self.routingCoordinator.eqStager.refreshMixedPhaseIRIfNeeded()
+                }
+            }
+            .store(in: &cancellables)
+
+        // Observe listening RTA enabled state to update RTA analyzer display mode
+        routingCoordinator.$listeningRTAEnabled
+            .sink { [weak self] enabled in
+                guard let self = self else { return }
+                if enabled {
+                    self.rtaAnalyzer.displayMode = .slowAverage(seconds: 20.0)
+                } else {
+                    self.rtaAnalyzer.displayMode = .standard
+                    self.listeningRTAData = []
+                }
+            }
+            .store(in: &cancellables)
+
+        // Observe RTA analyzer display mode to publish slow average data
+        rtaAnalyzer.$displayMode
+            .sink { [weak self] mode in
+                guard let self = self else { return }
+                if case .slowAverage = mode {
+                    // Publish slow average data periodically
+                    Timer.publish(every: 0.1, on: .main, in: .common)
+                        .autoconnect()
+                        .sink { [weak self] _ in
+                            self?.listeningRTAData = self?.rtaAnalyzer.getSlowAverageData() ?? []
+                        }
+                        .store(in: &self.cancellables)
                 }
             }
             .store(in: &cancellables)

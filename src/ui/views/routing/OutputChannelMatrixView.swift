@@ -337,18 +337,32 @@ struct OutputChannelMatrixView: View {
     }
     @ViewBuilder private var dynamicLoudnessSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Dynamic Loudness")
+            Text("Dynamic Loudness (Fletcher–Munson)")
                 .font(.headline)
-            HStack {
-                Toggle("Enable Fletcher–Munson Correction", isOn: Binding(
-                    get: { false },
-                    set: { _ in }
-                ))
-                Spacer()
+            Toggle("Enable", isOn: $store.dynamicsConfig.advanced.perBandLoudness.isEnabled)
+            if store.dynamicsConfig.advanced.perBandLoudness.isEnabled {
+                HStack {
+                    Text("Reference level:")
+                    Slider(value: $store.dynamicsConfig.advanced.perBandLoudness.referencePhons, in: 60...95)
+                    Text("\(Int(store.dynamicsConfig.advanced.perBandLoudness.referencePhons)) phons")
+                }
+                HStack {
+                    Text("Max boost:")
+                    Slider(value: $store.dynamicsConfig.advanced.perBandLoudness.maxBoostDB, in: 6...20)
+                    Text(String(format: "%.0f dB", store.dynamicsConfig.advanced.perBandLoudness.maxBoostDB))
+                }
+                HStack {
+                    Text("Max cut:")
+                    Slider(value: $store.dynamicsConfig.advanced.perBandLoudness.maxCutDB, in: 0...6)
+                    Text(String(format: "%.0f dB", store.dynamicsConfig.advanced.perBandLoudness.maxCutDB))
+                }
+                Picker("Level source", selection: $store.dynamicsConfig.advanced.perBandLoudness.levelSource) {
+                    Text("System volume").tag(PerBandLoudnessConfig.LevelSource.systemVolume)
+                    Text("Programme LUFS").tag(PerBandLoudnessConfig.LevelSource.integrated)
+                }
             }
-            Text("Compensates for human hearing sensitivity at different volume levels.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text("Compensates for human hearing sensitivity at different volume levels by independently adjusting bass and treble band levels. Requires bi-amp or tri-amp mode.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 8)
     }

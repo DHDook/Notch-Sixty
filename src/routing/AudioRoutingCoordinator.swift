@@ -59,6 +59,13 @@ final class AudioRoutingCoordinator: ObservableObject {
     /// Manual mode always uses HAL input capture.
     @Published var captureMode: CaptureMode = .sharedMemory
 
+    /// Listening RTA (room measurement) mode.
+    /// When enabled, captures audio from a mic device and displays it as an overlay on the summation chart.
+    @Published var listeningRTAEnabled: Bool = false
+
+    /// Mic device ID for listening RTA capture.
+    @Published var listeningRTAMicDeviceID: String?
+
     /// The capture mode currently in use (may differ from preference when driver doesn't support shared memory).
     /// Returns `halInput` when driver doesn't support shared memory or in manual mode.
     var effectiveCaptureMode: CaptureMode {
@@ -121,6 +128,83 @@ final class AudioRoutingCoordinator: ObservableObject {
     private var isReconfiguring = false
     private var cancellables = Set<AnyCancellable>()
     let eqStager: EQCoefficientStager
+
+    // MARK: - Listening RTA (Mic Capture)
+
+    /// HAL manager for listening RTA mic capture.
+    private var listeningRTAHALManager: HALIOManager?
+
+    /// Updates listening RTA mic capture based on enabled state and mic device selection.
+    private func updateListeningRTACapture(enabled: Bool, micDeviceID: String?) {
+        // Stop existing capture if disabled or device changed
+        if !enabled || micDeviceID == nil {
+            stopListeningRTACapture()
+            return
+        }
+
+        guard let micUID = micDeviceID,
+              let micDeviceID = deviceProvider.deviceID(forUID: micUID) else {
+            logger.warning("Listening RTA: invalid mic device ID")
+            stopListeningRTACapture()
+            return
+        }
+
+        // Start capture if not already running
+        if listeningRTAHALManager == nil {
+            startListeningRTACapture(deviceID: micDeviceID)
+        }
+    }
+
+    /// Starts mic capture for listening RTA.
+    private func startListeningRTACapture(deviceID: AudioDeviceID) {
+        logger.info("Starting listening RTA capture for device \(deviceID)")
+
+        let manager = HALIOManager(mode: .inputOnly)
+        switch manager.configure(deviceID: deviceID) {
+        case .success:
+            listeningRTAHALManager = manager
+
+            // Initialize the audio unit
+            if case .failure(let error) = manager.initialize() {
+                logger.error("Listening RTA: failed to initialize audio unit: \(error.localizedDescription)")
+                listeningRTAHALManager = nil
+                return
+            }
+
+            // Set up input callback to write to RTA analyzer's input ring buffer
+            // Note: This requires a C callback function which is complex to implement in Swift
+            // For now, we'll start the audio unit without the callback
+            // The callback wiring would require:
+            // 1. Creating a callback context structure with the ring buffer reference
+            // 2. Implementing a C-compatible AURenderCallback function
+            // 3. Registering it with setInputCallback
+            // 4. Managing the callback lifecycle
+
+            if case .failure(let error) = manager.start() {
+                logger.error("Listening RTA: failed to start audio unit: \(error.localizedDescription)")
+                listeningRTAHALManager = nil
+                return
+            }
+
+            logger.info("Listening RTA capture started (callback wiring not yet implemented)")
+        case .failure(let error):
+            logger.error("Listening RTA capture failed: \(error.localizedDescription)")
+            listeningRTAHALManager = nil
+        }
+    }
+
+    /// Stops mic capture for listening RTA.
+    private func stopListeningRTACapture() {
+        guard listeningRTAHALManager != nil else { return }
+        logger.info("Stopping listening RTA capture")
+
+        // Clear input callback if set
+        // listeningRTAHALManager?.clearInputCallback()
+
+        // Stop and dispose
+        listeningRTAHALManager?.stop()
+        listeningRTAHALManager = nil
+    }
 
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "AudioRoutingCoordinator")
 
@@ -207,6 +291,14 @@ final class AudioRoutingCoordinator: ObservableObject {
         pipelineManager.onVolumeStateChanged = { [weak self] in
             self?.objectWillChange.send()
         }
+
+        // Observe listening RTA changes to start/stop mic capture
+        $listeningRTAEnabled
+            .combineLatest($listeningRTAMicDeviceID)
+            .sink { [weak self] enabled, micDeviceID in
+                self?.updateListeningRTACapture(enabled: enabled, micDeviceID: micDeviceID)
+            }
+            .store(in: &cancellables)
 
         // Load persisted values
         loadPersistedValues()
@@ -302,6 +394,9 @@ final class AudioRoutingCoordinator: ObservableObject {
 
         // Set up listener for output device sample rate changes
         setupSampleRateListener(for: devices.outputDeviceID)
+
+        // Set up listener for output device volume changes (for loudness compensation)
+        setupVolumeListener(for: devices.outputDeviceID)
 
         // Determine capture mode early - needed to decide if we need rate sync delay
         let capturePreference: CaptureMode = routingMode.isManual ? .halInput : self.captureMode
@@ -911,25 +1006,68 @@ final class AudioRoutingCoordinator: ObservableObject {
         if let previousDeviceID = observedOutputDeviceID {
             sampleRateService.stopObservingSampleRateChanges(on: previousDeviceID)
         }
-        
+
         observedOutputDeviceID = outputDeviceID
-        
+
         // Start observing rate changes
         sampleRateService.observeSampleRateChanges(on: outputDeviceID) { [weak self] newRate in
             guard let self = self else { return }
-            
+
             // Only sync if routing is active and in automatic mode
             guard case .active = self.routingStatus, !self.manualModeEnabled else { return }
-            
+
             self.logger.info("Output device sample rate changed to \(newRate) Hz, re-syncing driver")
-            
+
             // Sync driver to new rate
             if let setRate = driverAccess.setDriverSampleRate(matching: newRate) {
                 self.logger.info("Driver re-synced to \(setRate) Hz")
-                
+
                 // Reconfigure pipeline after rate change settles
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                     self?.reconfigureRouting()
+                }
+            }
+        }
+    }
+
+    private func setupVolumeListener(for outputDeviceID: AudioDeviceID) {
+        // Clean up previous listener if any
+        volumeService.stopObservingDeviceVolumeChanges(deviceID: outputDeviceID)
+
+        // Start observing volume changes for loudness compensation
+        volumeService.observeDeviceVolumeChanges(deviceID: outputDeviceID) { [weak self] volume in
+            guard let self = self else { return }
+
+            // Only apply loudness compensation if enabled and routing is active
+            guard case .active = self.routingStatus else { return }
+            guard self.outputChannelMatrix.isEnabled else { return }
+
+            // Get config from EQConfiguration (via pipeline manager)
+            let config = self.eqConfiguration.dynamicsConfig.advanced.perBandLoudness
+            guard config.isEnabled else { return }
+
+            // Calculate phon level from system volume
+            let currentPhons = PerBandLoudnessCompensator.phonsFromSystemVolume(Double(volume), referencePhons: Double(config.referencePhons))
+
+            // Apply gain correction to each enabled output channel
+            let activeCrossover = self.eqConfiguration.dynamicsConfig.advanced.activeCrossover
+            let bassManagementCrossover = self.eqConfiguration.dynamicsConfig.advanced.bassManagement.crossoverHz
+
+            for (index, channel) in self.outputChannelMatrix.channels.enumerated().filter({ $0.element.isEnabled }) {
+                let correction = PerBandLoudnessCompensator.gainCorrection(
+                    source: channel.source,
+                    currentPhons: currentPhons,
+                    referencePhons: Double(config.referencePhons),
+                    activeCrossover: activeCrossover,
+                    bassManagementCrossoverHz: bassManagementCrossover,
+                    config: config
+                )
+
+                // Apply correction to the output channel processor
+                if let processors = self.pipelineManager.renderPipeline?.callbackContext?.outputChannelProcessors,
+                   index < processors.count,
+                   let processor = processors[index] {
+                    processor.setLoudnessCorrectionDB(correction)
                 }
             }
         }
