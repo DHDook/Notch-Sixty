@@ -193,6 +193,53 @@ struct DynamicsView: View {
                 isDisabled: !store.dynamicsConfig.deEsser.isEnabled
             )
 
+            DynamicsSliderRow(
+                label: "Ratio",
+                value: deEsserRatio,
+                range: 1.0...20.0,
+                step: 0.5,
+                formatValue: { String(format: "%.1f:1", $0) },
+                isDisabled: !store.dynamicsConfig.deEsser.isEnabled
+            )
+
+            DynamicsSliderRow(
+                label: "Range",
+                value: deEsserRangeDB,
+                range: -24.0...0.0,
+                step: 1.0,
+                formatValue: { String(format: "%.0f dB", $0) },
+                isDisabled: !store.dynamicsConfig.deEsser.isEnabled
+            )
+
+            DisclosureGroup("Advanced") {
+                DynamicsSliderRow(
+                    label: "Detection Q",
+                    value: deEsserDetectionQ,
+                    range: 0.5...8.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f", $0) },
+                    isDisabled: !store.dynamicsConfig.deEsser.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: deEsserAttackMs,
+                    range: 0.1...50.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.deEsser.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: deEsserReleaseMs,
+                    range: 5.0...500.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.deEsser.isEnabled
+                )
+            }
+
             Toggle("Dynamic EQ Mode", isOn: deesserDynModeBinding)
                 .toggleStyle(.switch)
                 .controlSize(.regular)
@@ -285,6 +332,129 @@ struct DynamicsView: View {
                 range: -60.0...0.0,
                 step: 0.5,
                 formatValue: { String(format: "%.1f dB", $0) },
+                isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+            )
+
+            DisclosureGroup("Low Band") {
+                DynamicsSliderRow(
+                    label: "Ratio",
+                    value: mbRatioLow,
+                    range: 1.0...20.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f:1", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Knee",
+                    value: mbKneeLow,
+                    range: 0.0...24.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: mbAttackLow,
+                    range: 1.0...200.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: mbReleaseLow,
+                    range: 5.0...1000.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+            }
+
+            DisclosureGroup("Mid Band") {
+                DynamicsSliderRow(
+                    label: "Ratio",
+                    value: mbRatioMid,
+                    range: 1.0...20.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f:1", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Knee",
+                    value: mbKneeMid,
+                    range: 0.0...24.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: mbAttackMid,
+                    range: 1.0...200.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: mbReleaseMid,
+                    range: 5.0...1000.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+            }
+
+            DisclosureGroup("High Band") {
+                DynamicsSliderRow(
+                    label: "Ratio",
+                    value: mbRatioHigh,
+                    range: 1.0...20.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f:1", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Knee",
+                    value: mbKneeHigh,
+                    range: 0.0...24.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: mbAttackHigh,
+                    range: 1.0...200.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: mbReleaseHigh,
+                    range: 5.0...1000.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f ms", $0) },
+                    isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
+                )
+            }
+
+            DynamicsSliderRow(
+                label: "Sidechain HPF",
+                value: mbSidechainHPF,
+                range: 0.0...500.0,
+                step: 10.0,
+                formatValue: { $0 == 0 ? "Off" : String(format: "%.0f Hz", $0) },
                 isDisabled: !store.dynamicsConfig.multibandCompressor.isEnabled
             )
         } header: {
@@ -697,6 +867,20 @@ struct DynamicsView: View {
                 rightEndLabel: "Hard",
                 isDisabled: !store.dynamicsConfig.softClipper.isEnabled
             )
+
+            Picker("Curve", selection: softClipperCurveType) {
+                ForEach(ClipperCurveType.allCases, id: \.self) { curve in
+                    Text(curve.displayName).tag(curve)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!store.dynamicsConfig.softClipper.isEnabled)
+
+            Toggle("Auto-Compensate Gain", isOn: softClipperAutoCompensate)
+                .toggleStyle(.switch)
+                .controlSize(.regular)
+                .font(.system(size: 13))
+                .disabled(!store.dynamicsConfig.softClipper.isEnabled)
 
             DynamicsSliderRow(
                 label: "Asym. Trim",
@@ -1674,6 +1858,41 @@ struct DynamicsView: View {
         )
     }
 
+    private var deEsserRatio: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.deEsser.ratio) },
+            set: { v in var c = store.dynamicsConfig.deEsser; c.ratio = Float(v); store.updateDeEsser(c) }
+        )
+    }
+
+    private var deEsserRangeDB: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.deEsser.rangeDB) },
+            set: { v in var c = store.dynamicsConfig.deEsser; c.rangeDB = Float(v); store.updateDeEsser(c) }
+        )
+    }
+
+    private var deEsserDetectionQ: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.deEsser.detectionQ) },
+            set: { v in var c = store.dynamicsConfig.deEsser; c.detectionQ = Float(v); store.updateDeEsser(c) }
+        )
+    }
+
+    private var deEsserAttackMs: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.deEsser.attackMs) },
+            set: { v in var c = store.dynamicsConfig.deEsser; c.attackMs = Float(v); store.updateDeEsser(c) }
+        )
+    }
+
+    private var deEsserReleaseMs: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.deEsser.releaseMs) },
+            set: { v in var c = store.dynamicsConfig.deEsser; c.releaseMs = Float(v); store.updateDeEsser(c) }
+        )
+    }
+
     // MARK: - Multiband Bindings
 
     private var mbEnabled: Binding<Bool> {
@@ -1715,6 +1934,97 @@ struct DynamicsView: View {
         Binding(
             get: { Double(store.dynamicsConfig.multibandCompressor.thresholdHighDB) },
             set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdHighDB = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbRatioLow: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.ratioLow) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.ratioLow = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbRatioMid: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.ratioMid) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.ratioMid = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbRatioHigh: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.ratioHigh) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.ratioHigh = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbKneeLow: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.kneeWidthLowDB) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.kneeWidthLowDB = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbKneeMid: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.kneeWidthMidDB) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.kneeWidthMidDB = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbKneeHigh: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.kneeWidthHighDB) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.kneeWidthHighDB = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbAttackLow: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.attackLowMs) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.attackLowMs = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbAttackMid: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.attackMidMs) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.attackMidMs = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbAttackHigh: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.attackHighMs) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.attackHighMs = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbReleaseLow: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.releaseLowMs) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.releaseLowMs = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbReleaseMid: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.releaseMidMs) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.releaseMidMs = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbReleaseHigh: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.releaseHighMs) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.releaseHighMs = Float(v); store.updateMultibandCompressor(c) }
+        )
+    }
+
+    private var mbSidechainHPF: Binding<Double> {
+        Binding(
+            get: { Double(store.dynamicsConfig.multibandCompressor.sidechainHighPassHz) },
+            set: { v in var c = store.dynamicsConfig.multibandCompressor; c.sidechainHighPassHz = Float(v); store.updateMultibandCompressor(c) }
         )
     }
 
@@ -1853,6 +2163,20 @@ struct DynamicsView: View {
         Binding(
             get: { Double(store.dynamicsConfig.softClipper.kneeSmooth) },
             set: { val in var sc = store.dynamicsConfig.softClipper; sc.kneeSmooth = Float(val); store.updateSoftClipper(sc) }
+        )
+    }
+
+    private var softClipperCurveType: Binding<ClipperCurveType> {
+        Binding(
+            get: { store.dynamicsConfig.softClipper.curveType },
+            set: { val in var sc = store.dynamicsConfig.softClipper; sc.curveType = val; store.updateSoftClipper(sc) }
+        )
+    }
+
+    private var softClipperAutoCompensate: Binding<Bool> {
+        Binding(
+            get: { store.dynamicsConfig.softClipper.autoCompensateGain },
+            set: { val in var sc = store.dynamicsConfig.softClipper; sc.autoCompensateGain = val; store.updateSoftClipper(sc) }
         )
     }
 

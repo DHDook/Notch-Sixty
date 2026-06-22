@@ -79,6 +79,10 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var mbGainLow: Float  = 1.0
     nonisolated(unsafe) var mbGainMid: Float  = 1.0
     nonisolated(unsafe) var mbGainHigh: Float = 1.0
+    /// Precomputed sidechain HPF coefficients (b0, b1, b2, na1, na2). Updated in applyConfig().
+    nonisolated(unsafe) var mbSidechainHPFCoeffs: (Float, Float, Float, Float, Float) = (1.0, 0.0, 0.0, 0.0, 0.0)
+    /// Sidechain HPF filter state per channel [chIdx * 2 for w1, chIdx * 2 + 1 for w2].
+    nonisolated(unsafe) var mbSidechainHPFState: [Float]
     /// Pre-allocated per-band temp buffers [bandIdx 0-2][chIdx].
     private let mbBandBufs: [[UnsafeMutablePointer<Float>]]
 
@@ -303,6 +307,11 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _deEsserEnabled:    ManagedAtomic<Int32>
     private let _deEsserFreqBits:   ManagedAtomic<Int32>   // Hz as Float bits
     private let _deEsserThreshBits: ManagedAtomic<Int32>   // dB as Float bits
+    private let _deEsserRatioBits:  ManagedAtomic<Int32>   // ratio as Float bits
+    private let _deEsserRangeBits:  ManagedAtomic<Int32>   // rangeDB as Float bits
+    private let _deEsserQBits:      ManagedAtomic<Int32>   // detectionQ as Float bits
+    private let _deEsserAttackBits: ManagedAtomic<Int32>   // attackMs as Float bits
+    private let _deEsserReleaseBits:ManagedAtomic<Int32>   // releaseMs as Float bits
 
     // Multiband compressor
     private let _mbEnabled:        ManagedAtomic<Int32>
@@ -314,6 +323,21 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// 0 = gentle (LR4, 24 dB/oct), 1 = steep (LR8, 48 dB/oct).
     private let _mbSlopeLMBits:    ManagedAtomic<Int32>
     private let _mbSlopeMHBits:    ManagedAtomic<Int32>
+    // NEW — per-band ratio, attack, release, knee
+    private let _mbRatioLowBits:   ManagedAtomic<Int32>
+    private let _mbRatioMidBits:   ManagedAtomic<Int32>
+    private let _mbRatioHighBits:  ManagedAtomic<Int32>
+    private let _mbAttackLowMsBits:   ManagedAtomic<Int32>
+    private let _mbAttackMidMsBits:   ManagedAtomic<Int32>
+    private let _mbAttackHighMsBits:  ManagedAtomic<Int32>
+    private let _mbReleaseLowMsBits:  ManagedAtomic<Int32>
+    private let _mbReleaseMidMsBits:  ManagedAtomic<Int32>
+    private let _mbReleaseHighMsBits: ManagedAtomic<Int32>
+    private let _mbKneeLowDBBits:     ManagedAtomic<Int32>
+    private let _mbKneeMidDBBits:     ManagedAtomic<Int32>
+    private let _mbKneeHighDBBits:    ManagedAtomic<Int32>
+    // NEW — sidechain HPF frequency (applied to all three bands)
+    private let _mbSidechainHPFHzBits: ManagedAtomic<Int32>
 
     // Compressor
     private let _compEnabled:        ManagedAtomic<Int32>
@@ -346,6 +370,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _softClipperDrive:     ManagedAtomic<Int32>
     private let _softClipperThreshold: ManagedAtomic<Int32>
     private let _softClipperKnee:      ManagedAtomic<Int32>
+    private let _softClipperCurveType: ManagedAtomic<Int32>
+    private let _softClipperAutoCompensateEnabled: ManagedAtomic<Int32>
 
     // Brickwall limiter
     private let _limiterEnabled:      ManagedAtomic<Int32>
@@ -542,6 +568,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.mbFilterState      = Array(repeating: 0.0, count: ch * 16)
         // Steep extra stages: 16 state vars per channel (steep stages 2-3)
         self.mbFilterStateSteep = Array(repeating: 0.0, count: ch * 16)
+        // Sidechain HPF: 2 state vars per channel (w1, w2)
+        self.mbSidechainHPFState = Array(repeating: 0.0, count: ch * 2)
 
         // Multiband temp band buffers: [3 bands][channelCount]
         var bandBufs: [[UnsafeMutablePointer<Float>]] = []
@@ -580,9 +608,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.ditherRNG = DSPRNG(seed: UInt64(sampleRate * 1000))
 
         // Atomics — de-esser
-        _deEsserEnabled    = ManagedAtomic(0)
-        _deEsserFreqBits   = ManagedAtomic(floatBits(6000.0))
-        _deEsserThreshBits = ManagedAtomic(floatBits(-20.0))
+        _deEsserEnabled     = ManagedAtomic(0)
+        _deEsserFreqBits    = ManagedAtomic(floatBits(6000.0))
+        _deEsserThreshBits   = ManagedAtomic(floatBits(-20.0))
+        _deEsserRatioBits   = ManagedAtomic(floatBits(10.0))
+        _deEsserRangeBits   = ManagedAtomic(floatBits(-12.0))
+        _deEsserQBits      = ManagedAtomic(floatBits(2.0))
+        _deEsserAttackBits  = ManagedAtomic(floatBits(1.0))
+        _deEsserReleaseBits = ManagedAtomic(floatBits(50.0))
 
         // Atomics — multiband
         _mbEnabled        = ManagedAtomic(0)
@@ -593,6 +626,19 @@ final class DynamicsProcessor: @unchecked Sendable {
         _mbThreshHighBits = ManagedAtomic(floatBits(0.0))
         _mbSlopeLMBits    = ManagedAtomic(0)  // gentle
         _mbSlopeMHBits    = ManagedAtomic(0)  // gentle
+        _mbRatioLowBits   = ManagedAtomic(floatBits(4.0))
+        _mbRatioMidBits   = ManagedAtomic(floatBits(4.0))
+        _mbRatioHighBits  = ManagedAtomic(floatBits(4.0))
+        _mbAttackLowMsBits   = ManagedAtomic(floatBits(40.0))
+        _mbAttackMidMsBits   = ManagedAtomic(floatBits(20.0))
+        _mbAttackHighMsBits  = ManagedAtomic(floatBits(10.0))
+        _mbReleaseLowMsBits  = ManagedAtomic(floatBits(200.0))
+        _mbReleaseMidMsBits  = ManagedAtomic(floatBits(100.0))
+        _mbReleaseHighMsBits = ManagedAtomic(floatBits(50.0))
+        _mbKneeLowDBBits     = ManagedAtomic(floatBits(6.0))
+        _mbKneeMidDBBits     = ManagedAtomic(floatBits(6.0))
+        _mbKneeHighDBBits    = ManagedAtomic(floatBits(6.0))
+        _mbSidechainHPFHzBits = ManagedAtomic(floatBits(0.0))
 
         // Atomics — compressor
         _compEnabled      = ManagedAtomic(0)
@@ -617,6 +663,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         _softClipperDrive     = ManagedAtomic(floatBits(Self.dbToLinear(0.0)))
         _softClipperThreshold = ManagedAtomic(floatBits(Self.dbToLinear(-1.5)))
         _softClipperKnee      = ManagedAtomic(floatBits(0.5))
+        _softClipperCurveType = ManagedAtomic(0)  // .quadratic
+        _softClipperAutoCompensateEnabled = ManagedAtomic(1)  // true by default
 
         // Atomics — limiter
         _limiterEnabled      = ManagedAtomic(1)
@@ -1039,6 +1087,11 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setDeEsserEnabled(_ v: Bool)        { _deEsserEnabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setDeEsserFrequencyHz(_ hz: Float)  { _deEsserFreqBits.store(floatBits(max(20.0, hz)), ordering: .relaxed) }
     func setDeEsserThresholdDB(_ db: Float)  { _deEsserThreshBits.store(floatBits(db), ordering: .relaxed) }
+    func setDeEsserRatio(_ r: Float)         { _deEsserRatioBits.store(floatBits(max(1.0, min(20.0, r))), ordering: .relaxed) }
+    func setDeEsserRangeDB(_ db: Float)      { _deEsserRangeBits.store(floatBits(max(-24.0, min(0.0, db))), ordering: .relaxed) }
+    func setDeEsserQ(_ q: Float)             { _deEsserQBits.store(floatBits(max(0.5, min(8.0, q))), ordering: .relaxed) }
+    func setDeEsserAttackMs(_ ms: Float)     { _deEsserAttackBits.store(floatBits(max(0.1, min(50.0, ms))), ordering: .relaxed) }
+    func setDeEsserReleaseMs(_ ms: Float)    { _deEsserReleaseBits.store(floatBits(max(5.0, min(500.0, ms))), ordering: .relaxed) }
 
     func setMBEnabled(_ v: Bool)             { _mbEnabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setMBCrossLowMidHz(_ hz: Float)     { _mbCrossLMBits.store(floatBits(max(20.0, hz)), ordering: .relaxed) }
@@ -1048,6 +1101,19 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setMBThresholdHighDB(_ db: Float)   { _mbThreshHighBits.store(floatBits(db), ordering: .relaxed) }
     func setMBSlopeLowMid(_ slope: CrossoverSlope)  { _mbSlopeLMBits.store(Int32(slope.rawValue), ordering: .relaxed) }
     func setMBSlopeMidHigh(_ slope: CrossoverSlope) { _mbSlopeMHBits.store(Int32(slope.rawValue), ordering: .relaxed) }
+    func setMBRatioLow(_ r: Float)          { _mbRatioLowBits.store(floatBits(max(1.0, min(20.0, r))), ordering: .relaxed) }
+    func setMBRatioMid(_ r: Float)          { _mbRatioMidBits.store(floatBits(max(1.0, min(20.0, r))), ordering: .relaxed) }
+    func setMBRatioHigh(_ r: Float)         { _mbRatioHighBits.store(floatBits(max(1.0, min(20.0, r))), ordering: .relaxed) }
+    func setMBAttackLowMs(_ ms: Float)       { _mbAttackLowMsBits.store(floatBits(max(1.0, min(200.0, ms))), ordering: .relaxed) }
+    func setMBAttackMidMs(_ ms: Float)       { _mbAttackMidMsBits.store(floatBits(max(1.0, min(200.0, ms))), ordering: .relaxed) }
+    func setMBAttackHighMs(_ ms: Float)      { _mbAttackHighMsBits.store(floatBits(max(1.0, min(200.0, ms))), ordering: .relaxed) }
+    func setMBReleaseLowMs(_ ms: Float)     { _mbReleaseLowMsBits.store(floatBits(max(5.0, min(1000.0, ms))), ordering: .relaxed) }
+    func setMBReleaseMidMs(_ ms: Float)     { _mbReleaseMidMsBits.store(floatBits(max(5.0, min(1000.0, ms))), ordering: .relaxed) }
+    func setMBReleaseHighMs(_ ms: Float)    { _mbReleaseHighMsBits.store(floatBits(max(5.0, min(1000.0, ms))), ordering: .relaxed) }
+    func setMBKneeLowDB(_ db: Float)        { _mbKneeLowDBBits.store(floatBits(max(0.0, min(24.0, db))), ordering: .relaxed) }
+    func setMBKneeMidDB(_ db: Float)        { _mbKneeMidDBBits.store(floatBits(max(0.0, min(24.0, db))), ordering: .relaxed) }
+    func setMBKneeHighDB(_ db: Float)       { _mbKneeHighDBBits.store(floatBits(max(0.0, min(24.0, db))), ordering: .relaxed) }
+    func setMBSidechainHPFHz(_ hz: Float)   { _mbSidechainHPFHzBits.store(floatBits(max(0.0, hz)), ordering: .relaxed) }
 
     func setCompressorEnabled(_ v: Bool)     { _compEnabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setCompressorThresholdDB(_ db: Float) { _compThreshBits.store(floatBits(db), ordering: .relaxed) }
@@ -1111,6 +1177,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     func setSoftClipperKnee(_ knee: Float) {
         _softClipperKnee.store(floatBits(max(0.001, min(1.0, knee))), ordering: .relaxed)
+    }
+    func setSoftClipperCurveType(_ type: ClipperCurveType) {
+        _softClipperCurveType.store(Int32(type.rawValue), ordering: .relaxed)
+    }
+    func setSoftClipperAutoCompensate(_ v: Bool) {
+        _softClipperAutoCompensateEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
 
     func setLimiterEnabled(_ enabled: Bool) {
@@ -1511,6 +1583,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         setDeEsserEnabled(config.deEsser.isEnabled)
         setDeEsserFrequencyHz(config.deEsser.frequencyHz)
         setDeEsserThresholdDB(config.deEsser.thresholdDB)
+        setDeEsserRatio(config.deEsser.ratio)
+        setDeEsserRangeDB(config.deEsser.rangeDB)
+        setDeEsserQ(config.deEsser.detectionQ)
+        setDeEsserAttackMs(config.deEsser.attackMs)
+        setDeEsserReleaseMs(config.deEsser.releaseMs)
 
         setMBEnabled(config.multibandCompressor.isEnabled)
         setMBCrossLowMidHz(config.multibandCompressor.crossLowMidHz)
@@ -1520,6 +1597,23 @@ final class DynamicsProcessor: @unchecked Sendable {
         setMBThresholdHighDB(config.multibandCompressor.thresholdHighDB)
         setMBSlopeLowMid(config.multibandCompressor.slopeLowMid)
         setMBSlopeMidHigh(config.multibandCompressor.slopeMidHigh)
+        setMBRatioLow(config.multibandCompressor.ratioLow)
+        setMBRatioMid(config.multibandCompressor.ratioMid)
+        setMBRatioHigh(config.multibandCompressor.ratioHigh)
+        setMBAttackLowMs(config.multibandCompressor.attackLowMs)
+        setMBAttackMidMs(config.multibandCompressor.attackMidMs)
+        setMBAttackHighMs(config.multibandCompressor.attackHighMs)
+        setMBReleaseLowMs(config.multibandCompressor.releaseLowMs)
+        setMBReleaseMidMs(config.multibandCompressor.releaseMidMs)
+        setMBReleaseHighMs(config.multibandCompressor.releaseHighMs)
+        setMBKneeLowDB(config.multibandCompressor.kneeWidthLowDB)
+        setMBKneeMidDB(config.multibandCompressor.kneeWidthMidDB)
+        setMBKneeHighDB(config.multibandCompressor.kneeWidthHighDB)
+        setMBSidechainHPFHz(config.multibandCompressor.sidechainHighPassHz)
+
+        // Precompute sidechain HPF coefficients
+        let hpfHz = config.multibandCompressor.sidechainHighPassHz
+        mbSidechainHPFCoeffs = Self.hpfCoeffs(fc: hpfHz, sr: sampleRate)
 
         setCompressorEnabled(config.compressor.isEnabled)
         setCompressorThresholdDB(config.compressor.thresholdDB)
@@ -1542,6 +1636,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         setSoftClipperDriveDB(config.softClipper.driveDB)
         setSoftClipperThresholdDB(config.softClipper.thresholdDB)
         setSoftClipperKnee(config.softClipper.kneeSmooth)
+        setSoftClipperCurveType(config.softClipper.curveType)
+        setSoftClipperAutoCompensate(config.softClipper.autoCompensateGain)
 
         setLimiterEnabled(config.limiter.isEnabled)
         setLimiterCeilingDB(config.limiter.ceilingDB)
@@ -1931,6 +2027,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         for i in 0..<deEsserFilterState.count  { deEsserFilterState[i]  = 0 }
         for i in 0..<mbFilterState.count        { mbFilterState[i]        = 0 }
         for i in 0..<mbFilterStateSteep.count   { mbFilterStateSteep[i]   = 0 }
+        for i in 0..<mbSidechainHPFState.count  { mbSidechainHPFState[i]  = 0 }
         compEnvDB   = 0.0
         expEnvDB    = 0.0
         deEsserEnvDB = 0.0
@@ -3062,9 +3159,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         let sr       = storedSampleRate
         let freqHz   = bitsToFloat(_deEsserFreqBits.load(ordering: .relaxed))
         let thresh   = bitsToFloat(_deEsserThreshBits.load(ordering: .relaxed))
-        let alphaAtt = Self.computeAlpha(tauSeconds: 0.001, sampleRate: sr)
-        let alphaRel = Self.computeAlpha(tauSeconds: 0.050, sampleRate: sr)
-        let (b0, b1, b2, na1, na2) = Self.bpfCoeffs(fc: freqHz, q: 2.0, sr: sr)
+        let attackMs  = bitsToFloat(_deEsserAttackBits.load(ordering: .relaxed))
+        let releaseMs = bitsToFloat(_deEsserReleaseBits.load(ordering: .relaxed))
+        let alphaAtt  = Self.computeAlpha(tauSeconds: attackMs  / 1000.0, sampleRate: sr)
+        let alphaRel  = Self.computeAlpha(tauSeconds: releaseMs / 1000.0, sampleRate: sr)
+        let q         = bitsToFloat(_deEsserQBits.load(ordering: .relaxed))
+        let (b0, b1, b2, na1, na2) = Self.bpfCoeffs(fc: freqHz, q: q, sr: sr)
+        let ratio     = bitsToFloat(_deEsserRatioBits.load(ordering: .relaxed))
+        let rangeDB   = bitsToFloat(_deEsserRangeBits.load(ordering: .relaxed))
         let dynMode  = _deesserDynModeEnabled.load(ordering: .relaxed) != 0
         var env = deEsserEnvDB
         // Per-frame BPF output store for dynamic EQ mode (max 2 channels; stack-allocated).
@@ -3086,7 +3188,8 @@ final class DynamicsProcessor: @unchecked Sendable {
                 if absY > sidePeak { sidePeak = absY }
             }
             let sideDB: Float = sidePeak > 1e-5 ? 20.0 * log10(sidePeak) : -100.0
-            let target: Float = sideDB > thresh ? thresh - sideDB : 0.0
+            var target: Float = sideDB > thresh ? (thresh + (sideDB - thresh) / ratio) - sideDB : 0.0
+            if target < rangeDB { target = rangeDB }
             env = target < env
                 ? alphaAtt * env + (1.0 - alphaAtt) * target
                 : alphaRel * env + (1.0 - alphaRel) * target
@@ -3125,13 +3228,31 @@ final class DynamicsProcessor: @unchecked Sendable {
         let slopeLM = _mbSlopeLMBits.load(ordering: .relaxed)  // 0=gentle, 1=steep
         let slopeMH = _mbSlopeMHBits.load(ordering: .relaxed)
 
-        // Fixed per-band time constants from spec
-        let aAttL = Self.computeAlpha(tauSeconds: 0.040, sampleRate: sr)
-        let aRelL = Self.computeAlpha(tauSeconds: 0.200, sampleRate: sr)
-        let aAttM = Self.computeAlpha(tauSeconds: 0.020, sampleRate: sr)
-        let aRelM = Self.computeAlpha(tauSeconds: 0.100, sampleRate: sr)
-        let aAttH = Self.computeAlpha(tauSeconds: 0.010, sampleRate: sr)
-        let aRelH = Self.computeAlpha(tauSeconds: 0.050, sampleRate: sr)
+        // NEW — read per-band ratio, knee, attack, release from atomics
+        let ratioL  = bitsToFloat(_mbRatioLowBits.load(ordering: .relaxed))
+        let ratioM  = bitsToFloat(_mbRatioMidBits.load(ordering: .relaxed))
+        let ratioH  = bitsToFloat(_mbRatioHighBits.load(ordering: .relaxed))
+        let kneeL   = bitsToFloat(_mbKneeLowDBBits.load(ordering: .relaxed))
+        let kneeM   = bitsToFloat(_mbKneeMidDBBits.load(ordering: .relaxed))
+        let kneeH   = bitsToFloat(_mbKneeHighDBBits.load(ordering: .relaxed))
+        let attL   = bitsToFloat(_mbAttackLowMsBits.load(ordering: .relaxed))
+        let attM   = bitsToFloat(_mbAttackMidMsBits.load(ordering: .relaxed))
+        let attH   = bitsToFloat(_mbAttackHighMsBits.load(ordering: .relaxed))
+        let relL   = bitsToFloat(_mbReleaseLowMsBits.load(ordering: .relaxed))
+        let relM   = bitsToFloat(_mbReleaseMidMsBits.load(ordering: .relaxed))
+        let relH   = bitsToFloat(_mbReleaseHighMsBits.load(ordering: .relaxed))
+
+        // Compute per-band alphas from attack/release times
+        let aAttL = Self.computeAlpha(tauSeconds: Float(attL) / 1000.0, sampleRate: sr)
+        let aRelL = Self.computeAlpha(tauSeconds: Float(relL) / 1000.0, sampleRate: sr)
+        let aAttM = Self.computeAlpha(tauSeconds: Float(attM) / 1000.0, sampleRate: sr)
+        let aRelM = Self.computeAlpha(tauSeconds: Float(relM) / 1000.0, sampleRate: sr)
+        let aAttH = Self.computeAlpha(tauSeconds: Float(attH) / 1000.0, sampleRate: sr)
+        let aRelH = Self.computeAlpha(tauSeconds: Float(relH) / 1000.0, sampleRate: sr)
+
+        // Sidechain HPF coefficients (precomputed in applyConfig)
+        let (hpfb0, hpfb1, hpfb2, hpfna1, hpfna2) = mbSidechainHPFCoeffs
+        let hpfEnabled = mbSidechainHPFCoeffs.0 != 1.0  // b0 != 1.0 means HPF is active
 
         let (lpLMb0, lpLMb1, lpLMb2, lpLMa1, lpLMa2) = Self.lpfCoeffs(fc: crossLM, sr: sr)
         let (hpLMb0, hpLMb1, hpLMb2, hpLMa1, hpLMa2) = Self.hpfCoeffs(fc: crossLM, sr: sr)
@@ -3251,13 +3372,31 @@ final class DynamicsProcessor: @unchecked Sendable {
         for frame in 0..<safeCount {
             var pkL: Float = 0.0; var pkM: Float = 0.0; var pkH: Float = 0.0
             for ch in 0..<numCh {
-                let vL = mbBandBufs[0][ch][frame]; let aL = vL < 0 ? -vL : vL; if aL > pkL { pkL = aL }
-                let vM = mbBandBufs[1][ch][frame]; let aM = vM < 0 ? -vM : vM; if aM > pkM { pkM = aM }
-                let vH = mbBandBufs[2][ch][frame]; let aH = vH < 0 ? -vH : vH; if aH > pkH { pkH = aH }
+                var vL = mbBandBufs[0][ch][frame]
+                var vM = mbBandBufs[1][ch][frame]
+                var vH = mbBandBufs[2][ch][frame]
+
+                // Apply sidechain HPF if enabled
+                if hpfEnabled {
+                    let hpBase = ch * 2
+                    var w1 = mbSidechainHPFState[hpBase], w2 = mbSidechainHPFState[hpBase + 1]
+                    vL = Self.processBiquad(vL, b0: hpfb0, b1: hpfb1, b2: hpfb2, na1: hpfna1, na2: hpfna2, w1: &w1, w2: &w2)
+                    mbSidechainHPFState[hpBase] = w1; mbSidechainHPFState[hpBase + 1] = w2
+                    w1 = mbSidechainHPFState[hpBase]; w2 = mbSidechainHPFState[hpBase + 1]
+                    vM = Self.processBiquad(vM, b0: hpfb0, b1: hpfb1, b2: hpfb2, na1: hpfna1, na2: hpfna2, w1: &w1, w2: &w2)
+                    mbSidechainHPFState[hpBase] = w1; mbSidechainHPFState[hpBase + 1] = w2
+                    w1 = mbSidechainHPFState[hpBase]; w2 = mbSidechainHPFState[hpBase + 1]
+                    vH = Self.processBiquad(vH, b0: hpfb0, b1: hpfb1, b2: hpfb2, na1: hpfna1, na2: hpfna2, w1: &w1, w2: &w2)
+                    mbSidechainHPFState[hpBase] = w1; mbSidechainHPFState[hpBase + 1] = w2
+                }
+
+                let aL = vL < 0 ? -vL : vL; if aL > pkL { pkL = aL }
+                let aM = vM < 0 ? -vM : vM; if aM > pkM { pkM = aM }
+                let aH = vH < 0 ? -vH : vH; if aH > pkH { pkH = aH }
             }
-            gL = mbSmoothedGain(peak: pkL, threshDB: threshL, gain: gL, alphaAtt: aAttL, alphaRel: aRelL)
-            gM = mbSmoothedGain(peak: pkM, threshDB: threshM, gain: gM, alphaAtt: aAttM, alphaRel: aRelM)
-            gH = mbSmoothedGain(peak: pkH, threshDB: threshH, gain: gH, alphaAtt: aAttH, alphaRel: aRelH)
+            gL = mbSmoothedGain(peak: pkL, threshDB: threshL, gain: gL, alphaAtt: aAttL, alphaRel: aRelL, ratio: ratioL, kneeDB: kneeL)
+            gM = mbSmoothedGain(peak: pkM, threshDB: threshM, gain: gM, alphaAtt: aAttM, alphaRel: aRelM, ratio: ratioM, kneeDB: kneeM)
+            gH = mbSmoothedGain(peak: pkH, threshDB: threshH, gain: gH, alphaAtt: aAttH, alphaRel: aRelH, ratio: ratioH, kneeDB: kneeH)
             for ch in 0..<numCh {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                 buf[frame] = mbBandBufs[0][ch][frame] * gL
@@ -3269,23 +3408,21 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
 
     /// Computes next smoothed linear gain for a single multiband compressor band.
-    /// Fixed ratio of 4.0 with a fixed 6 dB soft-knee.
+    /// Accepts per-band ratio and knee parameters.
     @inline(__always)
     private func mbSmoothedGain(
         peak: Float, threshDB: Float, gain: Float,
-        alphaAtt: Float, alphaRel: Float
+        alphaAtt: Float, alphaRel: Float, ratio: Float, kneeDB: Float
     ) -> Float {
         let xDB: Float = peak > 1e-5 ? 20.0 * log10(peak) : -100.0
-        let ratio: Float = 4.0
-        let kneeW: Float = 6.0
-        let halfKnee = kneeW * 0.5
+        let halfKnee = kneeDB * 0.5
 
         let deltaDB: Float
         if xDB < threshDB - halfKnee {
             deltaDB = 0.0
         } else if abs(xDB - threshDB) <= halfKnee {
             let excess = xDB - threshDB + halfKnee
-            deltaDB = (1.0 / ratio - 1.0) * excess * excess / (2.0 * kneeW)
+            deltaDB = (1.0 / ratio - 1.0) * excess * excess / (2.0 * kneeDB)
         } else {
             deltaDB = (threshDB + (xDB - threshDB) / ratio) - xDB
         }
@@ -3495,12 +3632,21 @@ final class DynamicsProcessor: @unchecked Sendable {
         // ── Pass 1: Soft clipper only (per-frame, unchanged from original) ─────────
         let driveLinear  = bitsToFloat(_softClipperDrive.load(ordering: .relaxed))
         let threshold    = bitsToFloat(_softClipperThreshold.load(ordering: .relaxed))
-        let knee         = bitsToFloat(_softClipperKnee.load(ordering: .relaxed))
+        let kneeSmooth   = bitsToFloat(_softClipperKnee.load(ordering: .relaxed))
+        let curveType    = _softClipperCurveType.load(ordering: .relaxed)
+        let asymmetryTrim: Float = 0.0  // TODO: Add asymmetryTrim parameter to SoftClipperConfig when needed
+        let autoCompensate = _softClipperAutoCompensateEnabled.load(ordering: .relaxed) != 0
+        let outputCompensation: Float = autoCompensate ? 1.0 / sqrt(driveLinear) : 1.0
 
-        let halfKnee   = knee * 0.5
-        let xLower     = threshold - halfKnee
-        let xUpper     = threshold + halfKnee
-        let invTwoKnee = knee > 1e-9 ? 1.0 / (2.0 * knee) : 0.0
+        // headroomDB = distance from threshold up to 0 dBFS (always >= 0, since threshold <= 0)
+        let thresholdDB = 20.0 * log10(threshold > 1e-9 ? threshold : 1e-9)
+        let headroomDB = max(0.0, -thresholdDB)
+        let kneeDB = kneeSmooth * headroomDB   // now a fraction of headroom, not an absolute span
+        let kneeLinear = pow(10.0, kneeDB * 0.05)
+        let halfKnee = kneeLinear * 0.5
+        let xLower = threshold - halfKnee
+        let xUpper = threshold + halfKnee
+        let invTwoKnee = kneeLinear > 1e-9 ? 1.0 / (2.0 * kneeLinear) : 0.0
         var clipperWasActive  = false
         var maxClipInputPeak: Float = 0.0
 
@@ -3514,8 +3660,10 @@ final class DynamicsProcessor: @unchecked Sendable {
                         clipperWasActive = true
                         if absInput > maxClipInputPeak { maxClipInputPeak = absInput }
                     }
-                    buf[frame] = softClip(input, threshold: threshold,
-                                          xLower: xLower, xUpper: xUpper, invTwoKnee: invTwoKnee)
+                    let shaped = softClip(input, threshold: threshold,
+                                          xLower: xLower, xUpper: xUpper, invTwoKnee: invTwoKnee,
+                                          curveType: curveType, asymmetryTrim: asymmetryTrim)
+                    buf[frame] = shaped * outputCompensation
                 }
             }
         }
@@ -3558,14 +3706,53 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     @inline(__always)
     private func softClip(
-        _ x: Float, threshold: Float, xLower: Float, xUpper: Float, invTwoKnee: Float
+        _ x: Float, threshold: Float, xLower: Float, xUpper: Float,
+        invTwoKnee: Float, curveType: Int32, asymmetryTrim: Float
     ) -> Float {
         let absX: Float = x < 0 ? -x : x
         let sign: Float = x >= 0 ? 1.0 : -1.0
         if absX <= xLower { return x }
-        if absX > xUpper  { return sign * threshold }
-        let delta = absX - xLower
-        return sign * (xLower + delta - delta * delta * invTwoKnee)
+
+        switch curveType {
+        case 1: // cubic / tanh-style — smooth odd-harmonic saturation, no hard flat-top.
+            // Normalizes into the knee region, applies tanh, rescales back so the
+            // curve asymptotically approaches threshold rather than flat-topping
+            // abruptly. The 1.5 scaling constant is a starting point for the
+            // implementer/engineer to refine by ear — it controls how quickly the
+            // tanh saturates within the knee region; higher values approach a
+            // harder clip, lower values are gentler and more "tape-like."
+            let norm = (absX - xLower) / max(1e-6, (xUpper - xLower))
+            let driveAmount: Float = 1.5
+            let shaped = tanh(norm * driveAmount) / tanh(driveAmount)
+            return sign * (xLower + shaped * (threshold - xLower))
+
+        case 2: // sine-based soft saturation — smoother harmonic profile than
+            // quadratic, fewer high-order harmonics, generally the most
+            // transparent-sounding of the three new curves.
+            if absX > xUpper { return sign * threshold }
+            let norm = (absX - xLower) / max(1e-6, (xUpper - xLower))
+            let shaped = sin(norm * Float.pi * 0.5)
+            return sign * (xLower + shaped * (xUpper - xLower) * 0.9)
+
+        case 3: // asymmetric tube-style — reuses the existing asymmetryTrim
+            // parameter (already present on SoftClipperConfig) rather than
+            // introducing a second, redundant asymmetry control. Positive and
+            // negative half-cycles clip with slightly different effective
+            // thresholds, producing even-harmonic content characteristic of
+            // tube-style saturation.
+            if absX > xUpper { return sign * threshold }
+            let asymBias = asymmetryTrim * 0.01 * threshold   // asymmetryTrim treated as a percent-of-threshold offset
+            let effectiveXUpper = x >= 0 ? xUpper + asymBias : xUpper - asymBias
+            let delta = absX - xLower
+            let span = max(1e-6, effectiveXUpper - xLower)
+            let invTwoKneeAsym = 1.0 / (2.0 * span)
+            return sign * (xLower + delta - delta * delta * invTwoKneeAsym)
+
+        default: // .quadratic — existing behavior, unchanged
+            if absX > xUpper { return sign * threshold }
+            let delta = absX - xLower
+            return sign * (xLower + delta - delta * delta * invTwoKnee)
+        }
     }
 
     /// Estimates the inter-sample true peak using 4-point FIR interpolation.

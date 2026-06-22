@@ -18,16 +18,50 @@ struct DeEsserConfig: Codable, Equatable, Sendable {
     var frequencyHz: Float = 6000.0
     var thresholdDB: Float = -20.0
 
+    // NEW — compression ratio above threshold. 1.0 = no effect; higher values
+    // approach the previous hardcoded "always limit to threshold" behavior.
+    // Range 1.0–20.0. Default of 10.0 closely approximates prior behavior
+    // while remaining a true graduated ratio rather than a hard limit.
+    var ratio: Float = 10.0
+
+    // NEW — maximum attenuation the de-esser may apply, in dB. Same purpose
+    // and convention as ExpanderConfig.rangeDB. Range −24.0…0.0.
+    var rangeDB: Float = -12.0
+
+    // NEW — detection bandpass Q. Higher Q targets sibilance more
+    // surgically; lower Q catches a broader harsh-frequency region.
+    // Range 0.5–8.0. Default matches the prior hardcoded value.
+    var detectionQ: Float = 2.0
+
+    // NEW — envelope follower attack/release, ms. Prior hardcoded values
+    // become the defaults.
+    var attackMs:  Float = 1.0
+    var releaseMs: Float = 50.0
+
     static let `default` = DeEsserConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, frequencyHz, thresholdDB
+        case isEnabled, frequencyHz, thresholdDB, ratio, rangeDB, detectionQ, attackMs, releaseMs
     }
 
-    init(isEnabled: Bool = false, frequencyHz: Float = 6000.0, thresholdDB: Float = -20.0) {
+    init(
+        isEnabled: Bool = false,
+        frequencyHz: Float = 6000.0,
+        thresholdDB: Float = -20.0,
+        ratio: Float = 10.0,
+        rangeDB: Float = -12.0,
+        detectionQ: Float = 2.0,
+        attackMs: Float = 1.0,
+        releaseMs: Float = 50.0
+    ) {
         self.isEnabled   = isEnabled
         self.frequencyHz = frequencyHz
         self.thresholdDB = thresholdDB
+        self.ratio       = ratio
+        self.rangeDB     = rangeDB
+        self.detectionQ  = detectionQ
+        self.attackMs    = attackMs
+        self.releaseMs   = releaseMs
     }
 
     init(from decoder: Decoder) throws {
@@ -35,6 +69,11 @@ struct DeEsserConfig: Codable, Equatable, Sendable {
         isEnabled   = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)   ?? false
         frequencyHz = try c.decodeIfPresent(Float.self, forKey: .frequencyHz) ?? 6000.0
         thresholdDB = try c.decodeIfPresent(Float.self, forKey: .thresholdDB) ?? -20.0
+        ratio       = try c.decodeIfPresent(Float.self, forKey: .ratio)       ?? 10.0
+        rangeDB     = try c.decodeIfPresent(Float.self, forKey: .rangeDB)     ?? -12.0
+        detectionQ  = try c.decodeIfPresent(Float.self, forKey: .detectionQ) ?? 2.0
+        attackMs    = try c.decodeIfPresent(Float.self, forKey: .attackMs)   ?? 1.0
+        releaseMs   = try c.decodeIfPresent(Float.self, forKey: .releaseMs)  ?? 50.0
     }
 }
 
@@ -53,12 +92,34 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
     /// Slope for the Mid/High crossover. Default: gentle (LR4, 24 dB/oct).
     var slopeMidHigh:    CrossoverSlope  = .gentle
 
+    // NEW — per-band time constants and ratio
+    var ratioLow:        Float           = 4.0
+    var ratioMid:        Float           = 4.0
+    var ratioHigh:       Float           = 4.0
+    var attackLowMs:     Float           = 40.0
+    var attackMidMs:     Float           = 20.0
+    var attackHighMs:    Float           = 10.0
+    var releaseLowMs:    Float           = 200.0
+    var releaseMidMs:    Float           = 100.0
+    var releaseHighMs:   Float           = 50.0
+    var kneeWidthLowDB:  Float           = 6.0
+    var kneeWidthMidDB:  Float           = 6.0
+    var kneeWidthHighDB: Float           = 6.0
+
+    // NEW — sidechain high-pass filter frequency (applied to all three bands)
+    var sidechainHighPassHz: Float = 0.0
+
     static let `default` = MultibandCompressorConfig()
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, crossLowMidHz, crossMidHighHz
         case thresholdLowDB, thresholdMidDB, thresholdHighDB
         case slopeLowMid, slopeMidHigh
+        case ratioLow, ratioMid, ratioHigh
+        case attackLowMs, attackMidMs, attackHighMs
+        case releaseLowMs, releaseMidMs, releaseHighMs
+        case kneeWidthLowDB, kneeWidthMidDB, kneeWidthHighDB
+        case sidechainHighPassHz
     }
 
     init(
@@ -69,7 +130,20 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         thresholdMidDB: Float = 0.0,
         thresholdHighDB: Float = 0.0,
         slopeLowMid: CrossoverSlope = .gentle,
-        slopeMidHigh: CrossoverSlope = .gentle
+        slopeMidHigh: CrossoverSlope = .gentle,
+        ratioLow: Float = 4.0,
+        ratioMid: Float = 4.0,
+        ratioHigh: Float = 4.0,
+        attackLowMs: Float = 40.0,
+        attackMidMs: Float = 20.0,
+        attackHighMs: Float = 10.0,
+        releaseLowMs: Float = 200.0,
+        releaseMidMs: Float = 100.0,
+        releaseHighMs: Float = 50.0,
+        kneeWidthLowDB: Float = 6.0,
+        kneeWidthMidDB: Float = 6.0,
+        kneeWidthHighDB: Float = 6.0,
+        sidechainHighPassHz: Float = 0.0
     ) {
         self.isEnabled       = isEnabled
         self.crossLowMidHz   = crossLowMidHz
@@ -79,6 +153,19 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         self.thresholdHighDB = thresholdHighDB
         self.slopeLowMid     = slopeLowMid
         self.slopeMidHigh    = slopeMidHigh
+        self.ratioLow        = ratioLow
+        self.ratioMid        = ratioMid
+        self.ratioHigh       = ratioHigh
+        self.attackLowMs     = attackLowMs
+        self.attackMidMs     = attackMidMs
+        self.attackHighMs    = attackHighMs
+        self.releaseLowMs    = releaseLowMs
+        self.releaseMidMs    = releaseMidMs
+        self.releaseHighMs   = releaseHighMs
+        self.kneeWidthLowDB  = kneeWidthLowDB
+        self.kneeWidthMidDB  = kneeWidthMidDB
+        self.kneeWidthHighDB = kneeWidthHighDB
+        self.sidechainHighPassHz = sidechainHighPassHz
     }
 
     init(from decoder: Decoder) throws {
@@ -91,6 +178,19 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         thresholdHighDB = try c.decodeIfPresent(Float.self,          forKey: .thresholdHighDB) ?? 0.0
         slopeLowMid     = try c.decodeIfPresent(CrossoverSlope.self, forKey: .slopeLowMid)     ?? .gentle
         slopeMidHigh    = try c.decodeIfPresent(CrossoverSlope.self, forKey: .slopeMidHigh)    ?? .gentle
+        ratioLow        = try c.decodeIfPresent(Float.self,          forKey: .ratioLow)        ?? 4.0
+        ratioMid        = try c.decodeIfPresent(Float.self,          forKey: .ratioMid)        ?? 4.0
+        ratioHigh       = try c.decodeIfPresent(Float.self,          forKey: .ratioHigh)       ?? 4.0
+        attackLowMs     = try c.decodeIfPresent(Float.self,          forKey: .attackLowMs)     ?? 40.0
+        attackMidMs     = try c.decodeIfPresent(Float.self,          forKey: .attackMidMs)     ?? 20.0
+        attackHighMs    = try c.decodeIfPresent(Float.self,          forKey: .attackHighMs)    ?? 10.0
+        releaseLowMs    = try c.decodeIfPresent(Float.self,          forKey: .releaseLowMs)    ?? 200.0
+        releaseMidMs    = try c.decodeIfPresent(Float.self,          forKey: .releaseMidMs)    ?? 100.0
+        releaseHighMs   = try c.decodeIfPresent(Float.self,          forKey: .releaseHighMs)   ?? 50.0
+        kneeWidthLowDB  = try c.decodeIfPresent(Float.self,          forKey: .kneeWidthLowDB)  ?? 6.0
+        kneeWidthMidDB  = try c.decodeIfPresent(Float.self,          forKey: .kneeWidthMidDB)  ?? 6.0
+        kneeWidthHighDB = try c.decodeIfPresent(Float.self,          forKey: .kneeWidthHighDB) ?? 6.0
+        sidechainHighPassHz = try c.decodeIfPresent(Float.self,      forKey: .sidechainHighPassHz) ?? 0.0
     }
 }
 
@@ -189,14 +289,69 @@ struct ExpanderConfig: Codable, Equatable, Sendable {
 
 // MARK: - Soft Clipper Configuration
 
+enum ClipperCurveType: Int, Codable, Equatable, Sendable, CaseIterable {
+    case quadratic      = 0   // existing curve — parabolic knee, hard flat-top above xUpper
+    case cubic          = 1   // tanh-style odd-harmonic saturation — "tape" character
+    case sine           = 2   // sin()-based soft saturation — smoother, fewer high-order harmonics
+    case asymmetricTube = 3   // sign-dependent shaping — "tube" character, even-harmonic content
+
+    var displayName: String {
+        switch self {
+        case .quadratic: return "Quadratic"
+        case .cubic: return "Cubic"
+        case .sine: return "Sine"
+        case .asymmetricTube: return "Tube"
+        }
+    }
+}
+
 /// Configuration for the soft clipper wave-shaper stage.
 struct SoftClipperConfig: Codable, Equatable, Sendable {
     var isEnabled:   Bool  = false
     var driveDB:     Float = 0.0
     var thresholdDB: Float = -1.5
+    /// Soft-knee width, expressed as a fraction (0.0–1.0) of the headroom between
+    /// threshold and 0 dBFS — NOT an absolute dB span. This keeps the same knee
+    /// value producing proportionally similar behavior regardless of where
+    /// threshold is set. Previously this was interpreted as an absolute dB
+    /// offset from threshold, which let a wide knee at a low threshold push the
+    /// shaping region far below the threshold itself (e.g. threshold −4 dB with
+    /// knee at 1.0 began shaping at ≈ −17.7 dBFS instead of a narrow window near
+    /// −4 dB). Range 0.0–1.0.
     var kneeSmooth:  Float = 0.5
+    var curveType: ClipperCurveType = .quadratic   // default preserves current behavior exactly
+    // NEW — when enabled, automatically reduces output level to approximately
+    // offset the loudness increase introduced by `driveDB`, so users can audition
+    // curve shape/character without a loudness bias influencing the comparison.
+    // This is a perceptually-reasonable approximation, not true RMS/loudness
+    // matching (which would require a separate metering pass and is out of scope
+    // for a real-time per-sample stage).
+    var autoCompensateGain: Bool = true
 
     static let `default` = SoftClipperConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, driveDB, thresholdDB, kneeSmooth, curveType, autoCompensateGain
+    }
+
+    init(isEnabled: Bool = false, driveDB: Float = 0.0, thresholdDB: Float = -1.5, kneeSmooth: Float = 0.5, curveType: ClipperCurveType = .quadratic, autoCompensateGain: Bool = true) {
+        self.isEnabled   = isEnabled
+        self.driveDB     = driveDB
+        self.thresholdDB = thresholdDB
+        self.kneeSmooth  = kneeSmooth
+        self.curveType   = curveType
+        self.autoCompensateGain = autoCompensateGain
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled   = try c.decodeIfPresent(Bool.self,   forKey: .isEnabled)   ?? false
+        driveDB     = try c.decodeIfPresent(Float.self,  forKey: .driveDB)     ?? 0.0
+        thresholdDB = try c.decodeIfPresent(Float.self,  forKey: .thresholdDB) ?? -1.5
+        kneeSmooth  = try c.decodeIfPresent(Float.self,  forKey: .kneeSmooth)  ?? 0.5
+        curveType   = try c.decodeIfPresent(ClipperCurveType.self, forKey: .curveType) ?? .quadratic
+        autoCompensateGain = try c.decodeIfPresent(Bool.self, forKey: .autoCompensateGain) ?? true
+    }
 }
 
 // MARK: - Brickwall Limiter Configuration
