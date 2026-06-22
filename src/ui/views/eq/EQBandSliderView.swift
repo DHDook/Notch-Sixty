@@ -56,7 +56,7 @@ struct EQBandSliderView: View {
         VStack(alignment: .center, spacing: 4) {
             Text("\(bandNumber)")
                 .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundStyle(band.isDynamic ? .accent : .tertiary)
+                .foregroundStyle(band.isDynamic ? Color.accentColor : Color.secondary)
                 .monospacedDigit()
 
             HStack(spacing: 0) {
