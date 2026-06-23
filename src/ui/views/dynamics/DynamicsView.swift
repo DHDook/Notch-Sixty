@@ -193,8 +193,6 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
                         Divider()
-                        definitionEntry(title: "Room Correction", body: "Applies inverse filter to match a target response curve. Requires REW measurement import for accurate room correction.")
-                        Divider()
                         definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions for more robust room correction.")
                         Divider()
                         definitionEntry(
@@ -250,7 +248,6 @@ struct DynamicsInlineView: View {
             col2Toggle(label: "Denoiser",    isOn: inlineDenoisingEnabled)
             col2Toggle(label: "IR Align",    isOn: inlineIRAlignmentEnabled)
             col2Toggle(label: "Crosstalk",   isOn: inlineCrosstalkEnabled)
-            col2Toggle(label: "Rm. Correct.", isOn: inlineRoomCorrectionBinding)
             col2Toggle(label: "Sub Align",   isOn: inlineSubBassEnabled)
             col2Toggle(label: "FIR",         isOn: inlineConvolutionEnabled)
             col2Toggle(label: "4x OS",       isOn: inlineOversamplingBinding)
@@ -567,12 +564,6 @@ struct DynamicsInlineView: View {
         Binding(
             get: { store.dynamicsConfig.advanced.linearPhaseEQEnabled },
             set: { val in var adv = store.dynamicsConfig.advanced; adv.linearPhaseEQEnabled = val; store.updateAdvancedProcessing(adv) }
-        )
-    }
-    private var inlineRoomCorrectionBinding: Binding<Bool> {
-        Binding(
-            get: { store.dynamicsConfig.advanced.roomCorrectionEnabled },
-            set: { val in var adv = store.dynamicsConfig.advanced; adv.roomCorrectionEnabled = val; store.updateAdvancedProcessing(adv) }
         )
     }
 }

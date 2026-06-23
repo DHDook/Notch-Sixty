@@ -530,6 +530,7 @@ final class EqualiserStore: ObservableObject {
     let sampleRateService: SampleRateObserving
     let eqConfiguration: EQConfiguration
     let presetManager: PresetManager
+    let roomCorrectionPresetManager = RoomCorrectionPresetManager()
     let meterStore: MeterStore
     let updateService = UpdateCheckService()
     let rtaAnalyzer        = AdvancedDualSpectrumAnalyzer()
@@ -1257,17 +1258,20 @@ final class EqualiserStore: ObservableObject {
         let weight = seatMeasurements.isEmpty ? 1.5 : 1.0 // Primary seat gets higher weight
         seatMeasurements.append(SeatMeasurement(complexResponse: complexResponse, weight: weight))
         pendingMeasuredCurve = nil
+        roomCorrectionPresetManager.markAsModified()
     }
 
     /// Clears all accumulated seat measurements.
     func clearSeatMeasurements() {
         seatMeasurements.removeAll()
+        roomCorrectionPresetManager.markAsModified()
     }
 
     /// Updates the weight for a specific seat measurement (Part 4.2).
     func updateSeatWeight(at index: Int, weight: Double) {
         guard index >= 0 && index < seatMeasurements.count else { return }
         seatMeasurements[index].weight = max(0.25, min(2.0, weight))
+        roomCorrectionPresetManager.markAsModified()
     }
 
     /// Imports a REW measurement file as a seat measurement (Part 4.3).
@@ -1279,6 +1283,7 @@ final class EqualiserStore: ObservableObject {
                     let weight = self.seatMeasurements.isEmpty ? 1.5 : 1.0 // Primary seat gets higher weight
                     let seatMeasurement = SeatMeasurement(complexResponse: result.complexResponse, weight: weight)
                     self.seatMeasurements.append(seatMeasurement)
+                    self.roomCorrectionPresetManager.markAsModified()
                     // Show warnings if any
                     if !result.warnings.isEmpty {
                         self.measurementError = result.warnings.joined(separator: "\n")
@@ -1584,7 +1589,84 @@ final class EqualiserStore: ObservableObject {
         // Clear preset selection (this is a new unsaved preset)
         presetManager.selectPreset(named: nil)
     }
-    
+
+    // MARK: - Room Correction Preset Management
+
+    /// Saves the current room correction settings as a new preset.
+    @discardableResult
+    func saveCurrentAsRoomCorrectionPreset(named name: String) throws -> RoomCorrectionPreset {
+        let settings = RoomCorrectionPresetSettings(
+            targetCurveName: selectedTargetCurveName,
+            customTargetCurve: selectedTargetCurveName == "Custom…" ? targetCurve.map(TargetCurvePoint.init) : nil,
+            seatMeasurements: seatMeasurements,
+            measuredResponse: measuredResponse.map(TargetCurvePoint.init),
+            micCalibration: micCalibration,
+            appliedBands: eqConfiguration.leftState.roomCorrection.bands.map { PresetBand(from: $0) },
+            roomCorrectionEnabled: dynamicsConfig.advanced.roomCorrectionEnabled,
+            firTapCount: nil, // FIR correction not yet implemented for room correction presets
+            firCorrectionApplied: false
+        )
+        let preset = RoomCorrectionPreset(
+            metadata: RoomCorrectionPresetMetadata(name: name, createdAt: Date(), modifiedAt: Date()),
+            settings: settings
+        )
+        try roomCorrectionPresetManager.savePreset(preset)
+        roomCorrectionPresetManager.selectPreset(named: name)
+        return preset
+    }
+
+    /// Updates the currently selected room correction preset with current settings.
+    func updateCurrentRoomCorrectionPreset() throws {
+        guard let currentName = roomCorrectionPresetManager.selectedPresetName else { return }
+        try saveCurrentAsRoomCorrectionPreset(named: currentName)
+    }
+
+    /// Loads a room correction preset and applies it.
+    func loadRoomCorrectionPreset(_ preset: RoomCorrectionPreset) {
+        selectedTargetCurveName = preset.settings.targetCurveName
+        if let custom = preset.settings.customTargetCurve {
+            targetCurve = custom.map { ($0.frequency, $0.gainDB) }
+        } else if let curve = TargetCurveLibrary.allCurves.first(where: { $0.name == preset.settings.targetCurveName }) {
+            targetCurve = curve.curve
+        }
+        seatMeasurements = preset.settings.seatMeasurements
+        measuredResponse = preset.settings.measuredResponse.map { ($0.frequency, $0.gainDB) }
+        micCalibration = preset.settings.micCalibration
+
+        // Re-stage the already-fitted bands directly (instant path — no re-fit needed).
+        let bands = preset.settings.appliedBands.map { $0.toEQBandConfiguration() }
+        routingCoordinator.eqStager.applyRoomCorrectionBands(bands)
+        roomCorrectionBandCount = bands.count
+
+        if preset.settings.firCorrectionApplied, let tapCount = preset.settings.firTapCount {
+            // Recompute path, per §4.2 recommendation — re-derive rather than store raw samples.
+            // Note: FIR room correction not yet implemented, this is a placeholder.
+            logger.info("FIR room correction not yet implemented")
+        }
+
+        var adv = dynamicsConfig.advanced
+        adv.roomCorrectionEnabled = preset.settings.roomCorrectionEnabled
+        updateAdvancedProcessing(adv)
+        recomputeStaticPreamp()
+
+        roomCorrectionPresetManager.selectPreset(named: preset.metadata.name)
+    }
+
+    /// Loads a room correction preset by name.
+    func loadRoomCorrectionPreset(named name: String) {
+        guard let preset = roomCorrectionPresetManager.preset(named: name) else { return }
+        loadRoomCorrectionPreset(preset)
+    }
+
+    /// Discards the current room correction calibration and deselects any preset.
+    func createNewRoomCorrectionPreset() {
+        clearRoomCalibration()
+        clearSeatMeasurements()
+        measuredResponse = []
+        pendingMeasuredCurve = nil
+        roomCorrectionPresetManager.selectPreset(named: nil)
+    }
+
     // MARK: - Helpers
 
     /// Determines the automatic-mode output device at startup using unified selection logic.
@@ -1702,6 +1784,7 @@ final class EqualiserStore: ObservableObject {
         roomCorrectionBandCount = bands.count
         pendingMeasuredCurve = nil
         recomputeStaticPreamp()
+        roomCorrectionPresetManager.markAsModified()
     }
 
     func clearRoomCalibration() {
@@ -1711,6 +1794,7 @@ final class EqualiserStore: ObservableObject {
         updateAdvancedProcessing(adv)
         roomCorrectionBandCount = 0
         recomputeStaticPreamp()
+        roomCorrectionPresetManager.markAsModified()
     }
 
     // MARK: - Convolution Engine
@@ -1761,6 +1845,7 @@ final class EqualiserStore: ObservableObject {
                 let calibration = try MicCalibrationLoader.parse(from: url)
                 await MainActor.run {
                     self.micCalibration = calibration
+                    self.roomCorrectionPresetManager.markAsModified()
                 }
             } catch {
                 await MainActor.run {
@@ -1773,6 +1858,7 @@ final class EqualiserStore: ObservableObject {
     func clearMicCalibration() {
         micCalibration = nil
         micCalibrationLoadError = nil
+        roomCorrectionPresetManager.markAsModified()
     }
 
     /// Call from routingStatus .active case (pipeline restart) alongside

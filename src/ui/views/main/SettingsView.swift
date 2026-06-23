@@ -592,6 +592,23 @@ struct RoomCalibrationTab: View {
                 Text("About Room Calibration")
             }
 
+            // ── Room Correction Enabled ─────────────────────────────────────
+            Section {
+                Toggle("Room Correction Enabled", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.roomCorrectionEnabled },
+                    set: { val in
+                        var adv = store.dynamicsConfig.advanced
+                        adv.roomCorrectionEnabled = val
+                        store.updateAdvancedProcessing(adv)
+                    }
+                ))
+                Text("Turn off to temporarily bypass correction without losing your calibration. Use \"Discard All\" instead if you want to clear the measurement entirely.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Room Correction")
+            }
+
             // ── Target Curve ───────────────────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 8) {

@@ -1043,41 +1043,6 @@ struct FIRImpulseResponseConfig: Codable, Equatable, Sendable {
     }
 }
 
-// MARK: - Room Correction Configuration
-
-/// Room correction configuration with target curve and smoothing options.
-struct RoomCorrectionConfig: Codable, Equatable, Sendable {
-    var enabled: Bool = false
-    var targetCurve: RoomCorrectionEngine.TargetCurve = .flat
-    var smoothingCrossoverHz: Double = 500.0
-    var maxGainDB: Double = 12.0
-    var tapCount: Int = 4096
-
-    static let `default` = RoomCorrectionConfig()
-
-    private enum CodingKeys: String, CodingKey {
-        case enabled, targetCurve, smoothingCrossoverHz, maxGainDB, tapCount
-    }
-
-    init(enabled: Bool = false, targetCurve: RoomCorrectionEngine.TargetCurve = .flat, smoothingCrossoverHz: Double = 500.0, maxGainDB: Double = 12.0, tapCount: Int = 4096) {
-        self.enabled = enabled
-        self.targetCurve = targetCurve
-        self.smoothingCrossoverHz = smoothingCrossoverHz
-        self.maxGainDB = maxGainDB
-        self.tapCount = tapCount
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        targetCurve = try c.decodeIfPresent(RoomCorrectionEngine.TargetCurve.self, forKey: .targetCurve) ?? .flat
-        smoothingCrossoverHz = try c.decodeIfPresent(Double.self, forKey: .smoothingCrossoverHz) ?? 500.0
-        maxGainDB = try c.decodeIfPresent(Double.self, forKey: .maxGainDB) ?? 12.0
-        tapCount = try c.decodeIfPresent(Int.self, forKey: .tapCount) ?? 4096
-    }
-}
-
-// MARK: - Advanced Processing Configuration
 
 /// Extended processing parameters covering spatial, spectral, system, and LTI features.
 ///
@@ -1293,9 +1258,6 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     // ── D. FIR Impulse Response (Room Correction) ─────────────────────
     var firImpulseResponse: FIRImpulseResponseConfig = FIRImpulseResponseConfig()
 
-    // ── D. Room Correction (Target Curve + Smoothing) ─────────────────
-    var roomCorrection: RoomCorrectionConfig = RoomCorrectionConfig()
-
     // ── D. De-Harsh Tilt Filter ───────────────────────────────────────
     var deharshFilterEnabled: Bool = false
     var deharshTiltAmountDB: Float = -1.5
@@ -1473,7 +1435,6 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case deesserDynamicModeEnabled
         case dynamicEQ
         case firImpulseResponse
-        case roomCorrection
         case coefficientDecouplingEnabled
         case deharshFilterEnabled, deharshTiltAmountDB
         case stereoBalancePosition
@@ -1528,7 +1489,6 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         deesserDynamicModeEnabled: Bool = false,
         dynamicEQ: DynamicEQConfig = DynamicEQConfig(),
         firImpulseResponse: FIRImpulseResponseConfig = FIRImpulseResponseConfig(),
-        roomCorrection: RoomCorrectionConfig = RoomCorrectionConfig(),
         coefficientDecouplingEnabled: Bool = true,
         deharshFilterEnabled: Bool = false,
         deharshTiltAmountDB: Float = -1.5,
@@ -1592,7 +1552,6 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.deesserDynamicModeEnabled        = deesserDynamicModeEnabled
         self.dynamicEQ                        = dynamicEQ
         self.firImpulseResponse              = firImpulseResponse
-        self.roomCorrection                 = roomCorrection
         self.coefficientDecouplingEnabled     = coefficientDecouplingEnabled
         self.deharshFilterEnabled             = deharshFilterEnabled
         self.deharshTiltAmountDB              = deharshTiltAmountDB
@@ -1658,7 +1617,6 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         deesserDynamicModeEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .deesserDynamicModeEnabled)        ?? false
         dynamicEQ                        = try c.decodeIfPresent(DynamicEQConfig.self,       forKey: .dynamicEQ)                        ?? DynamicEQConfig()
         firImpulseResponse              = try c.decodeIfPresent(FIRImpulseResponseConfig.self, forKey: .firImpulseResponse)              ?? FIRImpulseResponseConfig()
-        roomCorrection                 = try c.decodeIfPresent(RoomCorrectionConfig.self,     forKey: .roomCorrection)                 ?? RoomCorrectionConfig()
         coefficientDecouplingEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .coefficientDecouplingEnabled)     ?? true
         deharshFilterEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .deharshFilterEnabled)             ?? false
         deharshTiltAmountDB              = try c.decodeIfPresent(Float.self,                 forKey: .deharshTiltAmountDB)              ?? -1.5
