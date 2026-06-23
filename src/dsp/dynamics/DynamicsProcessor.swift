@@ -276,12 +276,27 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let pendingDynEQCoeffsBuf: UnsafeMutablePointer<Float>
     private let dynamicEQBypassBuf: UnsafeMutablePointer<Int32>  // 1 per band (0/1)
     private let pendingDynEQBypassBuf: UnsafeMutablePointer<Int32>
-    // Params: store as 4 floats × maxBands (thresholdDB, ratio, attackMs, releaseMs)
+    // Params: store as 9 floats × maxBands (thresholdDB, ratio, attackMs, releaseMs, rangeDB, direction, boostThresholdDB, boostRatio, maxBoostDB)
     private let dynamicEQParamsBuf: UnsafeMutablePointer<Float>
     private let pendingDynEQParamsBuf: UnsafeMutablePointer<Float>
     nonisolated(unsafe) var activeDynamicEQBandCount: Int = 0
     nonisolated(unsafe) var pendingDynamicEQBandCount: Int = 0
     private var hasDynamicEQUpdate = ManagedAtomic<Bool>(false)
+
+    // Vectorized Dynamic EQ: vDSP_biquad setups and delay arrays
+    private var dynamicEQBiquadSetups: [vDSP_biquad_Setup?]  // One per band
+    private var dynamicEQBiquadDelays: [[Float]]  // 2 floats per band per channel
+
+    // Vectorized Dynamic EQ: scratch buffers (pre-allocated to maxFrameCount × maxBands)
+    private let dynamicEQDetectorScratch: UnsafeMutablePointer<Float>  // Filtered signal (bandComponent)
+    private let dynamicEQAbsScratch: UnsafeMutablePointer<Float>  // Absolute of filtered signal
+    private let dynamicEQEnvScratch: UnsafeMutablePointer<Float>  // Envelope follower output
+    private let dynamicEQEnvDBScratch: UnsafeMutablePointer<Float>  // Envelope in dB
+    private let dynamicEQGrDBScratch: UnsafeMutablePointer<Float>  // Gain reduction in dB
+    private let dynamicEQGainLinearScratch: UnsafeMutablePointer<Float>  // Linear gain (10^(grDB/20))
+    private let dynamicEQResidualScratch: UnsafeMutablePointer<Float>  // Residual (input - bandComponent)
+    private let dynamicEQShapedBandScratch: UnsafeMutablePointer<Float>  // Shaped band (bandComponent × gainLinear)
+    private let dynamicEQTenArray: UnsafeMutablePointer<Float>  // Constant 10.0 array for vvpowf
 
     // FIR Impulse Response — runs on full-band signal
     // Uses ConvolutionEngine for FFT-based partitioned convolution
@@ -829,6 +844,42 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.dynamicEQReleaseCoeffsBuf = UnsafeMutablePointer<Float>.allocate(capacity: maxBands)
         self.dynamicEQReleaseCoeffsBuf.initialize(repeating: 0, count: maxBands)
 
+        // Allocate vDSP_biquad setups and delay arrays for vectorized detector filter
+        // One setup per band, recreated when coefficients change
+        self.dynamicEQBiquadSetups = Array(repeating: nil, count: maxBands)
+        // Delay arrays: 2 floats per band (vDSP_biquad format for single-section biquad)
+        self.dynamicEQBiquadDelays = Array(repeating: Array(repeating: 0.0, count: 2), count: maxCh * maxBands)
+
+        // Allocate scratch buffers for vectorized processing (per band, sized to max frame count)
+        let maxFrames = storedMaxFrameCount
+        self.dynamicEQDetectorScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQDetectorScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQAbsScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQAbsScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQEnvScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQEnvScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQEnvDBScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQEnvDBScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQGrDBScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQGrDBScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQGainLinearScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQGainLinearScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQResidualScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQResidualScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        self.dynamicEQShapedBandScratch = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames * maxBands)
+        self.dynamicEQShapedBandScratch.initialize(repeating: 0, count: maxFrames * maxBands)
+
+        // Pre-allocate constant array for vvpowf (10.0 repeated)
+        self.dynamicEQTenArray = UnsafeMutablePointer<Float>.allocate(capacity: maxFrames)
+        self.dynamicEQTenArray.initialize(repeating: 10.0, count: maxFrames)
+
         self.hasDynamicEQUpdate = ManagedAtomic(false)
 
         // FIR Impulse Response — ConvolutionEngine for FFT-based partitioned convolution
@@ -1048,6 +1099,33 @@ final class DynamicsProcessor: @unchecked Sendable {
         dynamicEQAttackCoeffsBuf.deallocate()
         dynamicEQReleaseCoeffsBuf.deinitialize(count: DynamicEQConfig.maxDynamicEQBands)
         dynamicEQReleaseCoeffsBuf.deallocate()
+
+        // Deallocate vDSP_biquad setups
+        for idx in 0..<DynamicEQConfig.maxDynamicEQBands {
+            if let setup = dynamicEQBiquadSetups[idx] {
+                vDSP_biquad_DestroySetup(setup)
+            }
+        }
+
+        // Deallocate vectorized Dynamic EQ scratch buffers
+        dynamicEQDetectorScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQDetectorScratch.deallocate()
+        dynamicEQAbsScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQAbsScratch.deallocate()
+        dynamicEQEnvScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQEnvScratch.deallocate()
+        dynamicEQEnvDBScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQEnvDBScratch.deallocate()
+        dynamicEQGrDBScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQGrDBScratch.deallocate()
+        dynamicEQGainLinearScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQGainLinearScratch.deallocate()
+        dynamicEQResidualScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQResidualScratch.deallocate()
+        dynamicEQShapedBandScratch.deinitialize(count: storedMaxFrameCount * DynamicEQConfig.maxDynamicEQBands)
+        dynamicEQShapedBandScratch.deallocate()
+        dynamicEQTenArray.deinitialize(count: storedMaxFrameCount)
+        dynamicEQTenArray.deallocate()
 
         // Deallocate Sub EQ coefficient and bypass buffers
         subEQCoeffsBuf.deinitialize(count: Self.maxSubEQStateFloats)
@@ -1517,6 +1595,12 @@ final class DynamicsProcessor: @unchecked Sendable {
             pendingDynEQParamsBuf[idx * 9 + 6] = band.boostThresholdDB
             pendingDynEQParamsBuf[idx * 9 + 7] = band.boostRatio
             pendingDynEQParamsBuf[idx * 9 + 8] = band.maxBoostDB
+
+            // Create vDSP_biquad setup for vectorized detector filter
+            // Coefficients format: [b0, b1, b2, a1, a2] for single-section biquad
+            // vDSP_biquad_CreateSetup expects Double coefficients
+            var coeffsD = [c.b0, c.b1, c.b2, c.a1, c.a2]
+            dynamicEQBiquadSetups[idx] = vDSP_biquad_CreateSetup(&coeffsD, 1)
         }
         pendingDynamicEQBandCount = n
         recomputeDynamicEQCoeffs()
@@ -1901,6 +1985,10 @@ final class DynamicsProcessor: @unchecked Sendable {
                        n * MemoryLayout<Int32>.size)
                 memcpy(dynamicEQParamsBuf, pendingDynEQParamsBuf,
                        n * 9 * MemoryLayout<Float>.size)
+                // Swap vDSP_biquad setups atomically
+                for idx in 0..<n {
+                    dynamicEQBiquadSetups[idx] = dynamicEQBiquadSetups[idx]
+                }
             }
             activeDynamicEQBandCount = n
             // Preserve envelope and GR state for continuity
@@ -1908,76 +1996,88 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         guard activeDynamicEQBandCount > 0 else { return }
 
-        let sampleRate = storedSampleRate
+        let maxBands = DynamicEQConfig.maxDynamicEQBands
 
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
 
             for idx in 0..<activeDynamicEQBandCount {
-                guard idx < DynamicEQConfig.maxDynamicEQBands else { break }
+                guard idx < maxBands else { break }
                 guard dynamicEQBypassBuf[idx] == 0 else { continue }
 
-                let maxBands = DynamicEQConfig.maxDynamicEQBands
-                var w1   = dynamicEQFilterState[ch * maxBands * 2 + idx * 2]
-                var w2   = dynamicEQFilterState[ch * maxBands * 2 + idx * 2 + 1]
-                var env  = dynamicEQEnvelopeState[ch * maxBands + idx]
-                var grDB = dynamicEQGainReductionDB[ch * maxBands + idx]
-
-                let b0 = dynamicEQCoeffsBuf[idx * 5 + 0]
-                let b1 = dynamicEQCoeffsBuf[idx * 5 + 1]
-                let b2 = dynamicEQCoeffsBuf[idx * 5 + 2]
-                let na1 = dynamicEQCoeffsBuf[idx * 5 + 3]
-                let na2 = dynamicEQCoeffsBuf[idx * 5 + 4]
+                // Get parameters for this band
                 let thresholdDB = dynamicEQParamsBuf[idx * 9 + 0]
                 let ratio = dynamicEQParamsBuf[idx * 9 + 1]
-                let attackMs = dynamicEQParamsBuf[idx * 9 + 2]
-                let releaseMs = dynamicEQParamsBuf[idx * 9 + 3]
                 let rangeDB = dynamicEQParamsBuf[idx * 9 + 4]
                 let directionRaw = dynamicEQParamsBuf[idx * 9 + 5]
                 let boostThresholdDB = dynamicEQParamsBuf[idx * 9 + 6]
                 let boostRatio = dynamicEQParamsBuf[idx * 9 + 7]
                 let maxBoostDB = dynamicEQParamsBuf[idx * 9 + 8]
 
-                // Use cached attack/release coefficients (computed on main thread when sample rate or parameters change)
                 let attackCoeff = dynamicEQAttackCoeffsBuf[idx]
                 let releaseCoeff = dynamicEQReleaseCoeffsBuf[idx]
 
+                // Get delay array for this channel/band
+                let delayIdx = ch * maxBands + idx
+                var delay = dynamicEQBiquadDelays[delayIdx]
+
+                // Step 1: Vectorized detector/band-extraction filter using vDSP_biquad
+                guard let setup = dynamicEQBiquadSetups[idx] else { continue }
+                let detectorPtr = dynamicEQDetectorScratch.advanced(by: idx * count)
+                vDSP_biquad(setup, &delay, buf, 1, detectorPtr, 1, vDSP_Length(count))
+                // Save delay state
+                dynamicEQBiquadDelays[delayIdx] = delay
+
+                // Step 2: Vectorized abs() for envelope follower
+                let absPtr = dynamicEQAbsScratch.advanced(by: idx * count)
+                vDSP_vabs(detectorPtr, 1, absPtr, 1, vDSP_Length(count))
+
+                // Step 2 continued: Scalar envelope follower recursion (sequential by design)
+                let envPtr = dynamicEQEnvScratch.advanced(by: idx * count)
+                var env = dynamicEQEnvelopeState[ch * maxBands + idx]
                 for i in 0..<count {
-                    let input = buf[i]
-
-                    // Run input through the band-detection filter for level sensing.
-                    let filtered = Self.processBiquad(input, b0: b0, b1: b1, b2: b2,
-                                                     na1: na1, na2: na2, w1: &w1, w2: &w2)
-
-                    // Envelope follower on the band-filtered signal.
-                    let absFiltered = abs(filtered)
-                    if absFiltered > env {
-                        env = attackCoeff * env + (1.0 - attackCoeff) * absFiltered
+                    let absVal = absPtr[i]
+                    if absVal > env {
+                        env = attackCoeff * env + (1.0 - attackCoeff) * absVal
                     } else {
-                        env = releaseCoeff * env + (1.0 - releaseCoeff) * absFiltered
+                        env = releaseCoeff * env + (1.0 - releaseCoeff) * absVal
                     }
+                    envPtr[i] = env
+                }
+                dynamicEQEnvelopeState[ch * maxBands + idx] = env
 
-                    // Gain computer: compute gain reduction based on direction.
-                    let envDB = 20.0 * log10(max(env, 1e-10))
+                // Step 3: Vectorized log10 for envelope-to-dB conversion
+                let envDBPtr = dynamicEQEnvDBScratch.advanced(by: idx * count)
+                var floorVal: Float = 1e-10
+                vDSP_vthr(envPtr, 1, &floorVal, envDBPtr, 1, vDSP_Length(count))
+                var n = Int32(count)
+                vvlog10f(envDBPtr, envDBPtr, &n)
+                var twenty: Float = 20.0
+                vDSP_vsmul(envDBPtr, 1, &twenty, envDBPtr, 1, vDSP_Length(count))
+
+                // Step 3 continued: Scalar gain computer + grDB smoothing (sequential by design)
+                let grDBPtr = dynamicEQGrDBScratch.advanced(by: idx * count)
+                var grDB = dynamicEQGainReductionDB[ch * maxBands + idx]
+                let direction = Int(directionRaw)
+
+                for i in 0..<count {
+                    let envDB = envDBPtr[i]
                     let overThreshold = envDB - thresholdDB
                     var targetGR: Float = 0.0
 
-                    // Determine direction from raw value (0=cutOnly, 1=boostOnly, 2=both)
-                    let direction = Int(directionRaw)
-
                     if direction == 0 {
-                        // cutOnly: only reduce when above threshold
+                        // cutOnly
                         if overThreshold > 0 {
                             targetGR = -overThreshold * (ratio - 1.0) / ratio
                         }
                     } else if direction == 1 {
-                        // boostOnly: only boost when below boost threshold
+                        // boostOnly
                         let underBoostThreshold = boostThresholdDB - envDB
                         if underBoostThreshold > 0 {
                             targetGR = underBoostThreshold * (boostRatio - 1.0) / boostRatio
                         }
                     } else {
-                        // both: cut above threshold, boost below boost threshold
+                        // both
                         if overThreshold > 0 {
                             targetGR = -overThreshold * (ratio - 1.0) / ratio
                         } else {
@@ -1988,35 +2088,42 @@ final class DynamicsProcessor: @unchecked Sendable {
                         }
                     }
 
-                    // Apply rangeDB clamp (maximum attenuation ceiling for cut side)
+                    // Apply rangeDB clamp (maximum attenuation ceiling)
                     if targetGR < rangeDB {
                         targetGR = rangeDB
                     }
 
-                    // Apply maxBoostDB clamp (maximum boost ceiling for boost side)
+                    // Apply maxBoostDB clamp (maximum boost ceiling)
                     if targetGR > maxBoostDB {
                         targetGR = maxBoostDB
                     }
 
-                    // Smooth gain reduction.
-                    // Use attack when moving toward more gain reduction (more negative) or more boost (more positive).
-                    // Use release when moving toward less gain reduction (less negative) or less boost (less positive).
+                    // Smooth gain reduction
                     let grCoeff = (targetGR < grDB) ? attackCoeff : releaseCoeff
                     grDB = grCoeff * grDB + (1.0 - grCoeff) * targetGR
-
-                    // Apply gain reduction in a frequency-selective manner.
-                    // Extract the band component, shape it, then recombine with residual.
-                    let bandComponent = filtered
-                    let residual = input - bandComponent
-                    let gainLinear = pow(10.0, grDB / 20.0)
-                    let shapedBand = bandComponent * gainLinear
-                    buf[i] = residual + shapedBand
+                    grDBPtr[i] = grDB
                 }
+                dynamicEQGainReductionDB[ch * maxBands + idx] = grDB
 
-                dynamicEQFilterState[ch * maxBands * 2 + idx * 2]     = w1
-                dynamicEQFilterState[ch * maxBands * 2 + idx * 2 + 1] = w2
-                dynamicEQEnvelopeState[ch * maxBands + idx]            = env
-                dynamicEQGainReductionDB[ch * maxBands + idx]          = grDB
+                // Step 3 continued: Vectorized pow for dB-to-linear conversion
+                let gainLinearPtr = dynamicEQGainLinearScratch.advanced(by: idx * count)
+                var inv20: Float = 1.0 / 20.0
+                vDSP_vsmul(grDBPtr, 1, &inv20, gainLinearPtr, 1, vDSP_Length(count))
+                var n2 = Int32(count)
+                vvpowf(gainLinearPtr, gainLinearPtr, dynamicEQTenArray, &n2)
+
+                // Step 3 continued: Vectorized band-extract-and-recombine
+                let residualPtr = dynamicEQResidualScratch.advanced(by: idx * count)
+                let shapedBandPtr = dynamicEQShapedBandScratch.advanced(by: idx * count)
+
+                // residual = input - bandComponent (vDSP_vsub computes second - first)
+                vDSP_vsub(buf, 1, detectorPtr, 1, residualPtr, 1, vDSP_Length(count))
+
+                // shapedBand = bandComponent * gainLinear
+                vDSP_vmul(detectorPtr, 1, gainLinearPtr, 1, shapedBandPtr, 1, vDSP_Length(count))
+
+                // output = residual + shapedBand
+                vDSP_vadd(residualPtr, 1, shapedBandPtr, 1, buf, 1, vDSP_Length(count))
             }
         }
     }

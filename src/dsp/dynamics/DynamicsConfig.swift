@@ -984,7 +984,10 @@ struct DynamicEQBand: Codable, Equatable, Sendable {
 
 /// Dynamic EQ configuration.
 struct DynamicEQConfig: Codable, Equatable, Sendable {
-    static let maxDynamicEQBands = 8
+    static let maxDynamicEQBands = 16  // was 8. Matches the static EQ chain's power-of-two convention (maxBandCount = 64).
+                                       // See Package A in dynamic-eq-vectorization-and-cap.md — this number is only
+                                       // safe to ship alongside the vectorized processDynamicEQ() implementation, not
+                                       // against the old scalar loop.
     var enabled: Bool = false
     var bands: [DynamicEQBand] = []
 

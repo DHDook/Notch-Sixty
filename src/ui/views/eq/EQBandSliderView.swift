@@ -293,10 +293,10 @@ struct EQBandDetailPopover: View {
             .pickerStyle(.segmented)
             .onChange(of: isDynamic) { _, newValue in
                 if newValue {
-                    // Check if we're at the 8-band cap
+                    // Check if we're at the 16-band cap
                     let currentDynamicCount = store.eqConfiguration.bands.filter { $0.isDynamic }.count
                     if currentDynamicCount >= DynamicEQConfig.maxDynamicEQBands {
-                        dynamicToggleError = "Up to 8 bands can be Dynamic at once — turn off Dynamic on another band first."
+                        dynamicToggleError = "Up to 16 bands can be Dynamic at once — turn off Dynamic on another band first."
                         // Revert the toggle
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             isDynamic = false
