@@ -291,7 +291,6 @@ final class EqualiserStore: ObservableObject {
     @Published var micCalibration: MicCalibration? = nil
     @Published var micCalibrationLoadError: String? = nil
     @Published var excessPhaseConfig: ExcessPhaseConfig = ExcessPhaseConfig()
-    @Published var eqHeadroomCompensationEnabled: Bool = true
     @Published var staticPreampDB: Float = 0.0
 
     // MARK: - Snapshot Comparison (Part 9.1)
@@ -677,6 +676,12 @@ final class EqualiserStore: ObservableObject {
     func recomputeStaticPreamp() {
         guard let pipeline = routingCoordinator.pipelineManager.renderPipeline else { return }
 
+        guard dynamicsConfig.advanced.eqHeadroomCompensationEnabled else {
+            staticPreampDB = 0.0
+            pipeline.callbackContext?.setStaticPreampGain(gainDB: 0.0)
+            return
+        }
+
         // Gather current EQ layer bands (user EQ)
         let eqLayer = eqConfiguration.bands.map { band in
             PresetBand(
@@ -716,6 +721,7 @@ final class EqualiserStore: ObservableObject {
         )
 
         // Apply to render pipeline
+        self.staticPreampDB = staticPreampDB
         pipeline.callbackContext?.setStaticPreampGain(gainDB: staticPreampDB)
     }
 
@@ -1182,6 +1188,9 @@ final class EqualiserStore: ObservableObject {
                     .callbackContext?.updateConvolutionIR(left: left, right: right)
                 self.routingCoordinator.pipelineManager.renderPipeline?
                     .callbackContext?.setConvolutionEnabled(true)
+                self.convolutionConfig.enabled = true
+                self.convolutionConfig.irDisplayName = "Room Correction (FIR)"
+                self.convolutionConfig.irBookmark = nil
             }
         }
     }
@@ -1796,6 +1805,9 @@ final class EqualiserStore: ObservableObject {
         adv.roomCorrectionEnabled = false
         updateAdvancedProcessing(adv)
         roomCorrectionBandCount = 0
+        if convolutionConfig.irDisplayName == "Room Correction (FIR)" {
+            clearConvolutionIR()
+        }
         recomputeStaticPreamp()
         roomCorrectionPresetManager.markAsModified()
     }
@@ -1837,6 +1849,44 @@ final class EqualiserStore: ObservableObject {
         convolutionConfig.enabled = enabled
         routingCoordinator.pipelineManager.renderPipeline?.callbackContext?
             .setConvolutionEnabled(enabled && convolutionConfig.irDisplayName != nil)
+    }
+
+    func clearConvolutionIR() {
+        setConvolutionEnabled(false)
+        convolutionConfig.irDisplayName = nil
+        convolutionConfig.irBookmark = nil
+        convolutionLoadError = nil
+        routingCoordinator.updateConvolutionIR(left: [], right: [])
+    }
+
+    func loadFIRImpulseResponse(url: URL) {
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        Task.detached(priority: .userInitiated) {
+            do {
+                let result = try IRFileLoader.load(url: url, targetSampleRate: sr)
+                await MainActor.run {
+                    var adv = self.dynamicsConfig.advanced
+                    adv.firImpulseResponse.leftIR = result.leftSamples
+                    adv.firImpulseResponse.rightIR = result.rightSamples
+                    adv.firImpulseResponse.sampleRate = sr
+                    adv.firImpulseResponse.tapCount = result.leftSamples.count
+                    if !adv.firImpulseResponse.enabled {
+                        adv.firImpulseResponse.enabled = true
+                    }
+                    self.updateAdvancedProcessing(adv)
+                }
+            } catch {
+                await MainActor.run {
+                    self.convolutionLoadError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func clearFIRImpulseResponse() {
+        var adv = dynamicsConfig.advanced
+        adv.firImpulseResponse = FIRImpulseResponseConfig()
+        updateAdvancedProcessing(adv)
     }
 
     // MARK: - Microphone Calibration (Part 4.1)

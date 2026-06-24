@@ -90,7 +90,7 @@ private struct DynamicsSliderRow: View {
 // MARK: - Inline Header Widget
 
 /// Compact dynamics widget shown inline in the main window header.
-/// Six-column layout (max 8 toggles per column):
+/// Six-column layout (max 10 toggles per column):
 ///   Col 1 — core dynamics chain stages, in signal-chain order
 ///   Col 2 — later dynamics + spatial stages
 ///   Col 3 — LTI processing + global processing-mode flags
@@ -231,20 +231,112 @@ struct DynamicsInlineView: View {
                 )
             }
             col2ToggleWithSettings(
-                label: "Hi-Res Coef",
-                isOn: inlineCoefficientDecouplingEnabled,
-                fullName: "Hi-Res Coefficient Decoupling"
+                label: "Denoiser",
+                isOn: inlineDenoisingEnabled,
+                fullName: "Linear Denoising Engine"
             ) {
+                DynamicsSliderRow(
+                    label: "Threshold",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.linearDenoisingThresholdDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingThresholdDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: -80.0...(-20.0),
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dB", $0) }
+                )
                 HStack(spacing: 8) {
-                    Text("Decoupling Active")
+                    Text("Preset")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                    Text(store.dynamicsConfig.advanced.highResDecouplingActive ? "Yes (>96 kHz)" : "No")
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .foregroundStyle(store.dynamicsConfig.advanced.highResDecouplingActive ? .green : .secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.linearDenoisingPreset },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingPreset = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        ForEach(DenoiserPreset.allCases, id: \.self) { p in
+                            Text(p.rawValue).tag(p)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                HStack(spacing: 8) {
+                    Text("Quality")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.denoiserMode },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.denoiserMode = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        Text("Quality").tag(DenoiserMode.quality)
+                        Text("High").tag(DenoiserMode.high)
+                        Text("Ultra").tag(DenoiserMode.ultra)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                DynamicsSliderRow(
+                    label: "Reduction",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.denoiserReductionAmount) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.denoiserReductionAmount = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...1.0,
+                    step: 0.01,
+                    formatValue: { String(format: "%.2f", $0) }
+                )
+            }
+            col2ToggleWithSettings(
+                label: "FIR IR",
+                isOn: inlineFirImpulseResponseEnabled,
+                fullName: "FIR Impulse Response"
+            ) {
+                let fir = store.dynamicsConfig.advanced.firImpulseResponse
+                if !fir.leftIR.isEmpty {
+                    Text("Loaded: \(fir.leftIR.count) taps @ \(Int(fir.sampleRate)) Hz")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No impulse response loaded")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.tertiary)
+                }
+                HStack(spacing: 8) {
+                    Button("Load IR…") { openImpulseResponseFile { store.loadFIRImpulseResponse(url: $0) } }
+                    if !fir.leftIR.isEmpty {
+                        Button("Clear") { store.clearFIRImpulseResponse() }
+                    }
                 }
             }
             col2Toggle(label: "DC Filter", isOn: inlineDcOffsetEnabled)
+            col2ToggleWithSettings(
+                label: "Sub Align",
+                isOn: inlineSubBassEnabled,
+                fullName: "Sub-Bass Phase Alignment"
+            ) {
+                DynamicsSliderRow(
+                    label: "Frequency",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.subBassAlignmentFrequencyHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.subBassAlignmentFrequencyHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 40.0...120.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Q",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.subBassPhaseAlignmentQ) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.subBassPhaseAlignmentQ = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.5...2.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f", $0) }
+                )
+            }
             col2ToggleWithSettings(
                 label: "Widener",
                 isOn: inlineWideEnabled,
@@ -303,16 +395,7 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.1f LUFS", $0) }
                 )
             }
-            col2ToggleWithSettings(
-                label: "Contour",
-                isOn: inlineLoudnessContourEnabled,
-                fullName: "Loudness Contouring"
-            ) {
-                // Loudness Contouring is a simple toggle - no additional parameters
-                Text("Fletcher-Munson compensation curve adding gentle bass and treble lift for low-level listening.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            col2Toggle(label: "Contour", isOn: inlineLoudnessContourEnabled)
             col2ToggleWithSettings(
                 label: "De-Esser",
                 isOn: deEsserEnabledBinding,
@@ -497,6 +580,106 @@ struct DynamicsInlineView: View {
                 )
             }
             col2ToggleWithSettings(
+                label: "Bass Mgmt",
+                isOn: inlineBassManagementEnabled,
+                fullName: "Bass Management"
+            ) {
+                DynamicsSliderRow(
+                    label: "Crossover",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.bassManagement.crossoverHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.crossoverHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 40.0...200.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                HStack(spacing: 8) {
+                    Text("Slope")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.bassManagement.slope },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.slope = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        ForEach(BassCrossoverSlope.allCases, id: \.self) { s in
+                            Text(s.displayName).tag(s)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                DynamicsSliderRow(
+                    label: "Sub Gain",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.bassManagement.lowBandGainDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandGainDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: -12.0...12.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%+.1f dB", $0) }
+                )
+                Toggle("Invert Sub Polarity", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.bassManagement.lowBandPolarityInverted },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandPolarityInverted = v; store.updateAdvancedProcessing(adv) }
+                ))
+                // TODO: Expose lowBandLowShelfEnabled/FreqHz/GainDB, leftSpeakerDistanceM/rightSpeakerDistanceM/subwooferDistanceM, subEQBands
+            }
+            col2ToggleWithSettings(
+                label: "Gain Rider",
+                isOn: inlineAutoHeadroomEnabled,
+                fullName: "Dynamic Gain Rider"
+            ) {
+                DynamicsSliderRow(
+                    label: "Target GR",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.autoHeadroomTargetGRDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.autoHeadroomTargetGRDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.5...6.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Max Cut",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.autoHeadroomMaxReductionDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.autoHeadroomMaxReductionDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 3.0...12.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dB", $0) }
+                )
+                HStack(spacing: 8) {
+                    Text("Response")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.autoHeadroomSpeed },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.autoHeadroomSpeed = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        Text("Fast").tag(AutoHeadroomSpeed.fast)
+                        Text("Medium").tag(AutoHeadroomSpeed.medium)
+                        Text("Slow").tag(AutoHeadroomSpeed.slow)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                HStack(spacing: 8) {
+                    Text("Rider Gain")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Text(store.liveAutoHeadroomGainDB < -0.05
+                         ? String(format: "%+.1f dB", store.liveAutoHeadroomGainDB)
+                         : "0.0 dB")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(store.liveAutoHeadroomGainDB < -0.5 ? .orange : .secondary)
+                }
+            }
+            col2ToggleWithSettings(
                 label: "Clipper",
                 isOn: clipperEnabledBinding,
                 fullName: "Clipper"
@@ -565,73 +748,6 @@ struct DynamicsInlineView: View {
                 )
             }
             col2ToggleWithSettings(
-                label: "Gain Rider",
-                isOn: inlineAutoHeadroomEnabled,
-                fullName: "Dynamic Gain Rider"
-            ) {
-                DynamicsSliderRow(
-                    label: "Target GR",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.autoHeadroomTargetGRDB) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.autoHeadroomTargetGRDB = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 0.5...6.0,
-                    step: 0.5,
-                    formatValue: { String(format: "%.1f dB", $0) }
-                )
-                DynamicsSliderRow(
-                    label: "Max Cut",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.autoHeadroomMaxReductionDB) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.autoHeadroomMaxReductionDB = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 3.0...12.0,
-                    step: 1.0,
-                    formatValue: { String(format: "%.0f dB", $0) }
-                )
-                HStack(spacing: 8) {
-                    Text("Response")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 80, alignment: .leading)
-                    Picker("", selection: Binding(
-                        get: { store.dynamicsConfig.advanced.autoHeadroomSpeed },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.autoHeadroomSpeed = v; store.updateAdvancedProcessing(adv) }
-                    )) {
-                        Text("Fast").tag(AutoHeadroomSpeed.fast)
-                        Text("Medium").tag(AutoHeadroomSpeed.medium)
-                        Text("Slow").tag(AutoHeadroomSpeed.slow)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-                HStack(spacing: 8) {
-                    Text("Rider Gain")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 80, alignment: .leading)
-                    Text(store.liveAutoHeadroomGainDB < -0.05
-                         ? String(format: "%+.1f dB", store.liveAutoHeadroomGainDB)
-                         : "0.0 dB")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(store.liveAutoHeadroomGainDB < -0.5 ? .orange : .secondary)
-                }
-            }
-            col2ToggleWithSettings(
-                label: "EQ Headroom",
-                isOn: inlineEqHeadroomCompensationEnabled,
-                fullName: "EQ Headroom Compensation"
-            ) {
-                HStack(spacing: 8) {
-                    Text("Static Preamp")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                    Text("\(String(format: "%.1f", store.staticPreampDB)) dB applied")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            col2ToggleWithSettings(
                 label: "De-Harsh",
                 isOn: inlineDeharshEnabled,
                 fullName: "De-Harsh Filter"
@@ -645,6 +761,85 @@ struct DynamicsInlineView: View {
                     range: -6.0...0.0,
                     step: 0.5,
                     formatValue: { String(format: "%+.1f dB", $0) }
+                )
+            }
+            col2ToggleWithSettings(
+                label: "IR Align",
+                isOn: inlineIRAlignmentEnabled,
+                fullName: "Speaker IR Alignment"
+            ) {
+                DynamicsSliderRow(
+                    label: "Fine Delay",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.speakerIRDelayMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.speakerIRDelayMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...5.0,
+                    step: 0.01,
+                    formatValue: { String(format: "%.2f ms", $0) },
+                    leftEndLabel: "0 ms",
+                    rightEndLabel: "5 ms"
+                )
+            }
+            col2ToggleWithSettings(
+                label: "Sym. Bal.",
+                isOn: inlineSymmetryBalanceEnabled,
+                fullName: "Symmetry Balance"
+            ) {
+                DynamicsSliderRow(
+                    label: "Balance",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.stereoBalancePosition) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.stereoBalancePosition = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: -1.0...1.0,
+                    step: 0.01,
+                    formatValue: { String(format: "%.2f", $0) },
+                    leftEndLabel: "L",
+                    rightEndLabel: "R"
+                )
+            }
+            col2ToggleWithSettings(
+                label: "Panning",
+                isOn: inlinePanningEnabled,
+                fullName: "Panning Gain Matrix"
+            ) {
+                DynamicsSliderRow(
+                    label: "Crossfeed",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.panningCrossfeedAmount) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.panningCrossfeedAmount = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...1.0,
+                    step: 0.01,
+                    formatValue: { String(format: "%.2f", $0) },
+                    leftEndLabel: "None",
+                    rightEndLabel: "Full"
+                )
+            }
+        }
+    }
+
+    // MARK: - Column 3: LTI suite + processing-mode flags
+
+    private var column3: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            col2ToggleWithSettings(
+                label: "Crosstalk",
+                isOn: inlineCrosstalkEnabled,
+                fullName: "Crosstalk Cancellation Matrix"
+            ) {
+                DynamicsSliderRow(
+                    label: "Amount",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.crosstalkCancellationAmount) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.crosstalkCancellationAmount = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...1.0,
+                    step: 0.01,
+                    formatValue: { String(format: "%.2f", $0) },
+                    leftEndLabel: "Off",
+                    rightEndLabel: "Max"
                 )
             }
             col2ToggleWithSettings(
@@ -677,143 +872,35 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "Loose"
                 )
             }
+            col2ToggleWithSettings(
+                label: "Hi-Res Coef",
+                isOn: inlineCoefficientDecouplingEnabled,
+                fullName: "Hi-Res Coefficient Decoupling"
+            ) {
+                HStack(spacing: 8) {
+                    Text("Decoupling Active")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Text(store.dynamicsConfig.advanced.highResDecouplingActive ? "Yes (>96 kHz)" : "No")
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundStyle(store.dynamicsConfig.advanced.highResDecouplingActive ? .green : .secondary)
+                }
+            }
+            col2Toggle(label: "4x OS", isOn: inlineOversamplingBinding)
             col2Toggle(label: "Sync Buffer", isOn: inlineSyncBufferEnabled)
             col2ToggleWithSettings(
-                label: "Sym. Bal.",
-                isOn: inlineSymmetryBalanceEnabled,
-                fullName: "Symmetry Balance"
+                label: "EQ Headroom",
+                isOn: inlineEqHeadroomCompensationEnabled,
+                fullName: "EQ Headroom Compensation"
             ) {
-                // TODO: Recover balanceBinding from git history
-                Text("Symmetry Balance uses stereoBalancePosition slider")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            col2ToggleWithSettings(
-                label: "Panning",
-                isOn: inlinePanningEnabled,
-                fullName: "Panning Gain Matrix"
-            ) {
-                DynamicsSliderRow(
-                    label: "Crossfeed",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.panningCrossfeedAmount) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.panningCrossfeedAmount = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 0.0...1.0,
-                    step: 0.01,
-                    formatValue: { String(format: "%.2f", $0) },
-                    leftEndLabel: "None",
-                    rightEndLabel: "Full"
-                )
-            }
-            col2ToggleWithSettings(
-                label: "Bass Mgmt",
-                isOn: inlineBassManagementEnabled,
-                fullName: "Bass Management"
-            ) {
-                // Bass Management is a simple toggle - no additional parameters in the current implementation
-                Text("Bass management for subwoofer integration. Currently a simple enable/disable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: - Column 3: LTI suite
-
-    private var column3: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            col2ToggleWithSettings(
-                label: "Denoiser",
-                isOn: inlineDenoisingEnabled,
-                fullName: "Linear Denoising Engine"
-            ) {
-                // Linear Denoising is a simple toggle - no additional parameters in the current implementation
-                Text("Linear denoising engine for broadband noise reduction.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            col2ToggleWithSettings(
-                label: "IR Align",
-                isOn: inlineIRAlignmentEnabled,
-                fullName: "Speaker IR Alignment"
-            ) {
-                DynamicsSliderRow(
-                    label: "Fine Delay",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.speakerIRDelayMs) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.speakerIRDelayMs = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 0.0...5.0,
-                    step: 0.01,
-                    formatValue: { String(format: "%.2f ms", $0) },
-                    leftEndLabel: "0 ms",
-                    rightEndLabel: "5 ms"
-                )
-            }
-            col2ToggleWithSettings(
-                label: "Crosstalk",
-                isOn: inlineCrosstalkEnabled,
-                fullName: "Crosstalk Cancellation Matrix"
-            ) {
-                DynamicsSliderRow(
-                    label: "Amount",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.crosstalkCancellationAmount) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.crosstalkCancellationAmount = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 0.0...1.0,
-                    step: 0.01,
-                    formatValue: { String(format: "%.2f", $0) },
-                    leftEndLabel: "Off",
-                    rightEndLabel: "Max"
-                )
-            }
-            col2ToggleWithSettings(
-                label: "Sub Align",
-                isOn: inlineSubBassEnabled,
-                fullName: "Sub-Bass Phase Alignment"
-            ) {
-                DynamicsSliderRow(
-                    label: "Frequency",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.subBassAlignmentFrequencyHz) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.subBassAlignmentFrequencyHz = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 40.0...120.0,
-                    step: 1.0,
-                    formatValue: { String(format: "%.0f Hz", $0) }
-                )
-                DynamicsSliderRow(
-                    label: "Q",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.subBassPhaseAlignmentQ) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.subBassPhaseAlignmentQ = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 0.5...2.0,
-                    step: 0.1,
-                    formatValue: { String(format: "%.1f", $0) }
-                )
-            }
-            col2ToggleWithSettings(
-                label: "FIR",
-                isOn: inlineConvolutionEnabled,
-                fullName: "FIR Correction"
-            ) {
-                // FIR Correction is a simple toggle - no additional parameters in the current implementation
-                Text("FIR correction filter for speaker/room response. Zero added latency beyond one partition (~43 ms at 48 kHz).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            col2ToggleWithSettings(
-                label: "FIR IR",
-                isOn: inlineFirImpulseResponseEnabled,
-                fullName: "FIR Impulse Response"
-            ) {
-                // FIR Impulse Response is a simple toggle - no additional parameters in the current implementation
-                Text("Supports headphone frequency response correction profiles (AutoEq, manufacturer measurements) and speaker/room FIR filters exported from measurement systems such as REW.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text("Static Preamp")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Text("\(String(format: "%.1f", store.staticPreampDB)) dB applied")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
             }
             col2ToggleWithSettings(
                 label: "Multi-Seat",
@@ -831,9 +918,35 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.0f seats", $0) }
                 )
             }
-            col2Toggle(label: "4x OS", isOn: inlineOversamplingBinding)
+            col2ToggleWithSettings(
+                label: "FIR",
+                isOn: inlineConvolutionEnabled,
+                fullName: "FIR Correction"
+            ) {
+                if let name = store.convolutionConfig.irDisplayName {
+                    Text("Loaded: \(name)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No impulse response loaded")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.tertiary)
+                }
+                HStack(spacing: 8) {
+                    Button("Load IR…") { openImpulseResponseFile { store.loadConvolutionIR(url: $0) } }
+                    if store.convolutionConfig.irDisplayName != nil {
+                        Button("Clear") { store.clearConvolutionIR() }
+                    }
+                }
+                if let errorMessage = store.convolutionLoadError {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
         }
     }
+
 
     // MARK: - Column 4: Pickers only (signal-chain order)
 
@@ -1111,6 +1224,20 @@ struct DynamicsInlineView: View {
         )
     }
 
+
+    // MARK: - IR File Picker
+
+    private func openImpulseResponseFile(onSelect: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.wav, .aiff, .audio]
+        panel.allowsMultipleSelection = false
+        panel.title = "Load Impulse Response"
+        panel.message = "Select a WAV or AIFF impulse response (mono or stereo, max 30 s)"
+        if panel.runModal() == .OK, let url = panel.url {
+            onSelect(url)
+        }
+    }
+
     // MARK: - Column 4 Bindings
 
     private var inlineMultiSeatEnabled: Binding<Bool> {
@@ -1191,7 +1318,14 @@ struct DynamicsInlineView: View {
     }
 
     private var inlineEqHeadroomCompensationEnabled: Binding<Bool> {
-        $store.eqHeadroomCompensationEnabled
+        Binding(
+            get: { store.dynamicsConfig.advanced.eqHeadroomCompensationEnabled },
+            set: { v in
+                var adv = store.dynamicsConfig.advanced
+                adv.eqHeadroomCompensationEnabled = v
+                store.updateAdvancedProcessing(adv)
+            }
+        )
     }
 }
 

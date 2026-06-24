@@ -1425,6 +1425,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Independently adjusts bass and treble band levels based on listening volume.
     var perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig()
 
+    /// EQ Headroom Compensation — applies static preamp attenuation to prevent clipping from EQ boosts.
+    var eqHeadroomCompensationEnabled: Bool = true
+
     // MARK: - Codable
 
     static let `default` = AdvancedProcessingConfig()
@@ -1479,6 +1482,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case crosstalkCancellationEnabled, crosstalkCancellationAmount
         case multiSeatAveragingEnabled, multiSeatCount
         case subBassPhaseAlignmentEnabled, subBassAlignmentFrequencyHz, subBassPhaseAlignmentQ
+        case eqHeadroomCompensationEnabled
         // highResDecouplingActive is not persisted (runtime-computed)
     }
 
@@ -1530,6 +1534,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         multiSeatCount: Int = 2,
         subBassPhaseAlignmentEnabled: Bool = false,
         subBassAlignmentFrequencyHz: Float = 80.0,
+        subBassPhaseAlignmentQ: Float = 0.7,
         oversamplingEnabled: Bool = false,
         linearPhaseEQEnabled: Bool = false,
         roomCorrectionEnabled: Bool = false,
@@ -1537,6 +1542,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         bassManagement: BassManagementConfig = BassManagementConfig(),
         activeCrossover: ActiveCrossoverConfig = ActiveCrossoverConfig(),
         excessPhaseConfig: ExcessPhaseConfig = ExcessPhaseConfig(),
+        infrasonicFilter: InfrasonicFilterConfig = InfrasonicFilterConfig(),
         monoBassEnabled: Bool = false,
         monoBassCrossover: Float = 80.0,
         mainsHighPassEnabled: Bool = false,
@@ -1544,7 +1550,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         volumeDependentLoudnessEnabled: Bool = false,
         loudnessReferencePhon: Float = 83.0,
         loudnessReferenceVolume: Float = 0.85,
-        perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig()
+        perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig(),
+        eqHeadroomCompensationEnabled: Bool = true
     ) {
         self.highResDecouplingActive          = highResDecouplingActive
         self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
@@ -1593,6 +1600,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.multiSeatCount                   = multiSeatCount
         self.subBassPhaseAlignmentEnabled     = subBassPhaseAlignmentEnabled
         self.subBassAlignmentFrequencyHz      = subBassAlignmentFrequencyHz
+        self.subBassPhaseAlignmentQ           = subBassPhaseAlignmentQ
         self.oversamplingEnabled              = oversamplingEnabled
         self.linearPhaseEQEnabled             = linearPhaseEQEnabled
         self.roomCorrectionEnabled            = roomCorrectionEnabled
@@ -1600,6 +1608,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.bassManagement                   = bassManagement
         self.activeCrossover                  = activeCrossover
         self.excessPhaseConfig               = excessPhaseConfig
+        self.infrasonicFilter                = infrasonicFilter
         self.monoBassEnabled                  = monoBassEnabled
         self.monoBassCrossover                = monoBassCrossover
         self.mainsHighPassEnabled             = mainsHighPassEnabled
@@ -1608,6 +1617,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.loudnessReferencePhon            = loudnessReferencePhon
         self.loudnessReferenceVolume          = loudnessReferenceVolume
         self.perBandLoudness                 = perBandLoudness
+        self.eqHeadroomCompensationEnabled   = eqHeadroomCompensationEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -1668,6 +1678,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         bassManagement                   = try c.decodeIfPresent(BassManagementConfig.self, forKey: .bassManagement) ?? BassManagementConfig()
         activeCrossover                  = try c.decodeIfPresent(ActiveCrossoverConfig.self,  forKey: .activeCrossover)  ?? ActiveCrossoverConfig()
         excessPhaseConfig               = try c.decodeIfPresent(ExcessPhaseConfig.self,    forKey: .excessPhaseConfig) ?? ExcessPhaseConfig()
+        infrasonicFilter                = try c.decodeIfPresent(InfrasonicFilterConfig.self, forKey: .infrasonicFilter) ?? InfrasonicFilterConfig()
 
         // Decode legacy fields for backward compatibility
         let legacyMonoBassEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .monoBassEnabled)                  ?? false
@@ -1693,6 +1704,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         loudnessReferencePhon            = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferencePhon)            ?? 83.0
         loudnessReferenceVolume          = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferenceVolume)          ?? 0.85
         perBandLoudness                 = try c.decodeIfPresent(PerBandLoudnessConfig.self, forKey: .perBandLoudness)                 ?? PerBandLoudnessConfig()
+        eqHeadroomCompensationEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .eqHeadroomCompensationEnabled)   ?? true
         highResDecouplingActive          = false  // always computed at runtime
     }
 
@@ -1701,6 +1713,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(loudnessDialogueGateEnabled,        forKey: .loudnessDialogueGateEnabled)
         try c.encode(clipperAsymmetryTrimDB,             forKey: .clipperAsymmetryTrimDB)
         try c.encode(deesserDynamicModeEnabled,          forKey: .deesserDynamicModeEnabled)
+        try c.encode(dynamicEQ,                          forKey: .dynamicEQ)
+        try c.encode(firImpulseResponse,                 forKey: .firImpulseResponse)
         try c.encode(coefficientDecouplingEnabled,       forKey: .coefficientDecouplingEnabled)
         try c.encode(deharshFilterEnabled,               forKey: .deharshFilterEnabled)
         try c.encode(deharshTiltAmountDB,                forKey: .deharshTiltAmountDB)
@@ -1750,12 +1764,14 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(bassManagement,                     forKey: .bassManagement)
         try c.encode(activeCrossover,                    forKey: .activeCrossover)
         try c.encode(excessPhaseConfig,                  forKey: .excessPhaseConfig)
+        try c.encode(infrasonicFilter,                   forKey: .infrasonicFilter)
         // Legacy fields (monoBassEnabled, monoBassCrossover, mainsHighPassEnabled, mainsHighPassFrequency)
         // are NOT encoded - they are decode-only for backward compatibility
         try c.encode(volumeDependentLoudnessEnabled,     forKey: .volumeDependentLoudnessEnabled)
         try c.encode(loudnessReferencePhon,              forKey: .loudnessReferencePhon)
         try c.encode(loudnessReferenceVolume,            forKey: .loudnessReferenceVolume)
         try c.encode(perBandLoudness,                    forKey: .perBandLoudness)
+        try c.encode(eqHeadroomCompensationEnabled,      forKey: .eqHeadroomCompensationEnabled)
     }
 }
 
