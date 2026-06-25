@@ -430,10 +430,14 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.advanced.loudnessDialogueGateEnabled },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.loudnessDialogueGateEnabled = v; store.updateAdvancedProcessing(adv) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 Toggle("Volume-Dependent Loudness", isOn: Binding(
                     get: { store.dynamicsConfig.advanced.volumeDependentLoudnessEnabled },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.volumeDependentLoudnessEnabled = v; store.updateAdvancedProcessing(adv) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 if store.dynamicsConfig.advanced.volumeDependentLoudnessEnabled {
                     DynamicsSliderRow(
                         label: "Ref. Level",
@@ -714,6 +718,8 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.compressor.programDependentRelease },
                     set: { v in var c = store.dynamicsConfig.compressor; c.programDependentRelease = v; store.updateCompressor(c) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 DynamicsSliderRow(
                     label: "Sidechain HP",
                     value: Binding(
@@ -806,6 +812,8 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.advanced.bassManagement.lowBandPolarityInverted },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandPolarityInverted = v; store.updateAdvancedProcessing(adv) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 HStack(spacing: 8) {
                     Text("X-over Type")
                         .font(.system(size: 13))
@@ -826,6 +834,8 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.advanced.bassManagement.asymmetricCrossoverEnabled },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.asymmetricCrossoverEnabled = v; store.updateAdvancedProcessing(adv) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 if store.dynamicsConfig.advanced.bassManagement.asymmetricCrossoverEnabled {
                     DynamicsSliderRow(
                         label: "Mains HP",
@@ -960,6 +970,8 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.softClipper.autoCompensateGain },
                     set: { v in var sc = store.dynamicsConfig.softClipper; sc.autoCompensateGain = v; store.updateSoftClipper(sc) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
             col2ToggleWithSettings(
                 label: "Limiter",
@@ -1010,6 +1022,8 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.advanced.limiterTruePeakGuardEnabled },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.limiterTruePeakGuardEnabled = v; store.updateAdvancedProcessing(adv) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
             col2ToggleWithSettings(
                 label: "De-Harsh",
