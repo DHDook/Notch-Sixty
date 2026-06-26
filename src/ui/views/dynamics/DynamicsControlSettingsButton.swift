@@ -27,9 +27,12 @@ struct DynamicsControlSettingsButton<Content: View>: View {
         .help("\(fullName) settings")
         .popover(isPresented: $isPresented, arrowEdge: .trailing) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(fullName)
-                    .font(.system(size: 14, weight: .semibold))
+                Button("") { }
+                    .buttonStyle(.plain)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
                     .focused($popoverDefaultFocus, equals: true)
+                    .accessibilityHidden(true)
                 Divider()
                 content()
             }
