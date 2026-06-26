@@ -1221,15 +1221,19 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
     /// to be attenuated more deeply. May introduce slight residual smoothing
     /// on very transient material; best for heavily noise-contaminated sources.
     case aggressive = "Aggressive"
+    /// All controls set manually; preset picker shows Custom when values diverge.
+    case custom     = "Custom"
 
     /// Returns the `(noiseFloorDB, wienerFloor)` pair for this preset.
     /// `noiseFloorDB` feeds `setNoiseFloorDB(_:)` on the denoiser.
     /// `wienerFloor` feeds `setWienerFloor(_:)` on the denoiser.
-    var parameters: (noiseFloorDB: Float, wienerFloor: Float) {
+    /// Returns `nil` for `.custom` — callers must read individual config fields instead.
+    var parameters: (noiseFloorDB: Float, wienerFloor: Float)? {
         switch self {
         case .natural:    return (noiseFloorDB: -55.0, wienerFloor: 0.05)
         case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01)
         case .aggressive: return (noiseFloorDB: -65.0, wienerFloor: 0.002)
+        case .custom:     return nil
         }
     }
 }
@@ -1339,6 +1343,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Active denoiser operating-point preset.
     /// Seeds the noiseFloorDB and wienerFloor on the SpectralDenoiser.
     var linearDenoisingPreset: DenoiserPreset = .standard
+    /// Wiener gain floor (spectral floor for the Wiener filter). Range: 0.0–0.2. Default: 0.01 (matches DenoiserPreset.standard).
+    var denoiserWienerFloor: Float = 0.01
     /// Noise reduction amount. Range: 0.0 (transparent) – 1.0 (maximum). Default: 0.5.
     var denoiserReductionAmount: Float = 0.5
     /// Denoiser FFT resolution mode. Default: .high.
@@ -1477,6 +1483,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount
         case linearDenoisingEnabled, linearDenoisingThresholdDB, linearDenoisingPreset
+        case denoiserWienerFloor
         case denoiserReductionAmount, denoiserMode, denoiserHasCapturedProfile
         case speakerIRAlignmentEnabled, speakerIRDelayMs
         case crosstalkCancellationEnabled, crosstalkCancellationAmount
@@ -1523,6 +1530,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         linearDenoisingEnabled: Bool = false,
         linearDenoisingThresholdDB: Float = -60.0,
         linearDenoisingPreset: DenoiserPreset = .standard,
+        denoiserWienerFloor: Float = 0.01,
         denoiserReductionAmount: Float = 0.5,
         denoiserMode: DenoiserMode = .high,
         denoiserHasCapturedProfile: Bool = false,
@@ -1589,6 +1597,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.linearDenoisingEnabled           = linearDenoisingEnabled
         self.linearDenoisingThresholdDB       = linearDenoisingThresholdDB
         self.linearDenoisingPreset           = linearDenoisingPreset
+        self.denoiserWienerFloor              = denoiserWienerFloor
         self.denoiserReductionAmount          = denoiserReductionAmount
         self.denoiserMode                    = denoiserMode
         self.denoiserHasCapturedProfile      = denoiserHasCapturedProfile
@@ -1657,6 +1666,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         linearDenoisingEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .linearDenoisingEnabled)           ?? false
         linearDenoisingThresholdDB       = try c.decodeIfPresent(Float.self,                 forKey: .linearDenoisingThresholdDB)       ?? -60.0
         linearDenoisingPreset           = try c.decodeIfPresent(DenoiserPreset.self,     forKey: .linearDenoisingPreset)           ?? .standard
+        denoiserWienerFloor              = try c.decodeIfPresent(Float.self,                 forKey: .denoiserWienerFloor)              ?? 0.01
         denoiserReductionAmount          = try c.decodeIfPresent(Float.self,                 forKey: .denoiserReductionAmount)          ?? 0.5
         denoiserMode                    = try c.decodeIfPresent(DenoiserMode.self,         forKey: .denoiserMode)                    ?? .high
         denoiserHasCapturedProfile      = try c.decodeIfPresent(Bool.self,                  forKey: .denoiserHasCapturedProfile)      ?? false
@@ -1745,6 +1755,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(linearDenoisingEnabled,             forKey: .linearDenoisingEnabled)
         try c.encode(linearDenoisingThresholdDB,         forKey: .linearDenoisingThresholdDB)
         try c.encode(linearDenoisingPreset,             forKey: .linearDenoisingPreset)
+        try c.encode(denoiserWienerFloor,                forKey: .denoiserWienerFloor)
         try c.encode(denoiserReductionAmount,            forKey: .denoiserReductionAmount)
         try c.encode(denoiserMode,                     forKey: .denoiserMode)
         try c.encode(denoiserHasCapturedProfile,       forKey: .denoiserHasCapturedProfile)

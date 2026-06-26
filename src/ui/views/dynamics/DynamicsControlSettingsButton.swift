@@ -36,6 +36,7 @@ struct DynamicsControlSettingsButton<Content: View>: View {
 
                 Text(fullName)
                     .font(.system(size: 14, weight: .semibold))
+                    .focused($popoverDefaultFocus, equals: true)
                 Divider()
                 content()
             }

@@ -1380,7 +1380,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         denoisers.forEach { $0.setWienerFloor(floor) }
     }
     func setDenoisingPreset(_ preset: DenoiserPreset) {
-        let (noiseFloorDB, wienerFloor) = preset.parameters
+        guard let (noiseFloorDB, wienerFloor) = preset.parameters else { return }
         setDenoisingThresholdDB(noiseFloorDB)
         setDenoisingWienerFloor(wienerFloor)
     }
@@ -1740,12 +1740,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         let adv = config.advanced
         setStereoMode(adv.stereoMode)
         setDCOffsetFilterEnabled(adv.dcOffsetFilterEnabled)
+        // Named presets are authoritative: setDenoisingPreset pushes both threshold and
+        // wiener-floor from the preset's bundle. For .custom, the stored individual fields
+        // are used directly so the user's hand-tuned values persist and apply correctly.
         setDenoisingPreset(adv.linearDenoisingPreset)
-        // Allow the user's manual threshold slider to override the preset's noise floor
-        // only if it differs from the preset's seeded value; otherwise the preset wins.
-        // (The store always writes the most recently set value, so call threshold last
-        // to let it win over the preset if the user has diverged from it.)
-        setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
+        if adv.linearDenoisingPreset == .custom {
+            setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
+            setDenoisingWienerFloor(adv.denoiserWienerFloor)
+        }
         // Only call setMode() when the mode or sample rate actually changed.
         // setMode() blocks the main thread briefly; calling it on every applyConfig()
         // (which fires on every UI parameter change) causes repeated main-thread stalls

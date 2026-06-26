@@ -148,9 +148,13 @@ struct DynamicsInlineView: View {
                         // Column 1 — early signal chain
                         definitionEntry(title: "Infrasonic Filter", body: "Steep high-pass filter removing subsonic content below the threshold of hearing. Protects drivers and amplifiers from HVAC turbulence, record warps, and room pressurisation. Does not affect audible content when set at or below 20 Hz.")
                         Divider()
-                        definitionEntry(title: "Hi-Res Coef", body: "Enables high-resolution coefficient decoupling for per-sample filter updates at the cost of higher CPU.")
+                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
+                        Divider()
+                        definitionEntry(title: "FIR Impulse Response", body: "Loads a user-supplied impulse response file and convolves it with the signal — distinct from FIR Correction's convolution slot. Intended for headphone or speaker correction profiles supplied as a raw impulse response rather than a measurement-derived filter.")
                         Divider()
                         definitionEntry(title: "DC Filter", body: "0.5 Hz single-pole high-pass removing DC bias before the dynamics chain.")
+                        Divider()
+                        definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
                         Divider()
                         definitionEntry(title: "Stereo Widener", body: "Three-band M/S processor that independently adjusts stereo width in the Low (< 200 Hz), Mid (200 Hz – 4 kHz), and High (> 4 kHz) regions.")
                         Divider()
@@ -158,14 +162,17 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Loudness Contour", body: "Fletcher-Munson compensation curve adding gentle bass and treble lift for low-level listening.")
                         Divider()
-                        definitionEntry(title: "4x Oversampling", body: "Upsamples audio by 4× before EQ and downsamples after EQ. Improves high-frequency response and reduces aliasing artifacts.")
-                        Divider()
                         definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance by applying frequency-selective gain reduction around a tunable centre frequency.")
                         Divider()
                         definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers.")
                         Divider()
-                        // Column 2 — later dynamics + spatial
+                        definitionEntry(title: "Compressor", body: "Standard feed-forward dynamics compressor with adjustable threshold, ratio, soft-knee width, attack, release, and makeup gain. Supports program-dependent release time adaptation and an optional sidechain high-pass filter to reduce low-frequency pumping.")
+                        Divider()
                         definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
+                        Divider()
+                        definitionEntry(title: "Bass Management", body: "Unified subwoofer integration: crossover frequency, slope, and type; independent sub-channel gain, polarity, and delay; room-gain compensation shelf; and per-speaker distance compensation for time alignment.")
+                        Divider()
+                        definitionEntry(title: "Dynamic Gain Rider", body: "Slowly reduces the signal feeding the clipper/limiter to keep sustained limiter gain reduction near a target level, trading a small amount of loudness for fewer audible limiting artefacts on hot mixes.")
                         Divider()
                         definitionEntry(title: "Clipper", body: "Analogue-style wave-shaper that gently rounds transient peaks before the limiter.")
                         Divider()
@@ -173,24 +180,25 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "De-Harsh", body: "High-frequency tilt filter attenuating above ~3.5 kHz to reduce tweeter fatigue.")
                         Divider()
-                        definitionEntry(title: "Pause Gate", body: "Silences output when signal falls below the threshold for the Hold duration, then reopens at the Resume Speed when audio returns. Use the Preset picker or tune individually to match your amplifier and listening habits.")
-                        Divider()
-                        definitionEntry(title: "Sync Buffer", body: "Synchronises processing buffer to latency mode, preventing dropouts at low latency settings.")
-                        Divider()
-                        definitionEntry(title: "Pipeline Latency", body: "If using with video, your AV receiver or display's audio delay/lip-sync setting may need adjustment by the algorithmic latency amount.")
+                        definitionEntry(title: "IR Alignment", body: "Fractional-sample delay compensation for multi-driver speaker acoustic centres.")
                         Divider()
                         definitionEntry(title: "Symmetry Balance", body: "Gain-matrix correction for asymmetric listening positions. Aligns L/R loudness at the ear.")
                         Divider()
                         definitionEntry(title: "Panning Gain Matrix", body: "Bilinear crossfeed matrix blending a proportion of each channel into the opposite channel.")
                         Divider()
-                        // Column 3 — LTI suite
-                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
-                        Divider()
-                        definitionEntry(title: "IR Alignment", body: "Fractional-sample delay compensation for multi-driver speaker acoustic centres.")
-                        Divider()
                         definitionEntry(title: "Crosstalk Cancel.", body: "Recursive binaural inversion filter reducing inter-channel acoustic leakage between speakers.")
                         Divider()
-                        definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
+                        definitionEntry(title: "Pause Gate", body: "Silences output when signal falls below the threshold for the Hold duration, then reopens at the Resume Speed when audio returns. Use the Preset picker or tune individually to match your amplifier and listening habits.")
+                        Divider()
+                        definitionEntry(title: "Hi-Res Coef", body: "Enables high-resolution coefficient decoupling for per-sample filter updates at the cost of higher CPU.")
+                        Divider()
+                        definitionEntry(title: "4x Oversampling", body: "Upsamples audio by 4× before EQ and downsamples after EQ. Improves high-frequency response and reduces aliasing artifacts.")
+                        Divider()
+                        definitionEntry(title: "Sync Buffer", body: "Synchronises processing buffer to latency mode, preventing dropouts at low latency settings.")
+                        Divider()
+                        definitionEntry(title: "Pipeline Latency", body: "If using with video, your AV receiver or display's audio delay/lip-sync setting may need adjustment by the algorithmic latency amount.")
+                        Divider()
+                        definitionEntry(title: "EQ Headroom Compensation", body: "Predictive static preamp gain, computed from EQ and room-correction filter design data, that backs off input level ahead of time to prevent EQ/correction boosts from clipping. Complements the reactive Dynamic Gain Rider.")
                         Divider()
                         definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions for more robust room correction.")
                         Divider()
@@ -271,7 +279,15 @@ struct DynamicsInlineView: View {
                     label: "Threshold",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.advanced.linearDenoisingThresholdDB) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingThresholdDB = Float(v); store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.linearDenoisingThresholdDB = Float(v)
+                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor {
+                                adv.linearDenoisingPreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     ),
                     range: -80.0...(-20.0),
                     step: 1.0,
@@ -284,13 +300,21 @@ struct DynamicsInlineView: View {
                         .frame(width: 80, alignment: .leading)
                     Picker("", selection: Binding(
                         get: { store.dynamicsConfig.advanced.linearDenoisingPreset },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingPreset = v; store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.linearDenoisingPreset = v
+                            if let bundle = v.parameters {
+                                adv.linearDenoisingThresholdDB = bundle.noiseFloorDB
+                                adv.denoiserWienerFloor        = bundle.wienerFloor
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     )) {
                         ForEach(DenoiserPreset.allCases, id: \.self) { p in
                             Text(p.rawValue).tag(p)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .labelsHidden()
                 }
                 HStack(spacing: 8) {
@@ -309,6 +333,24 @@ struct DynamicsInlineView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
+                DynamicsSliderRow(
+                    label: "Wiener Floor",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.denoiserWienerFloor) },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.denoiserWienerFloor = Float(v)
+                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor {
+                                adv.linearDenoisingPreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    ),
+                    range: 0.0...0.2,
+                    step: 0.001,
+                    formatValue: { String(format: "%.3f", $0) }
+                )
                 DynamicsSliderRow(
                     label: "Reduction",
                     value: Binding(
