@@ -25,6 +25,19 @@ private struct DynamicsSliderRow: View {
     @State private var textValue: String = ""
     @State private var isUserEditing: Bool = false   // new — tracks an in-progress edit, not raw focus state
     @FocusState private var isFieldFocused: Bool
+    /// Snaps to the step grid on write without using Slider's built-in
+    /// `step:` parameter, which draws visible tick marks along the track —
+    /// this keeps drag-to-step-increment behavior while avoiding that look.
+    private var steppedValue: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { newVal in
+                guard step > 0 else { value = newVal; return }
+                let snapped = (newVal / step).rounded() * step
+                value = min(range.upperBound, max(range.lowerBound, snapped))
+            }
+        )
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -39,7 +52,7 @@ private struct DynamicsSliderRow: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Slider(value: $value, in: range, step: step)
+            Slider(value: steppedValue, in: range)
                 .controlSize(.small)
                 .onChange(of: value) { _, newVal in
                     if !isUserEditing {
