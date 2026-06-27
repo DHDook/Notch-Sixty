@@ -46,7 +46,20 @@ private struct DynamicsSliderRow: View {
                         textValue = formatValue(newVal)
                     }
                 }
-
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            if isFieldFocused {
+                                // Don't wait for SwiftUI's @FocusState to round-trip —
+                                // go straight to AppKit and clear the window's first
+                                // responder the instant a touch lands on this slider,
+                                // before the slider's own drag-tracking has a chance
+                                // to be blocked by a still-active text-editor session
+                                // in the sibling TextField.
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                            }
+                        }
+                )
             if let right = rightEndLabel {
                 Text(right)
                     .font(.caption2)
