@@ -130,6 +130,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Crest factor: running peak and RMS power envelopes.
     nonisolated(unsafe) var crestPeakEnv:   Float = 0.0
     nonisolated(unsafe) var crestRmsEnv:    Float = 0.0
+    /// Phase correlation: exponentially-decayed L/R power and cross-power accumulators
+    /// (≈300 ms time constant), plus the smoothed output coefficient (≈100 ms time constant).
+    nonisolated(unsafe) var corrAccLL:      Double = 0.0
+    nonisolated(unsafe) var corrAccRR:      Double = 0.0
+    nonisolated(unsafe) var corrAccLR:      Double = 0.0
+    nonisolated(unsafe) var corrSmoothed:   Float  = 0.0
     /// Right-channel time-delay circular buffer; one pointer per channel.
     private let timeDelayBufs: [UnsafeMutablePointer<Float>]
     private static let maxDelaySamples: Int = 8192
@@ -2233,6 +2239,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         for i in 0..<contourState.count  { contourState[i]  = 0 }
         crestPeakEnv    = 0.0
         crestRmsEnv     = 0.0
+        corrAccLL       = 0.0
+        corrAccRR       = 0.0
+        corrAccLR       = 0.0
+        corrSmoothed    = 0.0
+        _phaseCorrelationBits.store(floatBits(0.0), ordering: .relaxed)
         pauseGateLevel  = 0.0
         pauseGateIsOpen = true
         ditherPrevRand  = 0.0
@@ -2354,7 +2365,27 @@ final class DynamicsProcessor: @unchecked Sendable {
         guard stereoModeRaw != 0 || dcOn || subPhaseOn || symBalanceOn || panningOn || irAlignOn || crosstalkOn || denoisingOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
                 || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || firOn else {
+            // The entire chain is idle this callback. Zero every per-stage meter rather
+            // than just the limiter's, so the gain-structure meter doesn't freeze on the
+            // last nonzero reading from before the stages were disabled.
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
+            _deEsserGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _mbLowGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _mbMidGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _mbHighGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _compGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _expGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _clipperGRBits.store(floatBits(0.0), ordering: .relaxed)
+            deEsserEnvDB = 0.0
+            mbGainLow  = 1.0
+            mbGainMid  = 1.0
+            mbGainHigh = 1.0
+            compEnvDB  = 0.0
+            expEnvDB   = 0.0
+            // Crest factor and phase correlation still reflect the (unprocessed) signal
+            // passing straight through, so measure them rather than zeroing outright.
+            measureCrestFactor(abl: abl, numCh: numCh, count: count)
+            measurePhaseCorrelation(abl: abl, numCh: numCh, count: count)
             return
         }
 
@@ -2430,6 +2461,11 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Stage 7: Balance Matrix + Inter-Channel Time Delay.
         processBalanceAndDelay(abl: abl, numCh: numCh, count: count)
+
+        // Phase correlation measurement on the final stereo image (post balance/delay).
+        // Runs unconditionally, independent of which stages are enabled, so the meter
+        // always reflects the true output — mirroring how crest factor is measured above.
+        measurePhaseCorrelation(abl: abl, numCh: numCh, count: count)
 
         // Stage 7.5: Panning Gain Matrix crossfeed.
         if panningOn { processPanningMatrix(abl: abl, numCh: numCh, count: count) }
@@ -2582,6 +2618,38 @@ final class DynamicsProcessor: @unchecked Sendable {
         let peakDB: Float = crestPeakEnv > 1e-10 ? 20.0 * log10(crestPeakEnv) : -100.0
         let rmsDB:  Float = crestRmsEnv  > 1e-10 ? 10.0 * log10(crestRmsEnv)  : -100.0
         _crestFactorBits.store(floatBits(max(0.0, peakDB - rmsDB)), ordering: .relaxed)
+    }
+
+    /// Smoothed Pearson L/R phase correlation, measured on the final post-chain signal.
+    /// Mirrors `StereoWidener`'s correlation meter (≈300 ms accumulator decay, ≈100 ms
+    /// output smoothing) but runs unconditionally so it reflects the true output even
+    /// when the widener itself is disabled. Mono input (or a missing channel) reports
+    /// a neutral 0.0 (uncorrelated) since correlation is undefined for a single channel.
+    @inline(__always)
+    private func measurePhaseCorrelation(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        guard numCh >= 2,
+              let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+              let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else {
+            corrSmoothed = 0.0
+            _phaseCorrelationBits.store(floatBits(0.0), ordering: .relaxed)
+            return
+        }
+
+        let decay = max(0.0, 1.0 - 1.0 / (storedSampleRate * 0.3))
+        for i in 0..<count {
+            let l = Double(bufL[i])
+            let r = Double(bufR[i])
+            corrAccLL = corrAccLL * decay + l * l
+            corrAccRR = corrAccRR * decay + r * r
+            corrAccLR = corrAccLR * decay + l * r
+        }
+        let denom = (corrAccLL * corrAccRR).squareRoot()
+        let corrRaw: Float = denom > 1e-12 ? Float(corrAccLR / denom) : 0.0
+        let corrAlpha: Float = Float(exp(-1.0 / (storedSampleRate * 0.1)))
+        corrSmoothed = corrAlpha * corrSmoothed + (1.0 - corrAlpha) * max(-1.0, min(1.0, corrRaw))
+        _phaseCorrelationBits.store(floatBits(corrSmoothed), ordering: .relaxed)
     }
 
     /// High-frequency tilt filter applied after the brickwall limiter (de-harsh mode).
