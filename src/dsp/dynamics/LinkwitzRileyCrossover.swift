@@ -23,9 +23,31 @@ struct BassManagementCrossover {
     ///   - slope: Crossover slope (LR2, LR4, or LR8)
     ///   - sampleRate: Sample rate in Hz
     ///   - crossoverType: Crossover type (Linkwitz-Riley, Butterworth, or Bessel)
-    init(crossoverHz: Float, slope: BassCrossoverSlope, sampleRate: Double, crossoverType: CrossoverType = .linkwitzRiley) {
+    init(
+        crossoverHz: Float,
+        slope: BassCrossoverSlope,
+        sampleRate: Double,
+        crossoverType: CrossoverType = .linkwitzRiley,
+        coefficientDecouplingEnabled: Bool = false
+    ) {
         sectionCount = slope.cascadedStageCount
         stateSizePerChannel = sectionCount * 2 * 2  // sections * 2 state vars * 2 paths (LP + HP)
+
+        // Apply high-resolution coefficient decoupling when enabled.
+        // At sample rates > 96 kHz, designing at 48 kHz and pre-warping the
+        // crossover frequency prevents bilinear transform pole crowding.
+        let designRate = BiquadMath.designSampleRate(
+            actualRate: sampleRate,
+            coefficientDecouplingEnabled: coefficientDecouplingEnabled
+        )
+        let warpedCrossoverHz: Double = {
+            guard designRate != sampleRate else { return Double(crossoverHz) }
+            return BiquadMath.prewarpFrequency(
+                frequency: Double(crossoverHz),
+                actualRate: sampleRate,
+                designRate: designRate
+            )
+        }()
 
         let qValues: [Double]
         switch crossoverType {
@@ -40,9 +62,11 @@ struct BassManagementCrossover {
                 qValues = [] // Not used for LR2 (uses first-order filters directly)
                 for _ in 0..<2 {
                     let lpCoeffs = BiquadMath.firstOrderLowPass(
-                        sampleRate: sampleRate, frequency: Double(crossoverHz))
+                        sampleRate: designRate,           // ← decoupled design rate
+                        frequency: warpedCrossoverHz)     // ← pre-warped frequency
                     let hpCoeffs = BiquadMath.firstOrderHighPass(
-                        sampleRate: sampleRate, frequency: Double(crossoverHz))
+                        sampleRate: designRate,           // ← decoupled design rate
+                        frequency: warpedCrossoverHz)     // ← pre-warped frequency
                     lowPassSections.append((
                         b0: Float(lpCoeffs.b0), b1: Float(lpCoeffs.b1), b2: Float(lpCoeffs.b2),
                         na1: Float(lpCoeffs.a1), na2: Float(lpCoeffs.a2)
@@ -73,15 +97,15 @@ struct BassManagementCrossover {
         for q in qValues {
             let lpCoeffs = BiquadMath.calculateCoefficients(
                 type: .lowPass,
-                sampleRate: sampleRate,
-                frequency: Double(crossoverHz),
+                sampleRate: designRate,           // ← decoupled design rate
+                frequency: warpedCrossoverHz,     // ← pre-warped frequency
                 q: q,
                 gain: 0.0
             )
             let hpCoeffs = BiquadMath.calculateCoefficients(
                 type: .highPass,
-                sampleRate: sampleRate,
-                frequency: Double(crossoverHz),
+                sampleRate: designRate,           // ← decoupled design rate
+                frequency: warpedCrossoverHz,     // ← pre-warped frequency
                 q: q,
                 gain: 0.0
             )

@@ -48,6 +48,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Current sample rate. Written by the main thread before audio starts (or on
     /// quiescent reconfigure). Read only on the audio thread during processing.
     nonisolated(unsafe) var storedSampleRate: Double
+    /// Mirrors DynamicsConfig.advanced.coefficientDecouplingEnabled at the time of the
+    /// last applyConfig() call. Used by stageBassManagementCrossover() and
+    /// stageMainsHighPassCrossover() to build decoupled coefficients at high sample rates.
+    /// Written from the main thread before staging; read in the staging functions on the
+    /// main thread. Not accessed from the audio thread.
+    nonisolated(unsafe) var storedDecouplingEnabled: Bool = true
     /// Maximum frame count for per-callback scratch buffers.
     nonisolated(unsafe) var storedMaxFrameCount: Int = 4096
     /// Effective sample rate for clipper/limiter (accounts for oversampling).
@@ -221,6 +227,11 @@ final class DynamicsProcessor: @unchecked Sendable {
     private var lastBassCrossoverType: CrossoverType = .linkwitzRiley
     /// Last applied mains high-pass frequency (for change detection).
     private var lastMainsHighPassHz: Float = 80.0
+    /// Sample rate at which bass management crossover coefficients were last staged.
+    /// Used to detect sample rate changes that require re-staging.
+    nonisolated(unsafe) var lastBassCrossoverSampleRate: Double = 0
+    /// Sample rate at which mains high-pass crossover coefficients were last staged.
+    nonisolated(unsafe) var lastMainsHighPassSampleRate: Double = 0
     /// Last applied infrasonic filter config (for change detection).
     private var previousInfrasonicFilter: InfrasonicFilterConfig?
     /// Bass Management enabled flag (atomic).
@@ -747,6 +758,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         let defaultStateSize = defaultSectionCount * 4  // 2 state vars * 2 paths per section
         self.bassManagementStateSize = defaultStateSize
         self.pendingBassManagementStateSize = defaultStateSize
+        // NOTE: coefficientDecouplingEnabled is omitted here (defaults to false).
+        // applyConfig() is called immediately after init by RenderCallbackContext,
+        // staging a correctly-decoupled replacement before any audio is processed.
         self.bassManagementCrossover = BassManagementCrossover(
             crossoverHz: 80.0,
             slope: defaultSlope,
@@ -767,6 +781,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         self.mainsHighPassStateSize = defaultStateSize
         self.pendingMainsHighPassStateSize = defaultStateSize
+        // NOTE: coefficientDecouplingEnabled is omitted here (defaults to false).
+        // applyConfig() is called immediately after init by RenderCallbackContext,
+        // staging a correctly-decoupled replacement before any audio is processed.
         self.mainsHighPassCrossover = BassManagementCrossover(
             crossoverHz: 80.0,
             slope: defaultSlope,
@@ -1665,6 +1682,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Applies a full config snapshot atomically (main thread).
     func applyConfig(_ config: DynamicsConfig, sampleRate: Double) {
         storedSampleRate = sampleRate
+        storedDecouplingEnabled = config.advanced.coefficientDecouplingEnabled
 
         stereoWidener.applyConfig(config.stereoWidener)
         lufsProcessor.applyConfig(config.loudnessMatch)
@@ -1834,24 +1852,28 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stage bass management crossover update if parameters changed
         if adv.bassManagement.crossoverHz != lastBassCrossoverHz
             || adv.bassManagement.slope != lastBassCrossoverSlope
-            || adv.bassManagement.crossoverType != lastBassCrossoverType {
+            || adv.bassManagement.crossoverType != lastBassCrossoverType
+            || storedSampleRate != lastBassCrossoverSampleRate {
             stageBassManagementCrossover(crossoverHz: adv.bassManagement.crossoverHz,
                                        slope: adv.bassManagement.slope,
                                        crossoverType: adv.bassManagement.crossoverType)
             lastBassCrossoverHz = adv.bassManagement.crossoverHz
             lastBassCrossoverSlope = adv.bassManagement.slope
             lastBassCrossoverType = adv.bassManagement.crossoverType
+            lastBassCrossoverSampleRate = storedSampleRate
         }
 
         // Stage mains high-pass crossover update if asymmetric mode is enabled and parameters changed
         if adv.bassManagement.asymmetricCrossoverEnabled {
             if adv.bassManagement.mainsHighPassHz != lastMainsHighPassHz
                 || adv.bassManagement.slope != lastBassCrossoverSlope
-                || adv.bassManagement.crossoverType != lastBassCrossoverType {
+                || adv.bassManagement.crossoverType != lastBassCrossoverType
+                || storedSampleRate != lastMainsHighPassSampleRate {
                 stageMainsHighPassCrossover(crossoverHz: adv.bassManagement.mainsHighPassHz,
                                           slope: adv.bassManagement.slope,
                                           crossoverType: adv.bassManagement.crossoverType)
                 lastMainsHighPassHz = adv.bassManagement.mainsHighPassHz
+                lastMainsHighPassSampleRate = storedSampleRate
             }
         }
     }
@@ -1863,7 +1885,8 @@ final class DynamicsProcessor: @unchecked Sendable {
             crossoverHz: crossoverHz,
             slope: slope,
             sampleRate: storedSampleRate,
-            crossoverType: crossoverType
+            crossoverType: crossoverType,
+            coefficientDecouplingEnabled: storedDecouplingEnabled
         )
         let newStateSize = newCrossover.stateSizePerChannel
         pendingBassCrossover = newCrossover
@@ -1878,7 +1901,8 @@ final class DynamicsProcessor: @unchecked Sendable {
             crossoverHz: crossoverHz,
             slope: slope,
             sampleRate: storedSampleRate,
-            crossoverType: crossoverType
+            crossoverType: crossoverType,
+            coefficientDecouplingEnabled: storedDecouplingEnabled
         )
         let newStateSize = newCrossover.stateSizePerChannel
         pendingMainsHighPassCrossover = newCrossover
