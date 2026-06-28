@@ -11,44 +11,51 @@ enum RoomCorrectionEngine {
 
     // MARK: - Target Curves
 
+    /// Internal target curve type.
+    /// - Warning: Deprecated. Use `TargetCurveLibrary` and `TargetCurve` (the
+    ///   top-level struct in TargetCurveLibrary.swift) directly. This enum
+    ///   exists only for backward compatibility with legacy call sites.
+    @available(*, deprecated, renamed: "TargetCurveLibrary")
     enum TargetCurve: String, Codable, Sendable, CaseIterable {
-        case flat = "Flat"
+        case flat   = "Flat"
         case harman = "Harman"
         case custom = "Custom"
 
         var displayName: String { rawValue }
     }
 
-    /// Returns the Harman target curve frequency response.
-    /// Based on the Harman headphone target curve (Olive-Welti et al.).
-    /// - Returns: Array of (frequency, gainDB) tuples
+    /// Returns the Harman loudspeaker room target curve.
+    ///
+    /// Based on the Olive et al. 2013 loudspeaker preference research
+    /// ("A New Paradigm: The Active Listening Test", Harman International).
+    /// Characterised by:
+    ///   - A broad bass rise below ~300 Hz (max ~6.5 dB at 20 Hz, tapering to 0 dB at 400 Hz)
+    ///   - Flat response from 400 Hz to 1.25 kHz
+    ///   - Gentle treble roll-off from 1.25 kHz to 20 kHz (−6 dB at 20 kHz)
+    ///
+    /// Previously this method returned the Harman headphone target (Olive-Welti),
+    /// which is incorrect for loudspeaker room correction.
+    ///
+    /// - Returns: Array of (frequency Hz, gain dB) tuples, log-spaced 20 Hz–20 kHz.
     static func harmanTargetCurve() -> [(frequency: Double, gainDB: Double)] {
-        return [
-            (20.0, 2.0),
-            (50.0, 1.5),
-            (100.0, 1.0),
-            (200.0, 0.5),
-            (500.0, 0.0),
-            (1000.0, -1.0),
-            (2000.0, -2.0),
-            (4000.0, -1.5),
-            (8000.0, -1.0),
-            (16000.0, -2.0),
-            (20000.0, -3.0)
-        ]
+        return TargetCurveLibrary.harmanRoom
     }
 
     /// Returns the target curve for the specified type.
-    /// - Parameter curve: The target curve type
-    /// - Returns: Array of (frequency, gainDB) tuples
+    ///
+    /// Delegates to TargetCurveLibrary to ensure a single source of truth.
+    /// The internal `TargetCurve` enum is retained for backward compatibility
+    /// with existing call sites; prefer using `TargetCurveLibrary` directly
+    /// in new code.
+    @available(*, deprecated, renamed: "TargetCurveLibrary")
     static func getTargetCurve(_ curve: TargetCurve) -> [(frequency: Double, gainDB: Double)] {
         switch curve {
         case .flat:
-            return []
+            return TargetCurveLibrary.flat
         case .harman:
-            return harmanTargetCurve()
+            return TargetCurveLibrary.harmanRoom
         case .custom:
-            return [] // User-provided custom curve would be stored separately
+            return []
         }
     }
 

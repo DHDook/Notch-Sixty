@@ -1933,11 +1933,13 @@ final class EqualiserStore: ObservableObject {
     private func buildTargetCurve() -> [(frequency: Double, gainDB: Double)] {
         switch dynamicsConfig.advanced.targetCurveType {
         case .flat:
-            return [(20, 0), (20000, 0)]
+            return TargetCurveLibrary.flat
         case .houseCurve:
-            return [(20, 2.0), (80, 2.0), (500, 0.0), (2000, 0.0), (10000, -1.0), (20000, -2.5)]
+            // B&K / IEC 268-13 house curve: 3 dB/octave bass rise below 1 kHz.
+            // Matches the "B&K house" option in the room correction target curve picker.
+            return TargetCurveLibrary.bkHouse
         case .customREW:
-            return customREWTargetCurve ?? [(20, 0), (20000, 0)]
+            return customREWTargetCurve ?? TargetCurveLibrary.flat
         }
     }
 }

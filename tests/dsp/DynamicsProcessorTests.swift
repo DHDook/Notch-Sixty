@@ -575,20 +575,93 @@ final class DynamicsProcessorTests: XCTestCase {
     // MARK: - Room Correction Tests
 
     func testRoomCorrectionHarmanTarget() {
-        // Test that Harman target curve is generated correctly
         let harmanCurve = RoomCorrectionEngine.harmanTargetCurve()
-        XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve should not be empty")
-        XCTAssertEqual(harmanCurve.first?.frequency, 20.0, "First frequency should be 20 Hz")
-        XCTAssertEqual(harmanCurve.last?.frequency, 20000.0, "Last frequency should be 20 kHz")
+
+        // Basic structure
+        XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve must not be empty")
+        XCTAssertEqual(harmanCurve.first?.frequency, 20.0, accuracy: 0.1,
+            "Harman curve must start at 20 Hz")
+        XCTAssertEqual(harmanCurve.last?.frequency, 20000.0, accuracy: 1.0,
+            "Harman curve must end at 20 kHz")
+
+        // Loudspeaker room curve shape: bass rise below 400 Hz
+        // At 20 Hz, gain should be positive (bass rise) — the headphone curve had ~+2 dB here,
+        // the loudspeaker room curve has ~+6.5 dB.
+        let gain20Hz = harmanCurve.first!.gainDB
+        XCTAssertGreaterThan(gain20Hz, 4.0,
+            "Harman loudspeaker curve must have > 4 dB bass rise at 20 Hz (headphone curve would be ~2 dB)")
+
+        // At 1 kHz, gain should be near zero (flat midrange)
+        let gain1kHz = harmanCurve.first(where: { abs($0.frequency - 1000) < 50 })?.gainDB ?? 999
+        XCTAssertEqual(gain1kHz, 0.0, accuracy: 0.5,
+            "Harman loudspeaker curve must be near 0 dB at 1 kHz")
+
+        // At 20 kHz, gain should be negative (treble roll-off)
+        let gain20kHz = harmanCurve.last!.gainDB
+        XCTAssertLessThan(gain20kHz, -3.0,
+            "Harman loudspeaker curve must have treble roll-off (< −3 dB at 20 kHz)")
+
+        // Gain at 20 Hz must be greater than gain at 1 kHz (bass rise characteristic)
+        XCTAssertGreaterThan(gain20Hz, gain1kHz,
+            "Harman loudspeaker curve must have more bass energy than midrange")
+
+        // Curve must be monotonically non-increasing above 400 Hz (no midrange bump)
+        let gainAt400  = harmanCurve.first(where: { $0.frequency >= 400  })?.gainDB ?? 0
+        let gainAt4000 = harmanCurve.first(where: { $0.frequency >= 4000 })?.gainDB ?? 0
+        XCTAssertGreaterThanOrEqual(gainAt400, gainAt4000,
+            "Harman loudspeaker curve gain at 400 Hz must be >= gain at 4 kHz")
     }
 
     func testRoomCorrectionTargetCurveSelection() {
-        // Test that different target curves can be selected
+        // Flat curve: must be non-empty (TargetCurveLibrary.flat has two boundary points)
         let flatCurve = RoomCorrectionEngine.getTargetCurve(.flat)
-        XCTAssertTrue(flatCurve.isEmpty, "Flat target curve should be empty")
+        XCTAssertFalse(flatCurve.isEmpty, "Flat curve from TargetCurveLibrary must not be empty")
+        // All flat curve points must have gain of 0 dB
+        for point in flatCurve {
+            XCTAssertEqual(point.gainDB, 0.0, accuracy: 0.001,
+                "Flat curve must be 0 dB at all frequencies; got \(point.gainDB) dB at \(point.frequency) Hz")
+        }
 
+        // Harman curve: must match TargetCurveLibrary.harmanRoom exactly
         let harmanCurve = RoomCorrectionEngine.getTargetCurve(.harman)
-        XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve should not be empty")
+        XCTAssertEqual(harmanCurve.count, TargetCurveLibrary.harmanRoom.count,
+            "getTargetCurve(.harman) must return TargetCurveLibrary.harmanRoom")
+        for (a, b) in zip(harmanCurve, TargetCurveLibrary.harmanRoom) {
+            XCTAssertEqual(a.frequency, b.frequency, accuracy: 0.1,
+                "Frequency mismatch between getTargetCurve(.harman) and TargetCurveLibrary.harmanRoom")
+            XCTAssertEqual(a.gainDB, b.gainDB, accuracy: 0.001,
+                "Gain mismatch at \(a.frequency) Hz between getTargetCurve(.harman) and TargetCurveLibrary.harmanRoom")
+        }
+
+        // Custom curve: must return empty (no user curve provided)
+        let customCurve = RoomCorrectionEngine.getTargetCurve(.custom)
+        XCTAssertTrue(customCurve.isEmpty, "getTargetCurve(.custom) must return empty array")
+    }
+
+    func testTargetCurveLibrary_HarmanRoom_IsLoudspeakerCurve() {
+        // The harmanRoom curve must have a meaningful bass rise — the defining
+        // characteristic that distinguishes it from the headphone curve.
+        let curve = TargetCurveLibrary.harmanRoom
+        XCTAssertFalse(curve.isEmpty)
+
+        // Must cover 20 Hz to 20 kHz
+        XCTAssertLessThanOrEqual(curve.first!.frequency, 20.0)
+        XCTAssertGreaterThanOrEqual(curve.last!.frequency, 20000.0)
+
+        // Bass rise: gain at 20 Hz must exceed gain at 1 kHz by at least 5 dB
+        let g20 = curve.first!.gainDB
+        let g1k = curve.first(where: { $0.frequency >= 1000 })?.gainDB ?? 0
+        XCTAssertGreaterThan(g20 - g1k, 5.0,
+            "Loudspeaker Harman room curve must have > 5 dB bass rise (20 Hz vs 1 kHz)")
+    }
+
+    func testTargetCurveLibrary_AllCurves_AreSortedByFrequency() {
+        for namedCurve in TargetCurveLibrary.allCurves {
+            let freqs = namedCurve.curve.map { $0.frequency }
+            let sorted = freqs.sorted()
+            XCTAssertEqual(freqs, sorted,
+                "TargetCurveLibrary curve '\(namedCurve.name)' must be sorted by frequency")
+        }
     }
 
     // MARK: - Program-Dependent Release Tests
