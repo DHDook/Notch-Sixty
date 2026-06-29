@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3-20260629.01cef14</string>
+	<string>0.3-20260629.02fad29</string>
 	<key>CFBundleVersion</key>
-	<string>01cef14</string>
+	<string>02fad29</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
