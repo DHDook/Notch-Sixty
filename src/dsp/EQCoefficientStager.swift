@@ -106,6 +106,11 @@ final class EQCoefficientStager {
                                               actualRate: currentSampleRate,
                                               designRate: designRate)
                 : Double(band.frequency)
+            guard band.filterType != .fir else {
+                sections.append([])
+                bypassFlags.append(true)
+                continue
+            }
             let secs = BiquadMath.calculateSections(
                 type: band.filterType, sampleRate: designRate,
                 frequency: freq, q: Double(band.q),
@@ -153,8 +158,20 @@ final class EQCoefficientStager {
               ctx.isLinearPhaseEnabled else { return }
         let leftBands = Array(eqConfiguration.leftState.userEQ.bands.prefix(
             eqConfiguration.leftState.userEQ.activeBandCount))
-        let rightBands = Array(eqConfiguration.rightState.userEQ.bands.prefix(
+        // For .fir bands on the right channel, substitute firKernelRight into the
+        // firKernelLeft slot so computeIRSpectrum uses the correct per-channel kernel.
+        let rawRightBands = Array(eqConfiguration.rightState.userEQ.bands.prefix(
             eqConfiguration.rightState.userEQ.activeBandCount))
+        let rightBands: [EQBandConfiguration] = rawRightBands.map { band in
+            guard band.filterType == .fir,
+                  let rightKernel = band.firKernelRight,
+                  rightKernel != (band.firKernelLeft ?? []) else {
+                return band
+            }
+            var b = band
+            b.firKernelLeft = rightKernel
+            return b
+        }
         ctx.updateLinearPhaseIR(leftBands: leftBands,
                                  rightBands: rightBands,
                                  sampleRate: currentSampleRate)
@@ -181,7 +198,7 @@ final class EQCoefficientStager {
             actualRate: currentSampleRate,
             coefficientDecouplingEnabled: decoupling)
 
-        for band in leftBands where !band.bypass && !band.isDynamic {
+        for band in leftBands where !band.bypass && !band.isDynamic && band.filterType != .fir {
             let freq = designRate != currentSampleRate
                 ? BiquadMath.prewarpFrequency(frequency: Double(band.frequency),
                                               actualRate: currentSampleRate,
@@ -198,7 +215,7 @@ final class EQCoefficientStager {
         if eqConfiguration.channelMode == .linked {
             rightSections = leftSections
         } else {
-            for band in rightBands where !band.bypass && !band.isDynamic {
+            for band in rightBands where !band.bypass && !band.isDynamic && band.filterType != .fir {
                 let freq = designRate != currentSampleRate
                     ? BiquadMath.prewarpFrequency(frequency: Double(band.frequency),
                                                   actualRate: currentSampleRate,
@@ -259,6 +276,21 @@ final class EQCoefficientStager {
 
     /// Stages coefficients for a single band (incremental update path).
     private func stageBandCoefficients(index: Int, config: EQBandConfiguration) {
+        if config.filterType == .fir {
+            // FIR bands produce no IIR coefficients — stage an identity (bypassed) slot
+            // and refresh the linear-phase IR so the new kernel takes effect.
+            renderPipeline?.updateBandCoefficients(
+                channel: .both,
+                layerIndex: EQLayerConstants.userEQLayerIndex,
+                bandIndex: index,
+                sections: [],
+                bypass: true,
+                needsDoublePrecision: false
+            )
+            refreshLinearPhaseIRIfNeeded()
+            refreshMixedPhaseIRIfNeeded()
+            return
+        }
         let designRate = BiquadMath.designSampleRate(
             actualRate: currentSampleRate,
             coefficientDecouplingEnabled: eqConfiguration.dynamicsConfig.advanced.coefficientDecouplingEnabled
@@ -327,6 +359,13 @@ final class EQCoefficientStager {
         for index in 0..<activeCount {
             guard index < leftBands.count else { break }
             let config = leftBands[index]
+            // FIR bands produce no IIR coefficients — append identity slot and continue.
+            guard config.filterType != .fir else {
+                leftSections.append([])
+                leftBypassFlags.append(true)
+                leftNeedsDoublePrecision.append(false)
+                continue
+            }
             let warpedFrequency: Double
             if designRate != currentSampleRate {
                 warpedFrequency = BiquadMath.prewarpFrequency(
@@ -371,6 +410,13 @@ final class EQCoefficientStager {
             for index in 0..<activeCount {
                 guard index < rightBands.count else { break }
                 let config = rightBands[index]
+                // FIR bands produce no IIR coefficients — append identity slot and continue.
+                guard config.filterType != .fir else {
+                    rightSections.append([])
+                    rightBypassFlags.append(true)
+                    rightNeedsDoublePrecision.append(false)
+                    continue
+                }
                 let warpedFrequency: Double
                 if designRate != currentSampleRate {
                     warpedFrequency = BiquadMath.prewarpFrequency(

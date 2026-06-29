@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Grid of EQ band sliders with keyboard navigation.
@@ -37,7 +38,16 @@ struct EQBandGridView: View {
                             onNavigateRight: {
                                 navigateToBand(index + 1)
                             },
-                            startEditing: editingBand == index
+                            startEditing: editingBand == index,
+                            onLoadFIRKernel: {
+                                openImpulseResponseFile { url in
+                                    store.loadFIRBandKernel(url: url, bandIndex: index)
+                                }
+                            },
+                            onClearFIRKernel: {
+                                store.clearFIRBandKernel(bandIndex: index)
+                            },
+                            isLinearPhaseActive: store.compareMode == .linearEQ
                         )
                         .frame(width: 72)
                     }
@@ -50,5 +60,16 @@ struct EQBandGridView: View {
     private func navigateToBand(_ index: Int) {
         guard index >= 0 && index < store.bandCount else { return }
         editingBand = index
+    }
+
+    private func openImpulseResponseFile(onSelect: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.wav, .aiff, .audio]
+        panel.allowsMultipleSelection = false
+        panel.title = "Load FIR Band Impulse Response"
+        panel.message = "Select a WAV or AIFF impulse response (mono or stereo, max 30 s)"
+        if panel.runModal() == .OK, let url = panel.url {
+            onSelect(url)
+        }
     }
 }

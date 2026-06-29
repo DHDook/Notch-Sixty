@@ -16,7 +16,8 @@ final class FilterTypeTests: XCTestCase {
     }
 
     func testAllCasesCount() {
-        XCTAssertEqual(FilterType.allCases.count, 7)
+        XCTAssertEqual(FilterType.allCases.count, 9,
+            "FilterType must have 9 cases: 8 existing + .fir")
     }
 
     func testValidatedRawValue() {
@@ -31,8 +32,10 @@ final class FilterTypeTests: XCTestCase {
 
         // Invalid values
         XCTAssertNil(FilterType(validatedRawValue: -1))
-        XCTAssertNil(FilterType(validatedRawValue: 11))
         XCTAssertNil(FilterType(validatedRawValue: 100))
+
+        // Raw value 11 is now valid (.fir)
+        XCTAssertNotNil(FilterType(validatedRawValue: 11), ".fir must be valid at raw value 11")
     }
 
     func testValidatedRawValue_migratesLegacyResonantTypes() {
@@ -53,6 +56,7 @@ final class FilterTypeTests: XCTestCase {
         XCTAssertEqual(FilterType.highShelf.displayName, "High Shelf")
         XCTAssertEqual(FilterType.bandPass.displayName, "Band Pass")
         XCTAssertEqual(FilterType.notch.displayName, "Notch")
+        XCTAssertEqual(FilterType.fir.displayName, "FIR")
     }
 
     // MARK: - Abbreviation Tests
@@ -65,6 +69,7 @@ final class FilterTypeTests: XCTestCase {
         XCTAssertEqual(FilterType.highShelf.abbreviation, "HS")
         XCTAssertEqual(FilterType.bandPass.abbreviation, "BP")
         XCTAssertEqual(FilterType.notch.abbreviation, "Notch")
+        XCTAssertEqual(FilterType.fir.abbreviation, "FIR")
     }
 
     // MARK: - Coding Key Migration Tests
@@ -94,7 +99,8 @@ final class FilterTypeTests: XCTestCase {
     // MARK: - UI Order Tests
 
     func testUIOrderCount() {
-        XCTAssertEqual(FilterType.allCasesInUIOrder.count, 7)
+        XCTAssertEqual(FilterType.allCasesInUIOrder.count, 9,
+            "allCasesInUIOrder must include .fir — expected 9 total")
     }
 
     func testUIOrderContainsAllTypes() {
@@ -126,6 +132,14 @@ final class FilterTypeTests: XCTestCase {
             XCTAssertNotNil(decoded, "Failed to decode raw value \(rawValue)")
             XCTAssertEqual(decoded?.rawValue, rawValue)
         }
+        // allPass raw value 7
+        let apData = try! JSONEncoder().encode(7)
+        let apDecoded = try? JSONDecoder().decode(FilterType.self, from: apData)
+        XCTAssertEqual(apDecoded, .allPass)
+        // fir raw value 11
+        let firData = try! JSONEncoder().encode(11)
+        let firDecoded = try? JSONDecoder().decode(FilterType.self, from: firData)
+        XCTAssertEqual(firDecoded, .fir, "Raw value 11 must decode to .fir")
     }
 
     func testDecodeInvalidRawValue() {

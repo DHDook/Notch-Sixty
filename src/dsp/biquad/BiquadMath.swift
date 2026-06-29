@@ -107,6 +107,9 @@ enum BiquadMath {
             return notch(sampleRate: sampleRate, frequency: clampedFrequency, q: q)
         case .allPass:
             return allPass(sampleRate: sampleRate, frequency: clampedFrequency, q: q)
+        case .fir:
+            // FIR bands are processed by LinearPhaseEQEngine; return identity coefficients.
+            return BiquadCoefficients(b0: 1, b1: 0, b2: 0, a1: 0, a2: 0)
         }
     }
 
@@ -157,6 +160,9 @@ enum BiquadMath {
         case .allPass:
             // Allpass has no slope — return a single section
             return [calculateCoefficients(type: type, sampleRate: sampleRate, frequency: clampedFrequency, q: q, gain: gain)]
+        case .fir:
+            // FIR bands are processed by LinearPhaseEQEngine; return identity section.
+            return [BiquadCoefficients(b0: 1, b1: 0, b2: 0, a1: 0, a2: 0)]
         default:
             // Slope is not applicable — return a single section
             return [calculateCoefficients(type: type, sampleRate: sampleRate, frequency: clampedFrequency, q: q, gain: gain)]

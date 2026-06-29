@@ -57,11 +57,17 @@ struct EQBandConfiguration: Codable, Sendable {
         case slope
         case isDynamic
         case dynamicParams
+        case firKernelDisplayName
+        case firKernelLeft    // large — omitted from default encode path
+        case firKernelRight   // large — omitted from default encode path
     }
 
     init(frequency: Float, q: Float, gain: Float, filterType: FilterType, bypass: Bool, slope: FilterSlope = .db12,
          isDynamic: Bool = false,
-         dynamicParams: DynamicBandParams = DynamicBandParams()) {
+         dynamicParams: DynamicBandParams = DynamicBandParams(),
+         firKernelLeft: [Float]? = nil,
+         firKernelRight: [Float]? = nil,
+         firKernelDisplayName: String? = nil) {
         self.frequency     = frequency
         self.q             = q
         self.gain          = gain
@@ -70,6 +76,9 @@ struct EQBandConfiguration: Codable, Sendable {
         self.slope         = slope
         self.isDynamic     = isDynamic
         self.dynamicParams = dynamicParams
+        self.firKernelLeft        = firKernelLeft
+        self.firKernelRight       = firKernelRight
+        self.firKernelDisplayName = firKernelDisplayName
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +110,9 @@ struct EQBandConfiguration: Codable, Sendable {
 
         isDynamic     = (try container.decodeIfPresent(Bool.self,             forKey: .isDynamic))     ?? false
         dynamicParams = (try container.decodeIfPresent(DynamicBandParams.self, forKey: .dynamicParams)) ?? DynamicBandParams()
+        firKernelDisplayName = try container.decodeIfPresent(String.self,  forKey: .firKernelDisplayName)
+        firKernelLeft        = try container.decodeIfPresent([Float].self, forKey: .firKernelLeft)
+        firKernelRight       = try container.decodeIfPresent([Float].self, forKey: .firKernelRight)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -115,6 +127,23 @@ struct EQBandConfiguration: Codable, Sendable {
         if isDynamic {
             try container.encode(dynamicParams, forKey: .dynamicParams)
         }
+        // Encode display name only — kernel arrays are large and excluded from the
+        // standard path. Use encodeIncludingKernels(to:) for full persistence.
+        try container.encodeIfPresent(firKernelDisplayName, forKey: .firKernelDisplayName)
+        // firKernelLeft and firKernelRight intentionally omitted here.
+    }
+
+    /// Encodes this band configuration including the FIR kernel arrays.
+    ///
+    /// Use when saving a standalone preset file that must be self-contained
+    /// (i.e. the user does not want to reload the IR from the original file).
+    /// Results in a larger preset file.
+    func encodeIncludingKernels(to encoder: Encoder) throws {
+        // Encode everything from encode(to:) plus the kernel arrays.
+        try encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(firKernelLeft,  forKey: .firKernelLeft)
+        try container.encodeIfPresent(firKernelRight, forKey: .firKernelRight)
     }
 
     var frequency: Float
@@ -128,6 +157,20 @@ struct EQBandConfiguration: Codable, Sendable {
     var isDynamic: Bool = false
     /// Dynamic envelope parameters. Ignored when `isDynamic == false`.
     var dynamicParams: DynamicBandParams = DynamicBandParams()
+
+    /// Left-channel FIR kernel samples. Non-nil only when filterType == .fir.
+    /// Not encoded in the standard band serialisation path to keep preset files small.
+    /// Use encodeIncludingKernels(to:) to persist kernel data.
+    var firKernelLeft: [Float]? = nil
+
+    /// Right-channel FIR kernel. When nil and filterType == .fir, the left kernel
+    /// is used for both channels (mono IR).
+    var firKernelRight: [Float]? = nil
+
+    /// Display name for the loaded FIR kernel (filename without extension).
+    /// Encoded in the standard path so the UI shows the name even if the kernel
+    /// is not embedded in the preset.
+    var firKernelDisplayName: String? = nil
 
     /// Default parametric band configuration.
     static func parametric(frequency: Float, q: Float = EQConfiguration.defaultQ) -> EQBandConfiguration {
@@ -836,6 +879,30 @@ final class EQConfiguration: ObservableObject {
             } else {
                 rightState.userEQ.bands[index].dynamicParams = params
             }
+        }
+        objectWillChange.send()
+    }
+
+    /// Updates the FIR kernel data for a specific EQ band.
+    ///
+    /// In linked mode, the same kernels are stored on both channels (L kernel → left,
+    /// R kernel → right). In stereo / midSide mode, the kernel is stored on
+    /// the focused channel only; pass `nil` for the right kernel to share the left
+    /// kernel on both channels (mono IR).
+    func updateFIRBandKernel(
+        index: Int,
+        leftKernel: [Float]?,
+        rightKernel: [Float]?,
+        displayName: String?
+    ) {
+        guard isValidIndex(index) else { return }
+        leftState.userEQ.bands[index].firKernelLeft        = leftKernel
+        leftState.userEQ.bands[index].firKernelRight       = rightKernel
+        leftState.userEQ.bands[index].firKernelDisplayName = displayName
+        if channelMode == .linked {
+            rightState.userEQ.bands[index].firKernelLeft        = leftKernel
+            rightState.userEQ.bands[index].firKernelRight       = rightKernel
+            rightState.userEQ.bands[index].firKernelDisplayName = displayName
         }
         objectWillChange.send()
     }

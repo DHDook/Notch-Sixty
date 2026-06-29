@@ -99,6 +99,9 @@ enum CamillaDSPExporter {
             return "Bandstop"
         case .allPass:
             return "Allpass"
+        case .fir:
+            // FIR bands have no CamillaDSP biquad equivalent — skip with identity type.
+            return "Peaking"
         }
     }
 }

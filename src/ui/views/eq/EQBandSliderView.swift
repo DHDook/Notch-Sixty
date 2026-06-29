@@ -17,6 +17,12 @@ struct EQBandSliderView: View {
     var onNavigateLeft: (() -> Void)? = nil
     var onNavigateRight: (() -> Void)? = nil
     var startEditing: Bool = false
+    /// Called when the user taps "Load IR…" for a .fir band.
+    var onLoadFIRKernel: (() -> Void)? = nil
+    /// Called when the user taps "Clear" for a .fir band.
+    var onClearFIRKernel: (() -> Void)? = nil
+    /// True when the EQ is in linear-phase mode (needed to show the FIR warning).
+    var isLinearPhaseActive: Bool = false
 
     @State private var isShowingDetail = false
     @State private var dragStartGain: Float? = nil
@@ -96,7 +102,10 @@ struct EQBandSliderView: View {
                         dynamicParamsUpdate: { params in
                             dynamicParamsUpdate?(params)
                         },
-                        onClose: { isShowingDetail = false }
+                        onClose: { isShowingDetail = false },
+                        onLoadFIRKernel: onLoadFIRKernel,
+                        onClearFIRKernel: onClearFIRKernel,
+                        isLinearPhaseActive: isLinearPhaseActive
                     )
                     .frame(width: 240)
                 }
@@ -187,6 +196,7 @@ struct EQBandSliderView: View {
 struct EQBandDetailPopover: View {
     @EnvironmentObject var store: EqualiserStore
 
+    let band: EQBandConfiguration
     let gainUpdate: (Float) -> Void
     let frequencyUpdate: (Float) -> Void
     let qUpdate: (Float) -> Void
@@ -196,6 +206,11 @@ struct EQBandDetailPopover: View {
     let isDynamicUpdate: (Bool) -> Void
     let dynamicParamsUpdate: (DynamicBandParams) -> Void
     let onClose: () -> Void
+    var onLoadFIRKernel: (() -> Void)? = nil
+    var onClearFIRKernel: (() -> Void)? = nil
+    /// True when the EQ is in linear-phase mode. Shown as a hint when .fir is selected
+    /// without linear-phase mode active.
+    var isLinearPhaseActive: Bool = false
 
     @State private var gain: Float
     @State private var frequency: Float
@@ -241,7 +256,10 @@ struct EQBandDetailPopover: View {
          bypassUpdate: @escaping (Bool) -> Void,
          isDynamicUpdate: @escaping (Bool) -> Void,
          dynamicParamsUpdate: @escaping (DynamicBandParams) -> Void,
-         onClose: @escaping () -> Void) {
+         onClose: @escaping () -> Void,
+         onLoadFIRKernel: (() -> Void)? = nil,
+         onClearFIRKernel: (() -> Void)? = nil,
+         isLinearPhaseActive: Bool = false) {
         _gain = State(initialValue: band.gain)
         _frequency = State(initialValue: band.frequency)
         _q = State(initialValue: band.q)
@@ -278,6 +296,10 @@ struct EQBandDetailPopover: View {
         self.isDynamicUpdate = isDynamicUpdate
         self.dynamicParamsUpdate = dynamicParamsUpdate
         self.onClose = onClose
+        self.band = band
+        self.onLoadFIRKernel = onLoadFIRKernel
+        self.onClearFIRKernel = onClearFIRKernel
+        self.isLinearPhaseActive = isLinearPhaseActive
     }
 
     var body: some View {
@@ -352,6 +374,7 @@ struct EQBandDetailPopover: View {
                         return .handled
                     }
             }
+            .disabled(filterType == .fir)
 
             // Gain
             HStack {
@@ -380,6 +403,7 @@ struct EQBandDetailPopover: View {
                         return .handled
                     }
             }
+            .disabled(filterType == .fir)
 
             // Bandwidth / Q Factor
             // UI displays bandwidth or Q based on user preference, but model stores Q.
@@ -418,6 +442,7 @@ struct EQBandDetailPopover: View {
                         return .handled
                     }
             }
+            .disabled(filterType == .fir)
             .onAppear {
                 bandwidthText = BandwidthConverter.formatForInput(q: q, mode: store.bandwidthDisplayMode)
             }
@@ -620,6 +645,43 @@ struct EQBandDetailPopover: View {
                 filterTypeUpdate(newValue)
             }
 
+            // FIR kernel load controls — shown when filterType == .fir
+            if filterType == .fir {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let name = band.firKernelDisplayName {
+                        Text(name)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text("No IR loaded")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                    HStack(spacing: 6) {
+                        Button("Load IR…") {
+                            onLoadFIRKernel?()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        if band.firKernelDisplayName != nil {
+                            Button("Clear") {
+                                onClearFIRKernel?()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+                    }
+                    if !isLinearPhaseActive {
+                        Text("⚠ FIR bands require Linear Phase mode")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.top, 4)
+            }
+
             Picker("Slope", selection: $slope) {
                 ForEach(FilterSlope.allCases, id: \.self) { s in
                     Text(s.displayName)
@@ -627,7 +689,7 @@ struct EQBandDetailPopover: View {
                 }
             }
             .pickerStyle(.menu)
-            .disabled(filterType == .allPass)
+            .disabled(filterType == .allPass || filterType == .fir)
             .onChange(of: slope) { _, newValue in
                 slopeUpdate(newValue)
             }

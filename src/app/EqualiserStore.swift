@@ -1897,6 +1897,41 @@ final class EqualiserStore: ObservableObject {
         updateAdvancedProcessing(adv)
     }
 
+    /// Loads a FIR kernel from a WAV/AIFF file into a specific EQ band.
+    /// The band must have filterType == .fir for the kernel to be applied.
+    func loadFIRBandKernel(url: URL, bandIndex: Int) {
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        Task.detached(priority: .userInitiated) {
+            do {
+                let result = try IRFileLoader.load(url: url, targetSampleRate: sr)
+                await MainActor.run {
+                    self.eqConfiguration.updateFIRBandKernel(
+                        index: bandIndex,
+                        leftKernel:  result.leftSamples,
+                        rightKernel: result.rightSamples,
+                        displayName: result.displayName
+                    )
+                    // Restage EQ to pick up the new kernel in LinearPhaseEQEngine.
+                    self.routingCoordinator.reapplyConfiguration()
+                    self.presetManager.markAsModified()
+                }
+            } catch {
+                await MainActor.run {
+                    self.convolutionLoadError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Clears the FIR kernel from a specific EQ band.
+    func clearFIRBandKernel(bandIndex: Int) {
+        eqConfiguration.updateFIRBandKernel(
+            index: bandIndex,
+            leftKernel: nil, rightKernel: nil, displayName: nil)
+        routingCoordinator.reapplyConfiguration()
+        presetManager.markAsModified()
+    }
+
     // MARK: - Microphone Calibration (Part 4.1)
 
     func loadMicCalibration(url: URL) {

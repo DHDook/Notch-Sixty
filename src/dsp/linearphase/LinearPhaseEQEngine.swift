@@ -238,11 +238,54 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
         outReal: UnsafeMutablePointer<Float>,
         outImag: UnsafeMutablePointer<Float>
     ) {
+        /// - Note: For `.fir` bands, the `firKernelLeft` property of each
+        ///   `EQBandConfiguration` is used as the kernel. The caller must substitute
+        ///   `firKernelRight` into the right-channel band array when the two channels
+        ///   differ (see `EQCoefficientStager.refreshLinearPhaseIRIfNeeded`).
         guard let setup = fftSetup else { return }
         let N = fftSize
 
         var mag = [Double](repeating: 1.0, count: halfN + 1)
         for band in bands where !band.bypass && !band.isDynamic {
+            if band.filterType == .fir {
+                // FIR band: fold the user kernel spectrum into the magnitude accumulator.
+                // firKernelLeft is used as the kernel source; the caller is responsible
+                // for substituting firKernelRight when processing the right channel.
+                guard let kernel = band.firKernelLeft, !kernel.isEmpty else { continue }
+                let copyCount = min(kernel.count, N)
+                var paddedKernel = [Float](repeating: 0, count: N)
+                var paddedImag   = [Float](repeating: 0, count: N)
+                paddedKernel.withUnsafeMutableBufferPointer { dst in
+                    kernel.withUnsafeBufferPointer { src in
+                        memcpy(dst.baseAddress!, src.baseAddress!,
+                               copyCount * MemoryLayout<Float>.size)
+                    }
+                }
+                // FFT the kernel to get its frequency-domain representation.
+                paddedKernel.withUnsafeMutableBufferPointer { realBuf in
+                    paddedImag.withUnsafeMutableBufferPointer { imagBuf in
+                        var kernelSC = DSPSplitComplex(
+                            realp: realBuf.baseAddress!,
+                            imagp: imagBuf.baseAddress!
+                        )
+                        vDSP_fft_zrip(setup, &kernelSC, 1, log2n, Int32(FFT_FORWARD))
+                    }
+                }
+                // vDSP_fft_zrip applies a 2× scale on forward pass; normalise it out.
+                var invScale = Float(1.0 / Float(N))
+                // Use separate source/dest buffers to satisfy exclusivity.
+                var scaledKernel = [Float](repeating: 0, count: N)
+                var scaledImag   = [Float](repeating: 0, count: N)
+                vDSP_vsmul(&paddedKernel, 1, &invScale, &scaledKernel, 1, vDSP_Length(halfN + 1))
+                vDSP_vsmul(&paddedImag,   1, &invScale, &scaledImag,   1, vDSP_Length(halfN + 1))
+                // Multiply the kernel magnitude into the accumulator.
+                for k in 0...halfN {
+                    let re = Double(scaledKernel[k])
+                    let im = Double(scaledImag[k])
+                    mag[k] *= sqrt(re * re + im * im)
+                }
+                continue  // skip IIR coefficient path for this band
+            }
             let designRate = BiquadMath.designSampleRate(
                 actualRate: sampleRate,
                 coefficientDecouplingEnabled: true)
