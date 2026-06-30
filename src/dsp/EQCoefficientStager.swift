@@ -281,6 +281,40 @@ final class EQCoefficientStager {
 
     // MARK: - Private Coefficient Helpers
 
+    /// Computes biquad sections for a band, routing Linkwitz-Transform and constant-Q
+    /// through their dedicated math. Single source of truth used by both the incremental
+    /// (stageBandCoefficients) and full-reload (reapplyAllCoefficients) paths.
+    private func computeSections(for config: EQBandConfiguration, warpedFrequency: Double, designRate: Double) -> [BiquadCoefficients] {
+        if config.filterType == .parametric && config.constantQ {
+            let single = BiquadMath.peakingEQConstantQ(
+                sampleRate: designRate,
+                frequency: warpedFrequency,
+                q: Double(config.q),
+                gain: Double(config.gain)
+            )
+            return [single]
+        } else if config.filterType == .linkwitzTransform {
+            let fp = config.linkwitzTargetHz.map { Double($0) } ?? (warpedFrequency * 0.7)
+            // BiquadMath.linkwitzTransform internally guards against non-positive Q values
+            // and non-finite results, returning identity coefficients if invalid — safe to call directly.
+            let single = BiquadMath.linkwitzTransform(
+                f0: warpedFrequency, q0: Double(config.q),
+                fp: fp, qp: Double(config.gain),
+                sampleRate: designRate
+            )
+            return [single]
+        } else {
+            return BiquadMath.calculateSections(
+                type: config.filterType,
+                sampleRate: designRate,
+                frequency: warpedFrequency,
+                q: Double(config.q),
+                gain: Double(config.gain),
+                slope: config.slope
+            )
+        }
+    }
+
     /// Stages coefficients for a single band (incremental update path).
     private func stageBandCoefficients(index: Int, config: EQBandConfiguration) {
         if config.filterType == .fir {
@@ -313,36 +347,7 @@ final class EQCoefficientStager {
             warpedFrequency = Double(config.frequency)
         }
 
-        // For constant-Q parametric bands, use the Orfanidis formula.
-        // For Linkwitz-Transform, use per-band linkwitzTargetHz if available.
-        let sections: [BiquadCoefficients]
-        if config.filterType == .parametric && config.constantQ {
-            let single = BiquadMath.peakingEQConstantQ(
-                sampleRate: designRate,
-                frequency: warpedFrequency,
-                q: Double(config.q),
-                gain: Double(config.gain)
-            )
-            sections = [single]
-        } else if config.filterType == .linkwitzTransform {
-            let fp = config.linkwitzTargetHz.map { Double($0) } ?? (warpedFrequency * 0.7)
-            let single = BiquadMath.linkwitzTransform(
-                f0: warpedFrequency, q0: Double(config.q),
-                fp: fp, qp: Double(config.gain),
-                sampleRate: designRate
-            )
-            sections = [single]
-        } else {
-            sections = BiquadMath.calculateSections(
-                type: config.filterType,
-                sampleRate: designRate,
-                frequency: warpedFrequency,
-                q: Double(config.q),
-                gain: Double(config.gain),
-                slope: config.slope
-            )
-        }
-
+        let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
         let target: EQChannelTarget
         switch eqConfiguration.channelMode {
         case .linked:
@@ -406,14 +411,7 @@ final class EQCoefficientStager {
             } else {
                 warpedFrequency = Double(config.frequency)
             }
-            let sections = BiquadMath.calculateSections(
-                type: config.filterType,
-                sampleRate: designRate,
-                frequency: warpedFrequency,
-                q: Double(config.q),
-                gain: Double(config.gain),
-                slope: config.slope
-            )
+            let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
             leftSections.append(sections)
             leftBypassFlags.append(config.bypass)
             leftNeedsDoublePrecision.append(!config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0))
@@ -457,14 +455,7 @@ final class EQCoefficientStager {
                 } else {
                     warpedFrequency = Double(config.frequency)
                 }
-                let sections = BiquadMath.calculateSections(
-                    type: config.filterType,
-                    sampleRate: designRate,
-                    frequency: warpedFrequency,
-                    q: Double(config.q),
-                    gain: Double(config.gain),
-                    slope: config.slope
-                )
+                let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
                 rightSections.append(sections)
                 rightBypassFlags.append(config.bypass)
                 rightNeedsDoublePrecision.append(!config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0))

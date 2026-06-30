@@ -1565,6 +1565,10 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
 
     /// EQ Headroom Compensation — applies static preamp attenuation to prevent clipping from EQ boosts.
     var eqHeadroomCompensationEnabled: Bool = true
+    /// Maximum allowed static preamp attenuation in dB. Prevents runaway stacking of
+    /// target curve + room correction + EQ + bass management from silencing the output.
+    /// Range: 3–24 dB. Default: 12 dB.
+    var eqHeadroomMaxAttenuationDB: Float = 12.0
 
     // MARK: - Codable
 
@@ -1624,6 +1628,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case multiSeatAveragingEnabled, multiSeatCount
         case subBassPhaseAlignmentEnabled, subBassAlignmentFrequencyHz, subBassPhaseAlignmentQ
         case eqHeadroomCompensationEnabled
+        case eqHeadroomMaxAttenuationDB
         // highResDecouplingActive is not persisted (runtime-computed)
     }
 
@@ -1698,7 +1703,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         loudnessReferencePhon: Float = 83.0,
         loudnessReferenceVolume: Float = 0.85,
         perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig(),
-        eqHeadroomCompensationEnabled: Bool = true
+        eqHeadroomCompensationEnabled: Bool = true,
+        eqHeadroomMaxAttenuationDB: Float = 12.0
     ) {
         self.highResDecouplingActive          = highResDecouplingActive
         self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
@@ -1771,6 +1777,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.loudnessReferenceVolume          = loudnessReferenceVolume
         self.perBandLoudness                 = perBandLoudness
         self.eqHeadroomCompensationEnabled   = eqHeadroomCompensationEnabled
+        self.eqHeadroomMaxAttenuationDB      = eqHeadroomMaxAttenuationDB
     }
 
     init(from decoder: Decoder) throws {
@@ -1863,7 +1870,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         loudnessReferencePhon            = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferencePhon)            ?? 83.0
         loudnessReferenceVolume          = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferenceVolume)          ?? 0.85
         perBandLoudness                 = try c.decodeIfPresent(PerBandLoudnessConfig.self, forKey: .perBandLoudness)                 ?? PerBandLoudnessConfig()
-        eqHeadroomCompensationEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .eqHeadroomCompensationEnabled)   ?? true
+        eqHeadroomCompensationEnabled   = try c.decodeIfPresent(Bool.self,  forKey: .eqHeadroomCompensationEnabled)  ?? true
+        eqHeadroomMaxAttenuationDB      = try c.decodeIfPresent(Float.self, forKey: .eqHeadroomMaxAttenuationDB)     ?? 12.0
         highResDecouplingActive          = false  // always computed at runtime
     }
 
@@ -1937,6 +1945,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(loudnessReferenceVolume,            forKey: .loudnessReferenceVolume)
         try c.encode(perBandLoudness,                    forKey: .perBandLoudness)
         try c.encode(eqHeadroomCompensationEnabled,      forKey: .eqHeadroomCompensationEnabled)
+        try c.encode(eqHeadroomMaxAttenuationDB,         forKey: .eqHeadroomMaxAttenuationDB)
     }
 }
 

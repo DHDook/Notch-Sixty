@@ -774,7 +774,9 @@ final class EqualiserStore: ObservableObject {
                 gain: band.gain,
                 filterType: band.filterType,
                 bypass: band.bypass,
-                slope: band.slope
+                slope: band.slope,
+                constantQ: band.constantQ,
+                linkwitzTargetHz: band.linkwitzTargetHz
             )
         }
 
@@ -801,7 +803,8 @@ final class EqualiserStore: ObservableObject {
             eqLayer: eqLayer,
             roomCorrectionLayer: roomCorrectionLayer,
             targetCurve: targetCurve,
-            lowBandGainDB: lowBandGainDB
+            lowBandGainDB: lowBandGainDB,
+            maxAttenuationDB: dynamicsConfig.advanced.eqHeadroomMaxAttenuationDB
         )
 
         // Apply to render pipeline

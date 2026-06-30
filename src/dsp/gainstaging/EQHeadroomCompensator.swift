@@ -16,12 +16,14 @@ enum EQHeadroomCompensator {
     ///   - roomCorrectionLayer: Room correction bands
     ///   - targetCurve: Target curve for room correction
     ///   - lowBandGainDB: Low band (subwoofer) gain from bass management
-    /// - Returns: Static preamp gain in dB (always ≤ 0, never positive)
+    ///   - maxAttenuationDB: Maximum allowed attenuation (range 3–24 dB, default 12 dB)
+    /// - Returns: Static preamp gain in dB (always ≤ 0, never positive, clamped by ceiling)
     static func computeStaticPreampDB(
         eqLayer: [PresetBand],
         roomCorrectionLayer: [PresetBand],
         targetCurve: [(frequency: Double, gainDB: Double)],
-        lowBandGainDB: Float
+        lowBandGainDB: Float,
+        maxAttenuationDB: Float = 12.0
     ) -> Float {
         let frequencies = generateFrequencyBins()
         var worstCaseBoostDB: Float = 0.0
@@ -35,11 +37,23 @@ enum EQHeadroomCompensator {
             if freq < 300.0 {
                 linearGain *= pow(10.0, Double(lowBandGainDB) / 20.0)
             }
+            // Guard: a NaN/Inf result means a band's coefficients are malformed.
+            // Treat this as the worst possible case (maximum caution) rather than
+            // silently ignoring it — never under-protect against a poisoned band.
+            guard linearGain.isFinite else {
+                worstCaseBoostDB = max(worstCaseBoostDB, 24.0)
+                continue
+            }
             let binBoostDB = Float(20.0 * log10(max(linearGain, 1e-10)))
+            if !binBoostDB.isFinite {
+                worstCaseBoostDB = max(worstCaseBoostDB, 24.0)
+                continue
+            }
             if binBoostDB > worstCaseBoostDB { worstCaseBoostDB = binBoostDB }
         }
 
-        return -max(0.0, worstCaseBoostDB)
+        let clampedWorstCase = min(worstCaseBoostDB, max(3.0, maxAttenuationDB))
+        return -max(0.0, clampedWorstCase)
     }
 
     /// Generates frequency bins for analysis (20 Hz - 96 kHz, log-spaced).
@@ -69,21 +83,39 @@ enum EQHeadroomCompensator {
     /// Computes the gain of a single band at a specific frequency.
     private static func computeBandGain(at frequency: Float, band: PresetBand) -> Float {
         guard !band.bypass else { return 0.0 }
-        switch band.filterType {
-        case .parametric, .lowShelf, .highShelf, .lowPass, .highPass, .bandPass, .notch:
-            let coeffs = BiquadMath.calculateCoefficients(
-                type: band.filterType,
-                sampleRate: 48_000.0,  // magnitude response is sample-rate-dependent only near Nyquist; 48k is safe reference for headroom calc
+        let coefficients: BiquadCoefficients
+        if band.filterType == .parametric && band.constantQ {
+            coefficients = BiquadMath.peakingEQConstantQ(
+                sampleRate: 48_000.0,
                 frequency: Double(band.frequency),
                 q: Double(band.q),
                 gain: Double(band.gain)
             )
-            return Float(BiquadMath.magnitudeDB(coefficients: coeffs,
-                                                 atFrequency: Double(frequency),
-                                                 sampleRate: 48_000.0))
-        default:
-            return 0.0
+        } else if band.filterType == .linkwitzTransform {
+            let fp = band.linkwitzTargetHz.map { Double($0) } ?? (Double(band.frequency) * 0.7)
+            coefficients = BiquadMath.linkwitzTransform(
+                f0: Double(band.frequency), q0: Double(band.q),
+                fp: fp, qp: Double(band.gain),
+                sampleRate: 48_000.0
+            )
+        } else {
+            switch band.filterType {
+            case .parametric, .lowShelf, .highShelf, .lowPass, .highPass, .bandPass, .notch:
+                coefficients = BiquadMath.calculateCoefficients(
+                    type: band.filterType,
+                    sampleRate: 48_000.0,
+                    frequency: Double(band.frequency),
+                    q: Double(band.q),
+                    gain: Double(band.gain)
+                )
+            default:
+                return 0.0
+            }
         }
+        let db = BiquadMath.magnitudeDB(coefficients: coefficients,
+                                        atFrequency: Double(frequency),
+                                        sampleRate: 48_000.0)
+        return db.isFinite ? Float(db) : 0.0
     }
 
     /// Interpolates the target curve at a specific frequency.

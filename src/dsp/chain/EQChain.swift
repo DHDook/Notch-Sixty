@@ -80,6 +80,25 @@ final class EQChain {
 
     // MARK: - Main Thread API
 
+    /// Returns `sections` unchanged if every coefficient in every section is finite;
+    /// otherwise returns a single identity (passthrough) section. Defense-in-depth
+    /// backstop — coefficient calculation should already guarantee finite values (see
+    /// BiquadMath's internal guards), but this prevents any malformed filter from ever
+    /// reaching the live audio-thread filter state regardless of how it was produced.
+    private func sanitizedSections(_ sections: [BiquadCoefficients]) -> [BiquadCoefficients] {
+        for section in sections {
+            guard section.b0.isFinite, section.b1.isFinite, section.b2.isFinite,
+                  section.a1.isFinite, section.a2.isFinite
+            else {
+                #if DEBUG
+                print("EQChain: rejected non-finite biquad coefficients, substituting identity")
+                #endif
+                return [.identity]
+            }
+        }
+        return sections
+    }
+
     /// Stages new coefficients for a single band (called from main thread).
     ///
     /// This is the incremental update path — used for slider drags and single-parameter changes.
@@ -92,7 +111,7 @@ final class EQChain {
     ///   - needsDoublePrecision: Whether this band requires double-precision processing.
     func stageBandUpdate(index: Int, sections: [BiquadCoefficients], bypass: Bool, needsDoublePrecision: Bool = false) {
         guard index >= 0 && index < Self.maxBandCount else { return }
-        pendingCoefficients[index] = sections
+        pendingCoefficients[index] = sanitizedSections(sections)
         pendingBypassFlags[index] = bypass
         filters[index].useDoublePrecision = needsDoublePrecision
         hasPendingUpdate.store(true, ordering: .releasing)
@@ -116,7 +135,8 @@ final class EQChain {
         needsDoublePrecision: [Bool] = [Bool](repeating: false, count: maxBandCount)
     ) {
         for i in 0..<Self.maxBandCount {
-            pendingCoefficients[i] = i < sections.count ? sections[i] : [.identity]
+            let raw = i < sections.count ? sections[i] : [.identity]
+            pendingCoefficients[i] = sanitizedSections(raw)
             pendingBypassFlags[i] = i < bypassFlags.count ? bypassFlags[i] : false
             filters[i].useDoublePrecision = i < needsDoublePrecision.count ? needsDoublePrecision[i] : false
         }

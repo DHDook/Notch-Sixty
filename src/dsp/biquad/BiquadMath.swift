@@ -113,9 +113,7 @@ enum BiquadMath {
         case .linkwitzTransform:
             // q = Q0 (existing enclosure Q), gain = Qp (target Q), frequency = f0 (existing resonance).
             // fp defaults to frequency * 0.7 as a starting point; use linkwitzTargetHz on the band for precise fp.
-            guard clampedFrequency > 0, q > 0, gain > 0 else {
-                return BiquadCoefficients(b0: 1, b1: 0, b2: 0, a1: 0, a2: 0)
-            }
+            // Parameter validation (q0>0.01, qp>0.01, frequencies in range) is enforced inside linkwitzTransform() itself.
             return linkwitzTransform(
                 f0: clampedFrequency, q0: q,
                 fp: clampedFrequency * 0.7, qp: gain,
@@ -718,12 +716,26 @@ enum BiquadMath {
     ///   - fp: Target resonance frequency in Hz (desired new F3)
     ///   - qp: Target resonance Q factor (desired alignment Q, e.g. 0.577 for 3rd-order)
     ///   - sampleRate: Sample rate in Hz
-    /// - Returns: Normalised biquad coefficients
+    /// - Returns: Normalised biquad coefficients, or identity if any parameter is invalid
     static func linkwitzTransform(
         f0: Double, q0: Double,
         fp: Double, qp: Double,
         sampleRate: Double
     ) -> BiquadCoefficients {
+        // Defensive guard: q0/qp appear in 1/(q*2*pi*f) terms. A zero or negative value
+        // produces division by zero (Inf) or a sign-flipped unstable filter (NaN downstream).
+        // f0/fp must also be strictly positive and below Nyquist.
+        // A Q value below 0.01 is not a physically meaningful loudspeaker alignment and
+        // is close enough to zero to risk numerical blow-up even without hitting literal zero.
+        let nyquist = sampleRate * 0.5
+        guard q0 > 0.01, qp > 0.01,
+              f0 > 0, f0 < nyquist,
+              fp > 0, fp < nyquist,
+              sampleRate > 0
+        else {
+            return .identity
+        }
+
         // Bilinear substitution: s → 2*fs*(1-z^-1)/(1+z^-1)
         let k  = 2.0 * sampleRate
         let k2 = k * k
@@ -740,7 +752,14 @@ enum BiquadMath {
         let a1 = -2.0        + 2.0 * e0 * k2
         let a2 =  1.0 - d0 * k + e0 * k2
 
-        return normalise(b0: b0, b1: b1, b2: b2, a0: a0, a1: a1, a2: a2)
+        let result = normalise(b0: b0, b1: b1, b2: b2, a0: a0, a1: a1, a2: a2)
+        // Defense in depth: catch any non-finite result regardless of how it was produced.
+        guard result.b0.isFinite, result.b1.isFinite, result.b2.isFinite,
+              result.a1.isFinite, result.a2.isFinite
+        else {
+            return .identity
+        }
+        return result
     }
 
     // MARK: - Tilt EQ
@@ -841,8 +860,11 @@ enum BiquadMath {
     /// Computes the magnitude response in dB of a biquad filter at a specific frequency.
     ///
     /// Evaluates |H(e^{jω})| from b0,b1,b2,a1,a2 in dB using the standard formula:
-    /// |H(ω)|² = (b0² + b1² + b2² + 2*b0*b1*cos(ω) + 2*b0*b2*cos(2ω) + 2*b1*b2*cos(ω)) /
-    ///          (1 + a1² + a2² + 2*a1*cos(ω) + 2*a2*cos(2ω) + 2*a1*a2*cos(ω))
+    /// |H(ω)|² = (b0² + b1² + b2² + 2·b0·b1·cos(ω) + 2·b0·b2·cos(2ω) + 2·b1·b2·cos(ω)) /
+    ///          (1 + a1² + a2² + 2·a1·cos(ω) + 2·a2·cos(2ω) + 2·a1·a2·cos(2ω))
+    ///
+    /// Note: the b1·b2 numerator cross-product pairs with cos(ω) (first-order term);
+    /// the a1·a2 denominator cross-product correctly pairs with cos(2ω) (second-order term).
     /// - Parameters:
     ///   - coefficients: Normalised biquad coefficients (a0 is implicitly 1.0)
     ///   - atFrequency: Frequency at which to evaluate magnitude (Hz)

@@ -43,6 +43,8 @@ final class SpectralDenoiser: @unchecked Sendable {
 
     // Gain smoother time constants (instance variables — configurable via setGainSmoothingMs).
     // Defaults match the former hardcoded values (attack ≈ 11 ms, release ≈ 21 ms at 48 kHz/512-hop).
+    private var gainAttackMs:    Float = 11.0
+    private var gainReleaseMs:   Float = 21.0
     private var gainAttackAlpha:  Float = 0.15
     private var gainReleaseAlpha: Float = 0.30
 
@@ -246,10 +248,8 @@ final class SpectralDenoiser: @unchecked Sendable {
     func updateSampleRate(_ newSampleRate: Double) {
         sampleRate = newSampleRate
         rebuildMaskingBias()
-        // Re-derive gain smoothing alphas from the current ms values at the new sample rate.
-        setGainSmoothingMs(attackMs: Float(hopSize) / Float(sampleRate) * 1000.0 / max(1.0 - gainAttackAlpha, 1e-6),
-                           releaseMs: Float(hopSize) / Float(sampleRate) * 1000.0 / max(1.0 - gainReleaseAlpha, 1e-6),
-                           sampleRate: newSampleRate)
+        // Use stored ms values directly — no reverse-derivation that would drift on repeated calls.
+        setGainSmoothingMs(attackMs: gainAttackMs, releaseMs: gainReleaseMs, sampleRate: newSampleRate)
         // Per-bin noise floor estimates are in the old frequency scale; discard them.
         reset()
     }
@@ -317,8 +317,9 @@ final class SpectralDenoiser: @unchecked Sendable {
     ///   - releaseMs: Gain release time in milliseconds (how quickly gain falls).
     ///   - sampleRate: Current sample rate (used together with hopSize).
     func setGainSmoothingMs(attackMs: Float, releaseMs: Float, sampleRate: Double) {
+        gainAttackMs  = attackMs
+        gainReleaseMs = releaseMs
         let frameMs = Float(hopSize) / Float(sampleRate) * 1000.0
-        // alpha = exp(-frameMs / tau_ms). Small alpha → fast tracking; near 1 → slow.
         gainAttackAlpha  = max(0.0, min(0.999, Float(exp(-Double(frameMs / max(attackMs,  0.1))))))
         gainReleaseAlpha = max(0.0, min(0.999, Float(exp(-Double(frameMs / max(releaseMs, 0.1))))))
     }
