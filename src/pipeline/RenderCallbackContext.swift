@@ -1588,4 +1588,19 @@ final class RenderCallbackContext: @unchecked Sendable {
             frameCount: frameCount
         )
     }
+
+    /// Delivers externally captured mic samples to the RTA analyser's input ring buffer.
+    /// Called from MicCaptureSession's delivery queue (background thread).
+    /// This path is used when a separate physical mic device is supplying the signal
+    /// instead of the virtual driver's loopback input.
+    func deliverMicSamplesToRTA(_ samples: [Float]) {
+        guard let buf = rtaInputBuffer else { return }
+        samples.withUnsafeBufferPointer { ptr in
+            buf.writeStereoSamples(
+                leftChannel: ptr.baseAddress!,
+                rightChannel: ptr.baseAddress!,
+                frameCount: samples.count
+            )
+        }
+    }
 }

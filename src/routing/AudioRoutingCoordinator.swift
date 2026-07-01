@@ -131,8 +131,8 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     // MARK: - Listening RTA (Mic Capture)
 
-    /// HAL manager for listening RTA mic capture.
-    private var listeningRTAHALManager: HALIOManager?
+    /// Mic capture session for listening RTA.
+    private var listeningRTAMicSession: MicCaptureSession?
 
     /// Updates listening RTA mic capture based on enabled state and mic device selection.
     private func updateListeningRTACapture(enabled: Bool, micDeviceID: String?) {
@@ -150,7 +150,7 @@ final class AudioRoutingCoordinator: ObservableObject {
         }
 
         // Start capture if not already running
-        if listeningRTAHALManager == nil {
+        if listeningRTAMicSession == nil {
             startListeningRTACapture(deviceID: micDeviceID)
         }
     }
@@ -159,51 +159,26 @@ final class AudioRoutingCoordinator: ObservableObject {
     private func startListeningRTACapture(deviceID: AudioDeviceID) {
         logger.info("Starting listening RTA capture for device \(deviceID)")
 
-        let manager = HALIOManager(mode: .inputOnly)
-        switch manager.configure(deviceID: deviceID) {
-        case .success:
-            listeningRTAHALManager = manager
+        let sr = pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let session = MicCaptureSession(deviceID: deviceID, sampleRate: sr, channelCount: 1)
 
-            // Initialize the audio unit
-            if case .failure(let error) = manager.initialize() {
-                logger.error("Listening RTA: failed to initialize audio unit: \(error.localizedDescription)")
-                listeningRTAHALManager = nil
-                return
-            }
-
-            // Set up input callback to write to RTA analyzer's input ring buffer
-            // Note: This requires a C callback function which is complex to implement in Swift
-            // For now, we'll start the audio unit without the callback
-            // The callback wiring would require:
-            // 1. Creating a callback context structure with the ring buffer reference
-            // 2. Implementing a C-compatible AURenderCallback function
-            // 3. Registering it with setInputCallback
-            // 4. Managing the callback lifecycle
-
-            if case .failure(let error) = manager.start() {
-                logger.error("Listening RTA: failed to start audio unit: \(error.localizedDescription)")
-                listeningRTAHALManager = nil
-                return
-            }
-
-            logger.info("Listening RTA capture started (callback wiring not yet implemented)")
-        case .failure(let error):
-            logger.error("Listening RTA capture failed: \(error.localizedDescription)")
-            listeningRTAHALManager = nil
+        session.start { [weak self] audioBuffer in
+            guard let self = self,
+                  let samples = audioBuffer[0] else { return }
+            // Deliver to RTA analyser ring buffer — use the existing tap point
+            self.pipelineManager.renderPipeline?.deliverMicSamplesToRTA(samples)
         }
+
+        listeningRTAMicSession = session
+        logger.info("Listening RTA capture started via MicCaptureSession")
     }
 
     /// Stops mic capture for listening RTA.
     private func stopListeningRTACapture() {
-        guard listeningRTAHALManager != nil else { return }
+        guard listeningRTAMicSession != nil else { return }
         logger.info("Stopping listening RTA capture")
-
-        // Clear input callback if set
-        // listeningRTAHALManager?.clearInputCallback()
-
-        // Stop and dispose
-        listeningRTAHALManager?.stop()
-        listeningRTAHALManager = nil
+        listeningRTAMicSession?.stop()
+        listeningRTAMicSession = nil
     }
 
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "AudioRoutingCoordinator")

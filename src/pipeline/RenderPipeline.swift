@@ -130,6 +130,12 @@ final class RenderPipeline {
         callbackContext?.setSweepAnalyser(analyser)
     }
 
+    /// Delivers externally captured mic samples to the RTA analyser's input ring buffer.
+    /// Called from MicCaptureSession's delivery queue (background thread).
+    func deliverMicSamplesToRTA(_ samples: [Float]) {
+        callbackContext?.deliverMicSamplesToRTA(samples)
+    }
+
     // MARK: - Static Logging (for audio thread)
 
     /// Input callback counter for periodic logging.

@@ -347,13 +347,74 @@ final class EqualiserStore: ObservableObject {
         sweepDurationSeconds: Double = 10.0,
         repetitions: Int = 1
     ) async -> CombinedMeasurementResult? {
-        // TODO: Implement combined measurement logic
-        // This requires:
-        // 1. Setting up sweep injection before crossover in render pipeline
-        // 2. Capturing from microphone input
-        // 3. Computing impulse response and frequency response
-        // 4. Returning CombinedMeasurementResult
-        return nil
+        guard measurementState == .idle else {
+            logger.warning("runCombinedVerificationMeasurement called while not idle")
+            return nil
+        }
+
+        measurementState  = .playing
+        measurementError  = nil
+
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let analyser = SweepAnalyser(
+            sampleRate: sr,
+            duration: sweepDurationSeconds,
+            startFrequency: 20.0,
+            endFrequency: 20000.0
+        )
+        sweepAnalyser = analyser
+        let sweep = analyser.sweepSignal
+
+        // Start mic capture
+        let session = MicCaptureSession(deviceID: micInputDeviceID, sampleRate: sr, channelCount: 1)
+        session.start { [weak analyser] audioBuffer in
+            guard let samples = audioBuffer[0] else { return }
+            analyser?.recordSamples(samples)
+        }
+
+        // Wire up the sweep analyser for recording from the render pipeline's mic path too
+        // (supports dual-path: physical mic via session AND virtual driver loopback)
+        routingCoordinator.pipelineManager.renderPipeline?.setSweepAnalyser(analyser)
+
+        // Await sweep completion
+        await withCheckedContinuation { continuation in
+            routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = {
+                continuation.resume()
+            }
+            analyser.startRecording()
+            routingCoordinator.pipelineManager.renderPipeline?.startSweepPlayback(signal: sweep)
+        }
+
+        // Stop capture
+        session.stop()
+        measurementState = .capturing
+
+        // Reverb tail wait
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        analyser.stopRecording()
+
+        // Compute on background thread
+        measurementState = .computing
+        let calibration = micCalibration  // Capture before Task
+        let result: CombinedMeasurementResult? = await Task(priority: .userInitiated) {
+            let ir       = analyser.computeImpulseResponse(referenceSweep: sweep)
+            let response = analyser.computeFrequencyResponse(ir: ir, micCalibration: calibration)
+            return CombinedMeasurementResult(
+                impulseResponse: ir,
+                magnitudeResponseDB: response,
+                complexResponse: [],  // Not computed in this implementation
+                sampleRate: sr,
+                capturedAt: Date(),
+                individualMeasurements: nil
+            )
+        }.value
+
+        measurementState            = .done
+        combinedMeasurementResult   = result
+        if let r = result {
+            measuredResponse = r.magnitudeResponseDB
+        }
+        return result
     }
 
     // MARK: - Loopback Measurement State
@@ -1211,6 +1272,12 @@ final class EqualiserStore: ObservableObject {
     /// Generates a sweep, plays it through the output, captures via mic input,
     /// and computes the room response.
     func startLoopbackMeasurement() {
+        startLoopbackMeasurement(micDeviceID: nil)
+    }
+
+    /// Starts a measurement using a physical measurement microphone.
+    /// When `micDeviceID` is nil, falls back to the virtual driver loopback.
+    func startLoopbackMeasurement(micDeviceID: AudioDeviceID?) {
         measurementState = .playing
         measurementError = nil
 
@@ -1222,10 +1289,22 @@ final class EqualiserStore: ObservableObject {
         // Store reference sweep signal
         let sweep = analyser.sweepSignal
 
+        // If a physical mic device is specified, also start MicCaptureSession
+        var micSession: MicCaptureSession?
+        if let devID = micDeviceID {
+            let session = MicCaptureSession(deviceID: devID, sampleRate: sampleRate, channelCount: 1)
+            session.start { [weak analyser] audioBuffer in
+                guard let samples = audioBuffer[0] else { return }
+                analyser?.recordSamples(samples)
+            }
+            micSession = session
+        }
+
         // Start sweep playback
         routingCoordinator.pipelineManager.renderPipeline?.setSweepAnalyser(analyser)
         routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = { [weak self] in
             guard let self = self else { return }
+            micSession?.stop()
             Task { @MainActor in
                 // Wait 0.5s for reverb tail
                 try? await Task.sleep(nanoseconds: 500_000_000)
