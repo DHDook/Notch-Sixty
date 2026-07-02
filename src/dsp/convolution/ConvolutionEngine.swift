@@ -44,7 +44,11 @@ final class ConvolutionEngine {
     nonisolated(unsafe) private var outputRingWritePosL: Int = 0
     nonisolated(unsafe) private var outputRingWritePosR: Int = 0
     nonisolated(unsafe) private var outputRingReadPos: Int = 0
-    
+
+    // Overlap buffers for proper OLA accumulation (B samples each)
+    nonisolated(unsafe) private var overlapL: [Float]
+    nonisolated(unsafe) private var overlapR: [Float]
+
     // Scratch buffers for FFT/IFFT (N-point)
     nonisolated(unsafe) private var fftReal: [Float]
     nonisolated(unsafe) private var fftImag: [Float]
@@ -66,6 +70,8 @@ final class ConvolutionEngine {
 
         currentPartitionL = [Float](repeating: 0, count: Self.partitionSize)
         currentPartitionR = [Float](repeating: 0, count: Self.partitionSize)
+        overlapL = [Float](repeating: 0, count: Self.partitionSize)
+        overlapR = [Float](repeating: 0, count: Self.partitionSize)
         // Ring must hold at least maxFrameCount samples to avoid the read pointer
         // lapping the write pointer on large HAL callbacks.
         let ringCap = max(Self.partitionSize * 2, Int(AudioConstants.maxFrameCount) * 2)
@@ -152,12 +158,14 @@ final class ConvolutionEngine {
         outputRingWritePosL = 0
         outputRingWritePosR = 0
         outputRingReadPos = 0
-        
+
         for i in 0..<currentPartitionL.count { currentPartitionL[i] = 0 }
         for i in 0..<currentPartitionR.count { currentPartitionR[i] = 0 }
         for i in 0..<outputRingL.count { outputRingL[i] = 0 }
         for i in 0..<outputRingR.count { outputRingR[i] = 0 }
-        
+        for i in 0..<overlapL.count { overlapL[i] = 0 }
+        for i in 0..<overlapR.count { overlapR[i] = 0 }
+
         // Zero input history spectra
         for sc in leftInputHistory {
             vDSP_vclr(sc.realp, 1, vDSP_Length(Self.fftSize))
@@ -385,9 +393,23 @@ final class ConvolutionEngine {
         memcpy(&scaledBuf, &timeDomainBuf, N * MemoryLayout<Float>.size)
         vDSP_vsmul(&scaledBuf, 1, &scale, &timeDomainBuf, 1, vDSP_Length(N))
 
-        // OLA: add the SECOND B samples (alias-free region) to the output ring.
+        // OLA: add first half to overlap buffer, output overlap buffer, save second half as new overlap
         let ringSize = outputRingL.count
         let B = Self.partitionSize
+
+        // Output overlap buffer (from previous block's second half)
+        for i in 0..<B {
+            let writeIdx = (outputRingWritePosL + i) % ringSize
+            outputRingL[writeIdx] += overlapL[i]
+        }
+        outputRingWritePosL = (outputRingWritePosL + B) % ringSize
+
+        // Save first half of current block as new overlap for next block
+        for i in 0..<B {
+            overlapL[i] = timeDomainBuf[i]
+        }
+
+        // Output second half of current block
         for i in 0..<B {
             let writeIdx = (outputRingWritePosL + i) % ringSize
             outputRingL[writeIdx] += timeDomainBuf[B + i]
@@ -431,6 +453,16 @@ final class ConvolutionEngine {
             var scaledBufR = [Float](repeating: 0, count: N)
             memcpy(&scaledBufR, &timeDomainBuf, N * MemoryLayout<Float>.size)
             vDSP_vsmul(&scaledBufR, 1, &scale, &timeDomainBuf, 1, vDSP_Length(N))
+
+            // OLA for right channel: output overlap buffer, save first half as new overlap, output second half
+            for i in 0..<B {
+                let writeIdx = (outputRingWritePosR + i) % ringSize
+                outputRingR[writeIdx] += overlapR[i]
+            }
+            outputRingWritePosR = (outputRingWritePosR + B) % ringSize
+            for i in 0..<B {
+                overlapR[i] = timeDomainBuf[i]
+            }
             for i in 0..<B {
                 let writeIdx = (outputRingWritePosR + i) % ringSize
                 outputRingR[writeIdx] += timeDomainBuf[B + i]
