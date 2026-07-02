@@ -601,6 +601,26 @@ final class DynamicsProcessor: @unchecked Sendable {
     var isOversamplingActive: Bool {
         _oversamplingEnabled.load(ordering: .relaxed) != 0
     }
+    /// Whether the brickwall limiter is enabled.
+    var isLimiterEnabled: Bool {
+        _limiterEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Whether the FIR convolution stage is enabled.
+    var isFIREnabled: Bool {
+        _firEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Whether speaker IR alignment is enabled.
+    var isIRAlignmentEnabled: Bool {
+        _irAlignEnabled.load(ordering: .relaxed) != 0
+    }
+    /// IR alignment delay in milliseconds (0–5 ms, clamped). Valid only when isIRAlignmentEnabled is true.
+    var irAlignmentDelayMs: Float {
+        Float(bitPattern: UInt32(bitPattern: _irAlignDelayBits.load(ordering: .relaxed)))
+    }
+    /// Returns the FIR convolution engine's loaded IR delay in samples.
+    var firConvolutionEngineDelaySamples: Double {
+        firConvolutionEngine.loadedIRDelaySamples
+    }
     /// Resets the sticky true-peak trip flags. Call from the main thread after showing the indicator.
     func clearTruePeakFlags() {
         _truePeakClipperTripped.store(0, ordering: .relaxed)

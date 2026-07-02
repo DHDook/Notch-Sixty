@@ -940,6 +940,12 @@ final class EqualiserStore: ObservableObject {
     var isOversamplingActive: Bool {
         routingCoordinator.pipelineManager.renderPipeline?.isOversamplingActive ?? false
     }
+    /// Total pipeline latency in milliseconds.
+    /// Sum of all active processing stages: limiter look-ahead, oversampling,
+    /// FIR convolution, speaker/room correction convolution, IR alignment, and linear-phase EQ.
+    var totalLatencyMs: Double {
+        routingCoordinator.pipelineManager.renderPipeline?.totalLatencyMs ?? 0.0
+    }
     /// Resets sticky true-peak trip indicators (call from main thread after displaying).
     func clearTruePeakFlags() {
         routingCoordinator.pipelineManager.renderPipeline?.clearTruePeakFlags()

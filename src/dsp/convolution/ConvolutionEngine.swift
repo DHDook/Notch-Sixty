@@ -26,6 +26,10 @@ final class ConvolutionEngine {
     private var partitionCount: Int = 0
     nonisolated(unsafe) private var leftIRSpectra: [DSPSplitComplex] = []
     nonisolated(unsafe) private var rightIRSpectra: [DSPSplitComplex] = []
+
+    // Cached IR delay in samples (computed at updateIR time)
+    // For minimum-phase IRs, this is near zero. For linear-phase IRs, it's approximately (length-1)/2.
+    private var _loadedIRDelaySamples: Double = 0.0
     
     // MARK: - Audio-thread state (input history ring + overlap buffer)
     // Input history ring: P partitions, each N-point complex spectrum
@@ -136,7 +140,25 @@ final class ConvolutionEngine {
         
         // Partition and FFT right IR
         partitionAndFFT(ir: right, spectra: pendingRight, partitionCount: P)
-        
+
+        // Compute and cache IR delay (use peak index as approximation)
+        let maxIRLength = max(left.count, right.count)
+        if maxIRLength > 0 {
+            // Find peak index in the longer IR
+            let longerIR = left.count >= right.count ? left : right
+            var peakIndex = 0
+            var peakValue: Float = 0
+            for i in 0..<longerIR.count {
+                if abs(longerIR[i]) > peakValue {
+                    peakValue = abs(longerIR[i])
+                    peakIndex = i
+                }
+            }
+            _loadedIRDelaySamples = Double(peakIndex)
+        } else {
+            _loadedIRDelaySamples = 0.0
+        }
+
         // Store pending spectra
         pendingLeftIRSpectra = pendingLeft
         pendingRightIRSpectra = pendingRight
@@ -150,7 +172,13 @@ final class ConvolutionEngine {
     func setEnabled(_ enabled: Bool) {
         _enabled.store(enabled ? 1 : 0, ordering: .relaxed)
     }
-    
+
+    /// Returns the loaded IR's inherent delay in samples.
+    /// Computed once at updateIR time based on the IR's peak index.
+    var loadedIRDelaySamples: Double {
+        _loadedIRDelaySamples
+    }
+
     /// Resets all audio-thread state (clears history and overlap buffers).
     func reset() {
         currentPartitionPos = 0

@@ -1659,7 +1659,7 @@ struct DynamicsInlineView: View {
         VStack(spacing: 8) {
             StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
             LatencyReadoutView(
-                totalLatencyMs: 0.0,  // TODO: Compute from pipeline stages
+                totalLatencyMs: store.totalLatencyMs,
                 alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
                 sampleRate: store.streamSampleRate
             )

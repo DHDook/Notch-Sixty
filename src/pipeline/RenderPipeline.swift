@@ -825,6 +825,49 @@ final class RenderPipeline {
         callbackContext?.dynamicsProcessor.clearTruePeakFlags()
     }
 
+    /// Total pipeline latency in milliseconds.
+    /// Sum of all active processing stages: limiter look-ahead, oversampling,
+    /// FIR convolution, speaker/room correction convolution, IR alignment, and linear-phase EQ.
+    var totalLatencyMs: Double {
+        guard let ctx = callbackContext else { return 0.0 }
+        let sr = ctx.dynamicsProcessor.storedSampleRate
+
+        var ms: Double = 0.0
+
+        // Limiter look-ahead
+        if ctx.dynamicsProcessor.isLimiterEnabled {
+            ms += Double(ctx.dynamicsProcessor.currentLimiterLookAheadMs)
+        }
+
+        // Oversampling (59 samples at base rate)
+        if ctx.dynamicsProcessor.isOversamplingActive {
+            ms += 59.0 / sr * 1000.0
+        }
+
+        // FIR convolution stage (512 samples buffering + IR delay)
+        if ctx.dynamicsProcessor.isFIREnabled {
+            ms += (512.0 / sr * 1000.0) + (ctx.dynamicsProcessor.firConvolutionEngineDelaySamples / sr * 1000.0)
+        }
+
+        // Speaker/room correction convolution (512 samples buffering + IR delay)
+        if ctx.isConvolutionEnabled {
+            ms += (512.0 / sr * 1000.0) + (ctx.convolutionEngineDelaySamples / sr * 1000.0)
+        }
+
+        // IR alignment delay
+        if ctx.dynamicsProcessor.isIRAlignmentEnabled {
+            ms += Double(ctx.dynamicsProcessor.irAlignmentDelayMs)
+        }
+
+        // Linear-phase EQ delay (not yet measured - using conservative estimate)
+        // TODO: Measure actual delay per methodology in 05-latency-computation-scope.md
+        if ctx.isLinearPhaseEnabled {
+            ms += 2048.0 / sr * 1000.0  // Conservative estimate: one hopSize (2048 samples)
+        }
+
+        return ms
+    }
+
     /// Updates the boost gain applied before input gain.
     /// Used for volume boost (>100%) when output device can't go higher.
     /// Linear scale: 1.0 = unity (no boost), 2.0 = 2x boost (6dB gain).

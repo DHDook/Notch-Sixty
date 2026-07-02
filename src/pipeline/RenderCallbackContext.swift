@@ -1266,6 +1266,15 @@ final class RenderCallbackContext: @unchecked Sendable {
         convolutionEngine.setEnabled(enabled)
     }
 
+    /// Whether convolution processing is enabled.
+    var isConvolutionEnabled: Bool {
+        _convolutionEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Returns the convolution engine's loaded IR delay in samples.
+    var convolutionEngineDelaySamples: Double {
+        convolutionEngine.loadedIRDelaySamples
+    }
+
     /// Resets convolution engine state (clears history and overlap buffers).
     func resetConvolution() {
         convolutionEngine.reset()
