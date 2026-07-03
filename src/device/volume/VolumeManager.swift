@@ -63,11 +63,13 @@ final class VolumeManager: ObservableObject {
 
     /// Serial queue for volume forwarding (isolated from main thread).
     /// Prevents CoreAudio calls from interfering with UI work and audio callback timing.
-    private let volumeForwardQueue = DispatchQueue(label: "net.knage.equaliser.volume-forward")
+    private let volumeForwardQueue = DispatchQueue(label: "net.knage.equaliser.volume-forward", qos: .userInitiated)
 
-    /// Last forwarded volume per device for deduplication.
+    /// Last known-good volume (driver and output are always kept in sync at the
+    /// same scalar, so a single shared value is sufficient — this lets an echo
+    /// arriving from either device be recognized and skipped).
     /// Accessed only on volumeForwardQueue, marked nonisolated(unsafe) for Swift concurrency.
-    nonisolated(unsafe) var lastForwardedVolumeByDevice: [AudioDeviceID: Float] = [:]
+    nonisolated(unsafe) var lastKnownVolume: Float?
 
     /// Driver device ID for volume sync.
     private var driverDeviceID: AudioDeviceID?
@@ -133,8 +135,8 @@ final class VolumeManager: ObservableObject {
 
         gain = initialVolume
 
-        // Initialize last forwarded volume for this device to prevent first forward being skipped
-        lastForwardedVolumeByDevice[outputID] = initialVolume
+        // Initialize last known volume to prevent the first forward being treated as new
+        lastKnownVolume = initialVolume
 
         // Get initial mute state from output device (source of truth)
         let initialMuted = volumeService.getDeviceMute(deviceID: outputID) ?? false
@@ -218,7 +220,7 @@ final class VolumeManager: ObservableObject {
 
         driverDeviceID = nil
         outputDeviceID = nil
-        lastForwardedVolumeByDevice = [:]
+        lastKnownVolume = nil
         isSettling = false
     }
     
@@ -243,7 +245,14 @@ final class VolumeManager: ObservableObject {
         defer {
             // Clear flag after a short delay to allow mute sync to resume
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.isProcessingVolumeChange = false
+                guard let self else { return }
+                self.isProcessingVolumeChange = false
+                // Reconcile in case a mute-direction event was suppressed during the window.
+                if let outputID = self.outputDeviceID,
+                   let actualMuted = self.volumeService.getDeviceMute(deviceID: outputID),
+                   actualMuted != self.muted {
+                    self.handleOutputMuteChanged(actualMuted)
+                }
             }
         }
 
@@ -280,7 +289,14 @@ final class VolumeManager: ObservableObject {
         isProcessingVolumeChange = true
         defer {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.isProcessingVolumeChange = false
+                guard let self else { return }
+                self.isProcessingVolumeChange = false
+                // Reconcile in case a mute-direction event was suppressed during the window.
+                if let outputID = self.outputDeviceID,
+                   let actualMuted = self.volumeService.getDeviceMute(deviceID: outputID),
+                   actualMuted != self.muted {
+                    self.handleOutputMuteChanged(actualMuted)
+                }
             }
         }
 
@@ -301,32 +317,20 @@ final class VolumeManager: ObservableObject {
     /// Forwards volume to output device with epsilon filtering.
     /// Called on volumeForwardQueue, not main thread.
     nonisolated private func forwardVolumeToOutput(_ newVolume: Float, outputID: AudioDeviceID) {
-        // Skip if change is below epsilon threshold for this device
-        if let lastVolume = lastForwardedVolumeByDevice[outputID],
-           abs(newVolume - lastVolume) < volumeEpsilon {
+        if let last = lastKnownVolume, abs(newVolume - last) < volumeEpsilon {
             return
         }
-
-        lastForwardedVolumeByDevice[outputID] = newVolume
-
-        // CoreAudio call on serial queue (isolated from main thread)
-        // Note: setDeviceVolumeScalar is nonisolated and thread-safe
+        lastKnownVolume = newVolume
         _ = volumeService.setDeviceVolumeScalar(deviceID: outputID, volume: newVolume)
     }
 
     /// Forwards volume to driver device with epsilon filtering.
     /// Called on volumeForwardQueue, not main thread.
     nonisolated private func forwardVolumeToDriver(_ newVolume: Float, driverID: AudioDeviceID) {
-        // Skip if change is below epsilon threshold for this device
-        if let lastVolume = lastForwardedVolumeByDevice[driverID],
-           abs(newVolume - lastVolume) < volumeEpsilon {
+        if let last = lastKnownVolume, abs(newVolume - last) < volumeEpsilon {
             return
         }
-
-        lastForwardedVolumeByDevice[driverID] = newVolume
-
-        // CoreAudio call on serial queue (isolated from main thread)
-        // Note: setDeviceVolumeScalar is nonisolated and thread-safe
+        lastKnownVolume = newVolume
         _ = volumeService.setDeviceVolumeScalar(deviceID: driverID, volume: newVolume)
     }
     
@@ -339,9 +343,12 @@ final class VolumeManager: ObservableObject {
             return
         }
 
-        // Suppress mute sync during volume changes to prevent macOS auto-mute cycling
-        guard !isProcessingVolumeChange else {
-            logger.debug("handleDriverMuteChanged: skipping - processing volume change")
+        // Only suppress a spurious auto-mute (newMuted == true) while a volume
+        // change is in flight. Never suppress an unmute — that must always be
+        // honored, otherwise it can be permanently dropped (CoreAudio does not
+        // redeliver a swallowed notification) and leave the app stuck silent.
+        guard !(isProcessingVolumeChange && newMuted) else {
+            logger.debug("handleDriverMuteChanged: skipping spurious auto-mute during volume change")
             return
         }
 
@@ -372,9 +379,8 @@ final class VolumeManager: ObservableObject {
             return
         }
 
-        // Suppress mute sync during volume changes to prevent macOS auto-mute cycling
-        guard !isProcessingVolumeChange else {
-            logger.debug("handleOutputMuteChanged: skipping - processing volume change")
+        guard !(isProcessingVolumeChange && newMuted) else {
+            logger.debug("handleOutputMuteChanged: skipping spurious auto-mute during volume change")
             return
         }
 
