@@ -1116,15 +1116,30 @@ final class RenderCallbackContext: @unchecked Sendable {
         switch source {
         case .mainsLeft:      return (processingBuffers[0], nil)
         case .mainsRight:     return (processingBuffers[1], nil)
-        // For mainsLeft/mainsRight used as stereo pair: the output channel
-        // config assigns both to the same processor; see UI pairing note below.
-        // TODO: Integrate ActiveCrossoverEngine into DynamicsProcessor
-        case .mainsLeftHigh:  return (nil, nil)
-        case .mainsLeftMid:   return (nil, nil)
-        case .mainsLeftLow:   return (nil, nil)
-        case .mainsRightHigh: return (nil, nil)
-        case .mainsRightMid:  return (nil, nil)
-        case .mainsRightLow:  return (nil, nil)
+        case .mainsLeftHigh:
+            guard dynamics.activeCrossoverEngine != nil,
+                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
+            return (dynamics.activeCrossoverEngine!.leftHigh.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+        case .mainsLeftMid:
+            guard dynamics.activeCrossoverEngine != nil,
+                  dynamics.activeCrossoverEngine!.activeBandCount >= 3 else { return (nil, nil) }
+            return (dynamics.activeCrossoverEngine!.leftMid.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+        case .mainsLeftLow:
+            guard dynamics.activeCrossoverEngine != nil,
+                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
+            return (dynamics.activeCrossoverEngine!.leftLow.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+        case .mainsRightHigh:
+            guard dynamics.activeCrossoverEngine != nil,
+                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
+            return (dynamics.activeCrossoverEngine!.rightHigh.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+        case .mainsRightMid:
+            guard dynamics.activeCrossoverEngine != nil,
+                  dynamics.activeCrossoverEngine!.activeBandCount >= 3 else { return (nil, nil) }
+            return (dynamics.activeCrossoverEngine!.rightMid.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+        case .mainsRightLow:
+            guard dynamics.activeCrossoverEngine != nil,
+                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
+            return (dynamics.activeCrossoverEngine!.rightLow.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
         case .subMono:        return (monoLowOutputBuffer, nil)
         }
     }

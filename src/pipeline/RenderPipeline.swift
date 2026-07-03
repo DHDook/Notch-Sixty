@@ -755,6 +755,46 @@ final class RenderPipeline {
         callbackContext?.updateDynamicsConfig(config, sampleRate: currentSampleRate)
     }
 
+    /// Applies an output channel matrix configuration to the render pipeline.
+    /// Constructs or reconfigures per-channel processors and sets active channel count.
+    /// Must be called from the main thread only.
+    func applyOutputChannelMatrix(_ config: OutputChannelMatrixConfig) {
+        guard let ctx = callbackContext else { return }
+        let sr = currentSampleRate
+
+        guard config.isEnabled else {
+            // Matrix disabled — zero out all processors and count
+            for i in 0..<OutputChannelMatrixConfig.maxChannels {
+                ctx.outputChannelProcessors[i] = nil
+                ctx.outputChannelSources[i] = .mainsLeft
+            }
+            ctx.activeOutputChannelCount = 0
+            return
+        }
+
+        var count = 0
+        for (i, channel) in config.channels.prefix(OutputChannelMatrixConfig.maxChannels).enumerated() {
+            guard channel.isEnabled else {
+                ctx.outputChannelProcessors[i] = nil
+                continue
+            }
+            // Only rebuild the processor when the config actually changed — avoids
+            // reallocation on every minor parameter change.
+            if let existing = ctx.outputChannelProcessors[i] {
+                existing.applyChannelConfig(channel, sampleRate: sr)
+            } else {
+                let proc = OutputChannelProcessor(source: channel.source,
+                                                  maxFrameCount: Int(ctx.maxFrameCount),
+                                                  sampleRate: sr)
+                proc.applyChannelConfig(channel, sampleRate: sr)
+                ctx.outputChannelProcessors[i] = proc
+            }
+            ctx.outputChannelSources[i] = channel.source
+            count = i + 1
+        }
+        ctx.activeOutputChannelCount = count
+    }
+
     /// Gain reduction in dB currently applied by the brickwall limiter.
     /// Returns 0.0 when no reduction is active or the pipeline is not running.
     /// Thread-safe: reads the latest atomic value written by the audio thread.
@@ -1350,6 +1390,17 @@ final class RenderPipeline {
 
         if context.processingMode != 0 {
             context.processDynamics(bufferList: ioData, frameCount: outputFrames)
+        }
+
+        // 4.6. Output channel matrix — runs after dynamics so per-channel DSP
+        // operates on the fully-processed (clipped/limited) mains signal, and
+        // after the active crossover band split that ran inside processDynamics.
+        // Zero cost when matrix is disabled (activeOutputChannelCount == 0).
+        if context.activeOutputChannelCount > 0 && context.processingMode != 0 {
+            context.processOutputChannelMatrix(
+                dynamicsProcessor: context.dynamicsProcessor,
+                frameCount: Int(outputFrames)
+            )
         }
 
         // 5. Update output meters with rendered audio

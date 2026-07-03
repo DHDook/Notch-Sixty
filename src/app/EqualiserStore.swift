@@ -998,9 +998,27 @@ final class EqualiserStore: ObservableObject {
     /// is not yet integrated into DynamicsProcessor. This is a placeholder for
     /// when the crossover engine is integrated (see TODO in RenderCallbackContext.swift).
     func activeCrossoverCoefficients(for source: SignalSource) -> (sections: ActiveCrossoverEngine.SectionArray?, firKernel: [Float]?) {
-        // TODO: Read from DynamicsProcessor.activeCrossoverEngine once integrated
-        // For now, return nil since the crossover engine is not yet integrated
-        return (nil, nil)
+        guard let engine = routingCoordinator.pipelineManager.renderPipeline?
+                .callbackContext?.dynamicsProcessor.activeCrossoverEngine
+        else { return (nil, nil) }
+
+        // Map the signal source to the relevant crossover filter section array.
+        // The HP side of the lower crossover drives Low, the LP side drives Mid+High (bi-amp)
+        // or just Mid (tri-amp); the HP side of the upper crossover drives High (tri-amp).
+        switch source {
+        case .mainsLeftLow,  .mainsRightLow:
+            return (engine.activeLowerLP, nil)
+        case .mainsLeftMid,  .mainsRightMid:
+            return (engine.activeLowerHP, nil)
+        case .mainsLeftHigh, .mainsRightHigh:
+            if engine.activeBandCount >= 3 {
+                return (engine.activeUpperHP, nil)
+            } else {
+                return (engine.activeLowerHP, nil)
+            }
+        default:
+            return (nil, nil)
+        }
     }
     
     // MARK: - Initialization

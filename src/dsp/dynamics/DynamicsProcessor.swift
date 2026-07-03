@@ -121,6 +121,14 @@ final class DynamicsProcessor: @unchecked Sendable {
     let stereoWidener:  StereoWidener
     let lufsProcessor:  LoudnessMatchProcessor
 
+    /// Active crossover engine — splits the fully-processed mains signal into up to
+    /// 3 bands per channel for bi-amp/tri-amp speaker systems.
+    /// Nil when `activeCrossover.isEnabled` is false (zero CPU cost).
+    nonisolated(unsafe) var activeCrossoverEngine: ActiveCrossoverEngine?
+
+    /// Tracks the last-applied active crossover config for change detection.
+    private var lastActiveCrossoverConfig: ActiveCrossoverConfig = .default
+
     // ── Look-ahead limiter (extracted from inline implementation) ─────────────
     private let mainLimiter: LookAheadLimiter
 
@@ -2001,9 +2009,92 @@ final class DynamicsProcessor: @unchecked Sendable {
                 lastMainsHighPassSampleRate = storedSampleRate
             }
         }
+
+        // Stage active crossover update if config changed or sample rate changed
+        if adv.activeCrossover != lastActiveCrossoverConfig {
+            stageActiveCrossover(adv.activeCrossover)
+            lastActiveCrossoverConfig = adv.activeCrossover
+        } else if activeCrossoverEngine != nil {
+            // Re-stage on sample rate change so coefficients use the new rate
+            stageActiveCrossover(adv.activeCrossover)
+        }
     }
 
-    /// Stage a bass management crossover update for thread-safe application.
+    // MARK: - Active Crossover Engine Integration
+
+    /// Stages a new active crossover configuration on the main thread.
+    /// If isEnabled is false, the engine is set to nil (zero CPU cost when disabled).
+    /// If isEnabled is true, computes IIR coefficients from the config and stages them.
+    func stageActiveCrossover(_ config: ActiveCrossoverConfig) {
+        guard config.isEnabled, config.bandCount != .fullRange else {
+            // Disable: release the engine reference so the audio thread sees nil
+            activeCrossoverEngine = nil
+            return
+        }
+
+        // Create engine if needed (only allocates once)
+        if activeCrossoverEngine == nil {
+            activeCrossoverEngine = ActiveCrossoverEngine(maxFrameCount: storedMaxFrameCount)
+        }
+
+        let bandCount = config.bandCount == .triAmp ? 3 : 2
+        let sr = storedSampleRate
+
+        // Build IIR coefficients from CrossoverPointConfig using BiquadMath.
+        // Linkwitz-Riley crossover = cascaded Butterworth sections on LP and HP.
+        let lowerLP = buildCrossoverSections(point: config.lowerPoint, isLowPass: true, sampleRate: sr)
+        let lowerHP = buildCrossoverSections(point: config.lowerPoint, isLowPass: false, sampleRate: sr)
+        let upperLP = buildCrossoverSections(point: config.upperPoint, isLowPass: true, sampleRate: sr)
+        let upperHP = buildCrossoverSections(point: config.upperPoint, isLowPass: false, sampleRate: sr)
+
+        // Stage onto the engine — the audio thread will pick these up atomically
+        activeCrossoverEngine?.pendingLowerLP = lowerLP
+        activeCrossoverEngine?.pendingLowerHP = lowerHP
+        activeCrossoverEngine?.pendingUpperLP = upperLP
+        activeCrossoverEngine?.pendingUpperHP = upperHP
+        activeCrossoverEngine?.pendingBandCount = bandCount
+        activeCrossoverEngine?.hasIIRPendingUpdate.store(true, ordering: .releasing)
+    }
+
+    /// Converts a CrossoverPointConfig to a SectionArray for the ActiveCrossoverEngine.
+    /// Uses BiquadMath sections (Butterworth or Linkwitz-Riley as appropriate).
+    private func buildCrossoverSections(
+        point: CrossoverPointConfig,
+        isLowPass: Bool,
+        sampleRate: Double
+    ) -> ActiveCrossoverEngine.SectionArray {
+        let identity: (b0: Float, b1: Float, b2: Float, na1: Float, na2: Float) = (1, 0, 0, 0, 0)
+        let maxSections = ActiveCrossoverEngine.maxSections
+
+        let slope    = isLowPass ? point.lpSlope : point.hpSlope
+        let freqHz   = isLowPass ? Double(point.lpHz) : Double(point.hpHz)
+        let filterType: FilterType = isLowPass ? .lowPass : .highPass
+
+        // Only IIR (LR / Butterworth) types are handled here; FIR is managed via ConvolutionEngine
+        guard point.lpType != .firLinearPhase else {
+            return Array(repeating: identity, count: maxSections)
+        }
+
+        let biquadSections = BiquadMath.calculateSections(
+            type: filterType,
+            sampleRate: sampleRate,
+            frequency: min(freqHz, sampleRate * 0.499),
+            q: 0.7071067811865476,  // Butterworth Q — LR4 = two cascaded Butterworth sections
+            gain: 0.0,
+            slope: slope
+        )
+
+        // Convert BiquadCoefficients (Double) to the engine's Float tuple format
+        var result = Array(repeating: identity, count: maxSections)
+        for (i, c) in biquadSections.prefix(maxSections).enumerated() {
+            result[i] = (b0:  Float(c.b0),
+                         b1:  Float(c.b1),
+                         b2:  Float(c.b2),
+                         na1: Float(c.a1),
+                         na2: Float(c.a2))
+        }
+        return result
+    }
     /// Called from the main thread when bass management parameters change.
     private func stageBassManagementCrossover(crossoverHz: Float, slope: BassCrossoverSlope, crossoverType: CrossoverType) {
         let newCrossover = BassManagementCrossover(
@@ -2625,6 +2716,15 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Stage 10: Delta Solo (subtract original from processed).
         if deltaSoloOn { processDeltaSolo(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 11: Active crossover band split.
+        // Runs after all main-chain processing so all downstream outputs (Active Crossover
+        // analysis view, output channel matrix) see the fully-processed mains signal.
+        if numCh >= 2, activeCrossoverEngine != nil,
+           let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+           let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+            activeCrossoverEngine?.process(leftIn: bufL, rightIn: bufR, frameCount: count)
+        }
 
         // Report per-stage GR to main thread.
         _deEsserGRBits.store(floatBits(deEsserEnvDB), ordering: .relaxed)

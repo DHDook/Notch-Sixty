@@ -25,7 +25,10 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     /// Output channel matrix configuration for multi-device routing
     @Published var outputChannelMatrix: OutputChannelMatrixConfig = .default {
-        didSet { saveOutputChannelMatrix() }
+        didSet {
+            saveOutputChannelMatrix()
+            pipelineManager.renderPipeline?.applyOutputChannelMatrix(outputChannelMatrix)
+        }
     }
 
     /// Multi-device synchronisation mode
@@ -635,6 +638,12 @@ final class AudioRoutingCoordinator: ObservableObject {
 
             // Update sample rate for coefficient calculations
             eqStager.setCurrentSampleRate(sampleRate)
+
+            // Push the current output channel matrix into the freshly started pipeline.
+            // The didSet only fires on changes; at startup we must push explicitly.
+            if outputChannelMatrix.isEnabled {
+                pipelineManager.renderPipeline?.applyOutputChannelMatrix(outputChannelMatrix)
+            }
 
         case .configurationFailed(let error):
             routingStatus = .error("Configuration failed: \(error)")
