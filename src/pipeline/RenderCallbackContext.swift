@@ -553,8 +553,9 @@ final class RenderCallbackContext: @unchecked Sendable {
         Array(repeating: nil, count: OutputChannelMatrixConfig.maxChannels)
 
     /// Per-output writers for secondary devices (channels 1–7).
-    /// Placeholder type - will be implemented in Task M.
-    nonisolated(unsafe) var outputChannelWriters: [Any?] =
+    /// Non-nil for channels whose target device differs from the primary output device.
+    /// Constructed and started in `RenderPipeline.applyOutputChannelMatrix`.
+    nonisolated(unsafe) var outputChannelWriters: [SecondaryOutputWriter?] =
         Array(repeating: nil, count: OutputChannelMatrixConfig.maxChannels)
 
     /// Signal source assignment per channel. Written on main thread before start.
@@ -1093,14 +1094,22 @@ final class RenderCallbackContext: @unchecked Sendable {
                 writePrimaryChannel(leftBuf: outputScratchLeft[chIdx],
                                     rightBuf: scratchR,
                                     frameCount: frameCount)
-            } else {
-                // TODO: Implement SecondaryOutputWriter in Task M
-                // outputChannelWriters[chIdx]?.write(
-                //     left: outputScratchLeft[chIdx],
-                //     right: scratchR,
-                //     frameCount: frameCount
-                // )
+            } else if let writer = outputChannelWriters[chIdx] {
+                // Channels 1–7: push to the secondary device's ring buffer.
+                // The SecondaryOutputWriter's AUHAL render callback drains the ring
+                // buffer on the secondary device's own audio thread.
+                var channels: [(buffer: UnsafePointer<Float>, channelIndex: Int)] = [
+                    (UnsafePointer(outputScratchLeft[chIdx]), 0)
+                ]
+                if let sR = scratchR {
+                    channels.append((UnsafePointer(sR), 1))
+                }
+                writer.write(channels: channels, frameCount: frameCount)
             }
+            // If outputChannelWriters[chIdx] is nil for chIdx > 0, the channel targets
+            // a different channel index on the *same* device — writePrimaryChannel already
+            // handled the interleaved write for channel 0; same-device channel routing is
+            // managed by the OutputChannelProcessor's channel-map configuration.
         }
     }
 
@@ -1117,29 +1126,29 @@ final class RenderCallbackContext: @unchecked Sendable {
         case .mainsLeft:      return (processingBuffers[0], nil)
         case .mainsRight:     return (processingBuffers[1], nil)
         case .mainsLeftHigh:
-            guard dynamics.activeCrossoverEngine != nil,
-                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
-            return (dynamics.activeCrossoverEngine!.leftHigh.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.leftHighPtr, nil)
         case .mainsLeftMid:
-            guard dynamics.activeCrossoverEngine != nil,
-                  dynamics.activeCrossoverEngine!.activeBandCount >= 3 else { return (nil, nil) }
-            return (dynamics.activeCrossoverEngine!.leftMid.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 3 else { return (nil, nil) }
+            return (engine.leftMidPtr, nil)
         case .mainsLeftLow:
-            guard dynamics.activeCrossoverEngine != nil,
-                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
-            return (dynamics.activeCrossoverEngine!.leftLow.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.leftLowPtr, nil)
         case .mainsRightHigh:
-            guard dynamics.activeCrossoverEngine != nil,
-                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
-            return (dynamics.activeCrossoverEngine!.rightHigh.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.rightHighPtr, nil)
         case .mainsRightMid:
-            guard dynamics.activeCrossoverEngine != nil,
-                  dynamics.activeCrossoverEngine!.activeBandCount >= 3 else { return (nil, nil) }
-            return (dynamics.activeCrossoverEngine!.rightMid.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 3 else { return (nil, nil) }
+            return (engine.rightMidPtr, nil)
         case .mainsRightLow:
-            guard dynamics.activeCrossoverEngine != nil,
-                  dynamics.activeCrossoverEngine!.activeBandCount >= 2 else { return (nil, nil) }
-            return (dynamics.activeCrossoverEngine!.rightLow.withUnsafeMutableBufferPointer { $0.baseAddress }, nil)
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.rightLowPtr, nil)
         case .subMono:        return (monoLowOutputBuffer, nil)
         }
     }

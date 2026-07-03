@@ -882,9 +882,10 @@ final class EqualiserStore: ObservableObject {
     /// Populated by `stopSweepMeasurement` and `startLoopbackMeasurement` completion handlers.
     @Published var lastMeasuredImpulseResponse: [Float] = []
 
-    /// Accumulated measurement curves for multi-seat averaging (Part 4.2).
-    /// Each element is one full-range frequency response measurement with complex data.
-    @Published var seatMeasurements: [SeatMeasurement] = []
+    /// Per-seat measurements keyed by seat index (0 = Centre, 1 = Left, 2 = Right).
+    /// Using a dictionary ensures out-of-order measurements never pad skipped slots
+    /// with duplicate data — an absent key means that seat has not yet been measured.
+    @Published var seatMeasurements: [Int: SeatMeasurement] = [:]
 
     /// Seat measurement with complex frequency response and weighting (Part 4.2).
     struct SeatMeasurement: Codable, Sendable {
@@ -1465,51 +1466,37 @@ final class EqualiserStore: ObservableObject {
 
         let curve = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
 
-        // Build complex response from magnitude curve
-        // We use zero phase here because SweepAnalyser only gives us magnitude;
-        // the proper complex path is via Task 8-A (future work).
+        // Build complex response from magnitude curve.
+        // Zero phase is used here since SweepAnalyser currently produces magnitude-only data.
         let complexResponse = curve.map { point in
             let magnitude = pow(10.0, point.gainDB / 20.0)
             return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0)
         }
 
-        // Replace or append the entry for this seat index
-        if let existing = seatMeasurements.firstIndex(where: { _ in false }) {
-            // placeholder — index-keyed replacement handled below
-            _ = existing
-        }
+        // B2 fix: use a flat weight of 1.0 for every seat regardless of measurement order.
+        // The 1.5× bias on the first-measured seat was a correctness bug.
+        let newSeat = SeatMeasurement(complexResponse: complexResponse, weight: 1.0)
 
-        // Keep seatMeasurements indexed by seat position (0 = Centre, 1 = Left, 2 = Right).
-        // Pad the array if needed.
-        let weight: Double = seatMeasurements.isEmpty ? 1.5 : 1.0
-        let newSeat = SeatMeasurement(complexResponse: complexResponse, weight: weight)
-
-        if seatIndex < seatMeasurements.count {
-            seatMeasurements[seatIndex] = newSeat
-        } else {
-            // Fill any gaps with the new measurement at the right slot
-            while seatMeasurements.count < seatIndex {
-                seatMeasurements.append(newSeat)
-            }
-            seatMeasurements.append(newSeat)
-        }
+        // B2 fix: seatMeasurements is now a dictionary [seatIndex → SeatMeasurement]
+        // so out-of-order measurements never pad skipped slots with duplicate data.
+        seatMeasurements[seatIndex] = newSeat
 
         // Recompute the pending curve as a proper equal-weighted average across all seats
-        pendingMeasuredCurve = averageComplexResponses(seatMeasurements)
+        pendingMeasuredCurve = averageComplexResponses(Array(seatMeasurements.values))
         measuredResponse = pendingMeasuredCurve ?? curve
     }
 
-    /// Adds a single-seat measurement to the multi-seat collection (Part 4.2).
+    /// Adds the current single-seat measurement into the multi-seat dictionary
+    /// at the next available integer key (Part 4.2).
     func addSeatMeasurement() {
         guard let curve = pendingMeasuredCurve else { return }
-        // For now, convert magnitude-only to complex with zero phase (legacy path)
-        // TODO: Update to use complex data from SweepAnalyser
         let complexResponse = curve.map { point in
             let magnitude = pow(10.0, point.gainDB / 20.0)
-            return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0) // Zero phase for legacy
+            return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0)
         }
-        let weight = seatMeasurements.isEmpty ? 1.5 : 1.0 // Primary seat gets higher weight
-        seatMeasurements.append(SeatMeasurement(complexResponse: complexResponse, weight: weight))
+        // B2 fix: flat 1.0 weight, keyed by next available index
+        let key = (seatMeasurements.keys.max() ?? -1) + 1
+        seatMeasurements[key] = SeatMeasurement(complexResponse: complexResponse, weight: 1.0)
         pendingMeasuredCurve = nil
         roomCorrectionPresetManager.markAsModified()
     }
@@ -1521,9 +1508,9 @@ final class EqualiserStore: ObservableObject {
     }
 
     /// Updates the weight for a specific seat measurement (Part 4.2).
-    func updateSeatWeight(at index: Int, weight: Double) {
-        guard index >= 0 && index < seatMeasurements.count else { return }
-        seatMeasurements[index].weight = max(0.25, min(2.0, weight))
+    func updateSeatWeight(at seatIndex: Int, weight: Double) {
+        guard seatMeasurements[seatIndex] != nil else { return }
+        seatMeasurements[seatIndex]!.weight = max(0.25, min(2.0, weight))
         roomCorrectionPresetManager.markAsModified()
     }
 
@@ -1533,11 +1520,11 @@ final class EqualiserStore: ObservableObject {
             do {
                 let result = try REWImporter.importMeasurement(from: url)
                 await MainActor.run { [self] in
-                    let weight = self.seatMeasurements.isEmpty ? 1.5 : 1.0 // Primary seat gets higher weight
-                    let seatMeasurement = SeatMeasurement(complexResponse: result.complexResponse, weight: weight)
-                    self.seatMeasurements.append(seatMeasurement)
+                    let key = (self.seatMeasurements.keys.max() ?? -1) + 1
+                    // B2 fix: flat 1.0 weight for imported measurements too
+                    let seatMeasurement = SeatMeasurement(complexResponse: result.complexResponse, weight: 1.0)
+                    self.seatMeasurements[key] = seatMeasurement
                     self.roomCorrectionPresetManager.markAsModified()
-                    // Show warnings if any
                     if !result.warnings.isEmpty {
                         self.measurementError = result.warnings.joined(separator: "\n")
                     }
@@ -1553,7 +1540,7 @@ final class EqualiserStore: ObservableObject {
     /// Computes complex average of all seat measurements and stores in pendingMeasuredCurve (Part 4.2).
     func applyMultiSeatCalibration() {
         guard !seatMeasurements.isEmpty else { return }
-        pendingMeasuredCurve = averageComplexResponses(seatMeasurements)
+        pendingMeasuredCurve = averageComplexResponses(Array(seatMeasurements.values))
     }
 
     /// Computes weighted complex average of seat measurements (Part 4.2).
@@ -1863,7 +1850,7 @@ final class EqualiserStore: ObservableObject {
         let settings = RoomCorrectionPresetSettings(
             targetCurveName: selectedTargetCurveName,
             customTargetCurve: selectedTargetCurveName == "Custom…" ? targetCurve.map(TargetCurvePoint.init) : nil,
-            seatMeasurements: seatMeasurements,
+            seatMeasurements: Array(seatMeasurements.values),
             measuredResponse: measuredResponse.map(TargetCurvePoint.init),
             micCalibration: micCalibration,
             appliedBands: eqConfiguration.leftState.roomCorrection.bands
@@ -1896,7 +1883,10 @@ final class EqualiserStore: ObservableObject {
         } else if let curve = TargetCurveLibrary.allCurves.first(where: { $0.name == preset.settings.targetCurveName }) {
             targetCurve = curve.curve
         }
-        seatMeasurements = preset.settings.seatMeasurements
+        // Restore as a dictionary keyed by sequential indices (matching the save path)
+        seatMeasurements = Dictionary(
+            uniqueKeysWithValues: preset.settings.seatMeasurements.enumerated().map { ($0.offset, $0.element) }
+        )
         measuredResponse = preset.settings.measuredResponse.map { ($0.frequency, $0.gainDB) }
         micCalibration = preset.settings.micCalibration
 

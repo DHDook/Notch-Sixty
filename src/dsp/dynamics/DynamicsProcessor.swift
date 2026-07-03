@@ -128,6 +128,8 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     /// Tracks the last-applied active crossover config for change detection.
     private var lastActiveCrossoverConfig: ActiveCrossoverConfig = .default
+    /// Sample rate at which active crossover coefficients were last staged.
+    private var lastActiveCrossoverSampleRate: Double = 0
 
     // ── Look-ahead limiter (extracted from inline implementation) ─────────────
     private let mainLimiter: LookAheadLimiter
@@ -2010,13 +2012,13 @@ final class DynamicsProcessor: @unchecked Sendable {
             }
         }
 
-        // Stage active crossover update if config changed or sample rate changed
-        if adv.activeCrossover != lastActiveCrossoverConfig {
+        // Stage active crossover update only when config or sample rate actually changed —
+        // prevents 4× BiquadMath.calculateSections calls on every unrelated Advanced
+        // Processing setting change (A3 fix).
+        if adv.activeCrossover != lastActiveCrossoverConfig || storedSampleRate != lastActiveCrossoverSampleRate {
             stageActiveCrossover(adv.activeCrossover)
             lastActiveCrossoverConfig = adv.activeCrossover
-        } else if activeCrossoverEngine != nil {
-            // Re-stage on sample rate change so coefficients use the new rate
-            stageActiveCrossover(adv.activeCrossover)
+            lastActiveCrossoverSampleRate = storedSampleRate
         }
     }
 

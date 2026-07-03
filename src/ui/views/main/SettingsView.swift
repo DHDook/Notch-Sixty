@@ -887,7 +887,9 @@ struct RoomCalibrationTab: View {
                                         await MainActor.run {
                                             isMeasuring = true
                                             statusMessage = "Sweep in progress — keep the room quiet…"
-                                            store.startSweepMeasurement()
+                                            // Use startLoopbackMeasurement so the physical mic
+                                            // selected above is included in capture (B1: unified path)
+                                            store.startLoopbackMeasurement(micDeviceID: selectedMicID)
                                         }
                                     } else {
                                         await MainActor.run {
@@ -924,10 +926,9 @@ struct RoomCalibrationTab: View {
                 Text("Measurement")
             }
 
-            // ── Measurement Visualization (Part 6) ───────────────────────
+            // ── Measurement Visualization ─────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    // Tab picker
                     Picker("View", selection: $selectedMeasurementTab) {
                         Text("Magnitude").tag(0)
                         Text("Group Delay").tag(1)
@@ -938,11 +939,9 @@ struct RoomCalibrationTab: View {
                     .pickerStyle(.segmented)
                     .controlSize(.small)
 
-                    // Display selected view
                     Group {
                         switch selectedMeasurementTab {
                         case 0:
-                            // Magnitude view — show the measured response as a simple summary
                             if !store.measuredResponse.isEmpty {
                                 Text("Measured response: \(store.measuredResponse.count) frequency points. Use the EQ curve display to visualise the correction result.")
                                     .font(.caption)
@@ -953,24 +952,12 @@ struct RoomCalibrationTab: View {
                                     .foregroundStyle(.secondary)
                             }
                         case 1:
-                            // Group Delay view — built from the actual measured response
-                            if !store.measuredResponse.isEmpty {
-                                // Derive complex response from the magnitude-only measurement.
-                                // Phase data is not yet available (requires Task 8-A); we use
-                                // a unit-phase (real=magnitude, imag=0) approximation which
-                                // produces group delay from magnitude slope, not true phase delay.
-                                let complexResponse = store.measuredResponse.map { pt in
-                                    let mag = pow(10.0, pt.gainDB / 20.0)
-                                    return (frequency: pt.frequency, real: mag, imag: 0.0)
-                                }
-                                GroupDelayView(complexResponse: complexResponse)
-                            } else {
-                                Text("No measurement data available.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            // Group delay from magnitude-only data — imag=0 so phase is flat.
+                            // Marked unavailable until complex measurement data is supported.
+                            Text("Group delay display requires phase measurement data, not yet available.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         case 2:
-                            // Impulse Response view — uses the stored impulse response
                             if !store.lastMeasuredImpulseResponse.isEmpty {
                                 ImpulseResponseView(impulseResponse: store.lastMeasuredImpulseResponse,
                                                     sampleRate: store.streamSampleRate)
@@ -980,7 +967,6 @@ struct RoomCalibrationTab: View {
                                     .foregroundStyle(.secondary)
                             }
                         case 3:
-                            // Step Response view — cumulative sum of the impulse response
                             if !store.lastMeasuredImpulseResponse.isEmpty {
                                 StepResponseView(impulseResponse: store.lastMeasuredImpulseResponse,
                                                  sampleRate: store.streamSampleRate)
@@ -990,7 +976,6 @@ struct RoomCalibrationTab: View {
                                     .foregroundStyle(.secondary)
                             }
                         case 4:
-                            // ETC/Waterfall view
                             if !store.lastMeasuredImpulseResponse.isEmpty {
                                 EnergyDecayView(impulseResponse: store.lastMeasuredImpulseResponse,
                                                 sampleRate: store.streamSampleRate)
@@ -1008,140 +993,39 @@ struct RoomCalibrationTab: View {
                 Text("Measurement Visualization")
             }
 
-            // ── Loopback Measurement ─────────────────────────────────────────
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Automated loopback measurement plays a sweep through your output and captures it via a microphone to measure room response.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    // Progress indicator
-                    HStack(spacing: 8) {
-                        switch store.measurementState {
-                        case .idle:
-                            Circle()
-                                .fill(Color.gray)
-                                .frame(width: 8, height: 8)
-                            Text("Ready to measure")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .playing:
-                            ProgressView()
-                                .scaleEffect(0.7)
-                            Text("Playing sweep...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .capturing:
-                            ProgressView()
-                                .scaleEffect(0.7)
-                            Text("Capturing reverb tail...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .computing:
-                            ProgressView()
-                                .scaleEffect(0.7)
-                            Text("Computing response...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case .done:
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                            Text("Measurement complete")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    // Measure button
-                    HStack(spacing: 12) {
-                        Button("Measure") {
-                            Task {
-                                // Check if HAL input mode is active
-                                if store.routingCoordinator.captureMode == .sharedMemory {
-                                    // Prompt to switch to HAL Input mode
-                                    let granted = await store.switchToManualMode()
-                                    if !granted {
-                                        return
-                                    }
-                                }
-                                store.startLoopbackMeasurement()
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(store.measurementState != .idle || !store.routingStatus.isActive)
-
-                        // Max bands stepper
-                        HStack(spacing: 8) {
-                            Text("Max bands:")
-                                .font(.caption)
-                                Stepper("", value: $maxBands, in: 8...20)
-                                .frame(width: 80)
-                            Text("\(maxBands)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 30)
-                        }
-                    }
-
-                    // Apply correction button (shown when done)
-                    if store.measurementState == .done {
-                        Button("Apply Correction (\(maxBands) bands)") {
-                            store.applyRoomCorrection(maxBands: maxBands)
-                        }
-                        .buttonStyle(.bordered)
-
-                        // FIR correction controls
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("FIR Correction")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Picker("IR length", selection: $store.firCorrectionTapCount) {
-                                ForEach([1024, 2048, 4096, 8192, 16384], id: \.self) { taps in
-                                    let ms = Double(taps) * 1000.0 / store.streamSampleRate
-                                    Text("\(taps) taps (\(Int(round(ms))) ms)").tag(taps)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .controlSize(.small)
-
-                            Button("Apply FIR correction (\(store.firCorrectionTapCount) taps)") {
-                                store.applyFIRRoomCorrection(tapCount: store.firCorrectionTapCount)
-                            }
-                            .buttonStyle(.bordered)
-
-                            Text("FIR correction captures narrow room modes that parametric bands cannot address. Longer IRs correct lower frequencies and longer decays but add more latency.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 8)
-                    }
-
-                    // Error display
-                    if let error = store.measurementError {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-                .padding(.vertical, 4)
-            } header: {
-                Text("Loopback Measurement")
-            }
-
             // ── Correction Filters ────────────────────────────────────────
+            // B1: Unified apply section — one IIR button, one FIR button.
+            // Operates on pendingMeasuredCurve regardless of which sweep path produced it.
             Section {
-                let hasMeasurement = acousticMode == 0
-                    ? measuredSeats.contains(0) || (!measuredSeats.isEmpty)
-                    : !measuredSeats.isEmpty
-                let readyForMulti = acousticMode == 1 && measuredSeats.count >= 2
+                let hasMeasurement = !measuredSeats.isEmpty || store.pendingMeasuredCurve != nil
+                let readyForMulti  = acousticMode == 1 && measuredSeats.count >= 2
 
                 if hasMeasurement {
                     VStack(alignment: .leading, spacing: 10) {
+                        // Sweep progress indicator
+                        HStack(spacing: 8) {
+                            switch store.measurementState {
+                            case .idle:
+                                Circle().fill(Color.gray).frame(width: 8, height: 8)
+                                Text("Ready to measure").font(.caption).foregroundStyle(.secondary)
+                            case .playing:
+                                ProgressView().scaleEffect(0.7)
+                                Text("Playing sweep…").font(.caption).foregroundStyle(.secondary)
+                            case .capturing:
+                                ProgressView().scaleEffect(0.7)
+                                Text("Capturing reverb tail…").font(.caption).foregroundStyle(.secondary)
+                            case .computing:
+                                ProgressView().scaleEffect(0.7)
+                                Text("Computing response…").font(.caption).foregroundStyle(.secondary)
+                            case .done:
+                                Circle().fill(Color.green).frame(width: 8, height: 8)
+                                Text("Measurement complete").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+
                         if acousticMode == 1 && !readyForMulti {
-                            Label("Measure at least 2 positions to build an averaged correction.", systemImage: "info.circle")
+                            Label("Measure at least 2 positions to build an averaged correction.",
+                                  systemImage: "info.circle")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
@@ -1152,23 +1036,63 @@ struct RoomCalibrationTab: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        // Band count stepper — shared by both apply paths
+                        HStack(spacing: 8) {
+                            Text("Max bands:").font(.caption)
+                            Stepper("", value: $maxBands, in: 8...20).frame(width: 80)
+                            Text("\(maxBands)").font(.caption).foregroundStyle(.secondary).frame(width: 30)
+                        }
+
                         HStack(spacing: 12) {
-                            Button("Apply Correction Filters (\(maxBands) bands)") {
+                            // IIR apply
+                            Button("Apply IIR Correction (\(maxBands) bands)") {
                                 store.applyRoomCalibration(maxBands: maxBands)
-                                statusMessage = "Correction filters applied."
+                                statusMessage = "IIR correction filters applied."
                             }
                             .buttonStyle(.bordered)
                             .disabled(acousticMode == 1 && !readyForMulti)
 
+                            // Discard
                             Button("Discard All", role: .destructive) {
-                                // Task 4: reset pendingMeasuredCurve and seatMeasurements,
-                                // not just the local measuredSeats UI state, so no stale
-                                // data can contaminate a fresh measurement run.
                                 measuredSeats.removeAll()
                                 store.discardAllMeasurements()
                                 statusMessage = "Ambient shield active — monitoring room silence."
                             }
                             .buttonStyle(.bordered)
+                        }
+
+                        // FIR apply — alternate output mode, same pendingMeasuredCurve
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("FIR Correction (alternate output mode)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            HStack(spacing: 12) {
+                                Picker("IR length", selection: $store.firCorrectionTapCount) {
+                                    ForEach([1024, 2048, 4096, 8192, 16384], id: \.self) { taps in
+                                        let ms = Double(taps) * 1000.0 / store.streamSampleRate
+                                        Text("\(taps) taps (\(Int(round(ms))) ms)").tag(taps)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .controlSize(.small)
+
+                                Button("Apply FIR (\(store.firCorrectionTapCount) taps)") {
+                                    store.applyFIRRoomCorrection(tapCount: store.firCorrectionTapCount)
+                                    statusMessage = "FIR correction applied."
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(acousticMode == 1 && !readyForMulti)
+                            }
+
+                            Text("FIR captures narrow room modes that parametric bands cannot address. Longer IRs correct lower frequencies at the cost of more latency.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if let error = store.measurementError {
+                            Text(error).font(.caption).foregroundStyle(.red)
                         }
                     }
                     .padding(.vertical, 4)

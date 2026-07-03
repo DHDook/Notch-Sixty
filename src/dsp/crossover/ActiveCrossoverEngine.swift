@@ -16,13 +16,35 @@ struct ActiveCrossoverEngine {
     static let maxSections = 8
 
     // MARK: - Band Output Buffers
-    // Pre-allocated, sized to AudioConstants.maxFrameCount
-    nonisolated(unsafe) var leftLow:   [Float]
-    nonisolated(unsafe) var leftMid:   [Float]
-    nonisolated(unsafe) var leftHigh:  [Float]
-    nonisolated(unsafe) var rightLow:  [Float]
-    nonisolated(unsafe) var rightMid:  [Float]
-    nonisolated(unsafe) var rightHigh: [Float]
+    // Pre-allocated as raw pointers (same pattern as leftWorkBuf/rightWorkBuf) so callers
+    // can hold stable base-address pointers across call boundaries without going through
+    // a withUnsafeMutableBufferPointer closure. Avoids the A2 undefined-behaviour issue
+    // where returning $0.baseAddress out of the closure outlives the closure's validity.
+    private let _leftLow:   UnsafeMutablePointer<Float>
+    private let _leftMid:   UnsafeMutablePointer<Float>
+    private let _leftHigh:  UnsafeMutablePointer<Float>
+    private let _rightLow:  UnsafeMutablePointer<Float>
+    private let _rightMid:  UnsafeMutablePointer<Float>
+    private let _rightHigh: UnsafeMutablePointer<Float>
+    private let _maxFrameCount: Int
+
+    /// Stable read-only pointers to the band output buffers.
+    /// Valid for the lifetime of this engine instance.
+    var leftLowPtr:   UnsafeMutablePointer<Float> { _leftLow }
+    var leftMidPtr:   UnsafeMutablePointer<Float> { _leftMid }
+    var leftHighPtr:  UnsafeMutablePointer<Float> { _leftHigh }
+    var rightLowPtr:  UnsafeMutablePointer<Float> { _rightLow }
+    var rightMidPtr:  UnsafeMutablePointer<Float> { _rightMid }
+    var rightHighPtr: UnsafeMutablePointer<Float> { _rightHigh }
+
+    /// Array-compatible views of the band output buffers (for subscript access and slicing).
+    /// These are lightweight O(1) wrappers; no data is copied.
+    var leftLow:   UnsafeBufferPointer<Float> { UnsafeBufferPointer(start: _leftLow,   count: _maxFrameCount) }
+    var leftMid:   UnsafeBufferPointer<Float> { UnsafeBufferPointer(start: _leftMid,   count: _maxFrameCount) }
+    var leftHigh:  UnsafeBufferPointer<Float> { UnsafeBufferPointer(start: _leftHigh,  count: _maxFrameCount) }
+    var rightLow:  UnsafeBufferPointer<Float> { UnsafeBufferPointer(start: _rightLow,  count: _maxFrameCount) }
+    var rightMid:  UnsafeBufferPointer<Float> { UnsafeBufferPointer(start: _rightMid,  count: _maxFrameCount) }
+    var rightHigh: UnsafeBufferPointer<Float> { UnsafeBufferPointer(start: _rightHigh, count: _maxFrameCount) }
 
     /// Scratch working buffers for crossover processing. Pre-allocated as raw pointers
     /// to avoid audio-thread heap allocation and Swift exclusivity violations.
@@ -69,13 +91,20 @@ struct ActiveCrossoverEngine {
 
     // MARK: - Initialization
     init(maxFrameCount: Int) {
-        // Allocate band output buffers
-        leftLow   = Array(repeating: 0.0, count: maxFrameCount)
-        leftMid   = Array(repeating: 0.0, count: maxFrameCount)
-        leftHigh  = Array(repeating: 0.0, count: maxFrameCount)
-        rightLow  = Array(repeating: 0.0, count: maxFrameCount)
-        rightMid  = Array(repeating: 0.0, count: maxFrameCount)
-        rightHigh = Array(repeating: 0.0, count: maxFrameCount)
+        _maxFrameCount = maxFrameCount
+        // Allocate band output buffers as raw pointers (A2 fix: stable addresses)
+        _leftLow   = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        _leftMid   = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        _leftHigh  = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        _rightLow  = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        _rightMid  = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        _rightHigh = UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
+        _leftLow.initialize(repeating: 0.0, count: maxFrameCount)
+        _leftMid.initialize(repeating: 0.0, count: maxFrameCount)
+        _leftHigh.initialize(repeating: 0.0, count: maxFrameCount)
+        _rightLow.initialize(repeating: 0.0, count: maxFrameCount)
+        _rightMid.initialize(repeating: 0.0, count: maxFrameCount)
+        _rightHigh.initialize(repeating: 0.0, count: maxFrameCount)
 
         // Allocate scratch work buffers as raw pointers to avoid exclusivity violations
         // when passing them to mutating filter-section helpers alongside self.filterState.
@@ -125,49 +154,49 @@ struct ActiveCrossoverEngine {
             rightWorkBuf[i] = rightIn[i]
         }
 
-        // Apply lower LP → leftLow, rightLow
+        // Apply lower LP → _leftLow, _rightLow
         applyFilterSections(leftWorkBuf, sections: activeLowerLP, stateOffset: 0, frameCount: frameCount)
-        for i in 0..<frameCount { leftLow[i] = leftWorkBuf[i] }
+        for i in 0..<frameCount { _leftLow[i] = leftWorkBuf[i] }
 
         // Reset left work buffer from input for HP pass
         for i in 0..<frameCount { leftWorkBuf[i] = leftIn[i] }
 
         applyFilterSections(rightWorkBuf, sections: activeLowerLP, stateOffset: 4, frameCount: frameCount)
-        for i in 0..<frameCount { rightLow[i] = rightWorkBuf[i] }
+        for i in 0..<frameCount { _rightLow[i] = rightWorkBuf[i] }
 
         // Reset right work buffer from input for HP pass
         for i in 0..<frameCount { rightWorkBuf[i] = rightIn[i] }
 
-        // Apply lower HP → leftHigh, rightHigh (mid+high combined)
+        // Apply lower HP → _leftHigh, _rightHigh (mid+high combined)
         applyFilterSections(leftWorkBuf, sections: activeLowerHP, stateOffset: 2, frameCount: frameCount)
-        for i in 0..<frameCount { leftHigh[i] = leftWorkBuf[i] }
+        for i in 0..<frameCount { _leftHigh[i] = leftWorkBuf[i] }
 
         for i in 0..<frameCount { leftWorkBuf[i] = leftIn[i] }
 
         applyFilterSections(rightWorkBuf, sections: activeLowerHP, stateOffset: 6, frameCount: frameCount)
-        for i in 0..<frameCount { rightHigh[i] = rightWorkBuf[i] }
+        for i in 0..<frameCount { _rightHigh[i] = rightWorkBuf[i] }
 
         for i in 0..<frameCount { rightWorkBuf[i] = rightIn[i] }
 
         // For tri-amp: extract mid and final high from upper crossover
         if activeBandCount == 3 {
             applyFilterSections(leftWorkBuf, sections: activeUpperLP, stateOffset: 8, frameCount: frameCount)
-            for i in 0..<frameCount { leftMid[i] = leftWorkBuf[i] }
+            for i in 0..<frameCount { _leftMid[i] = leftWorkBuf[i] }
 
             for i in 0..<frameCount { leftWorkBuf[i] = leftIn[i] }
 
             applyFilterSections(rightWorkBuf, sections: activeUpperLP, stateOffset: 12, frameCount: frameCount)
-            for i in 0..<frameCount { rightMid[i] = rightWorkBuf[i] }
+            for i in 0..<frameCount { _rightMid[i] = rightWorkBuf[i] }
 
             for i in 0..<frameCount { rightWorkBuf[i] = rightIn[i] }
 
             applyFilterSections(leftWorkBuf, sections: activeUpperHP, stateOffset: 10, frameCount: frameCount)
-            for i in 0..<frameCount { leftHigh[i] = leftWorkBuf[i] }
+            for i in 0..<frameCount { _leftHigh[i] = leftWorkBuf[i] }
 
             for i in 0..<frameCount { leftWorkBuf[i] = leftIn[i] }
 
             applyFilterSections(rightWorkBuf, sections: activeUpperHP, stateOffset: 14, frameCount: frameCount)
-            for i in 0..<frameCount { rightHigh[i] = rightWorkBuf[i] }
+            for i in 0..<frameCount { _rightHigh[i] = rightWorkBuf[i] }
         }
     }
 

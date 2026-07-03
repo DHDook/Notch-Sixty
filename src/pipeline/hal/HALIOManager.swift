@@ -32,6 +32,12 @@ final class HALIOManager {
     /// The currently configured device ID, or 0 if not set.
     private(set) var currentDeviceID: AudioDeviceID = 0
 
+    /// The UID of the currently configured device, or nil if not set.
+    var deviceUID: String? {
+        guard currentDeviceID != 0 else { return nil }
+        return fetchStringProperty(id: currentDeviceID, selector: kAudioDevicePropertyDeviceUID)
+    }
+
     /// Whether the audio unit has been initialized via `AudioUnitInitialize`.
     /// Marked nonisolated(unsafe) to allow cleanup in deinit.
     private nonisolated(unsafe) var isInitialized: Bool = false

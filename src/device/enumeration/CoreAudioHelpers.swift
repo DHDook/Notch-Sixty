@@ -118,3 +118,29 @@ func isJackConnected(_ deviceID: AudioDeviceID) -> Bool? {
     
     return connected != 0
 }
+
+/// Resolves an audio device UID string to its CoreAudio `AudioDeviceID`.
+///
+/// Uses `kAudioHardwarePropertyTranslateUIDToDevice` — a direct CoreAudio lookup
+/// that does not require enumerating all devices and does not trigger TCC.
+///
+/// - Parameter uid: The device UID string (e.g. from `OutputTarget.deviceUID`).
+/// - Returns: The matching `AudioDeviceID`, or `nil` if the UID is unknown.
+func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+        mScope:    kAudioObjectPropertyScopeGlobal,
+        mElement:  kAudioObjectPropertyElementMain
+    )
+    var cfUID = uid as CFString
+    var deviceID: AudioDeviceID = kAudioObjectUnknown
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let status = AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject),
+        &address,
+        UInt32(MemoryLayout<CFString>.size), &cfUID,
+        &size, &deviceID
+    )
+    guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    return deviceID
+}

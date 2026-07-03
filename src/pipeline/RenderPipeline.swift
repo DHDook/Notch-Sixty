@@ -89,7 +89,8 @@ final class RenderPipeline {
     /// PLL writers for Mode 3 (software PLL sync)
     private var pllWriters: [PLLSRCWriter] = []
 
-    /// Fallback writers for Mode 3 when PLL configuration fails
+    /// Fallback writers are superseded by `RenderCallbackContext.outputChannelWriters`.
+    /// Kept as an empty array only for stop/reset paths that zero it out.
     private var fallbackWriters: [SecondaryOutputWriter] = []
 
     /// Active routing mode (resolved by OutputDeviceRouter)
@@ -699,6 +700,14 @@ final class RenderPipeline {
         driverCapture?.stop()
         driverCapture = nil
 
+        // Stop secondary output writers before the primary HAL unit
+        if let ctx = callbackContext {
+            for i in 0..<OutputChannelMatrixConfig.maxChannels {
+                ctx.outputChannelWriters[i]?.stop()
+                ctx.outputChannelWriters[i] = nil
+            }
+        }
+
         // Stop the output HAL unit first (stops the output callback)
         if let outputManager = outputHALManager {
             if case .failure(let error) = outputManager.stop() {
@@ -757,10 +766,19 @@ final class RenderPipeline {
 
     /// Applies an output channel matrix configuration to the render pipeline.
     /// Constructs or reconfigures per-channel processors and sets active channel count.
+    /// For channels whose target device differs from the primary output device, starts
+    /// a SecondaryOutputWriter (AUHAL instance targeting that device). Channels on the
+    /// same device write directly into the existing HAL output buffer via channel index.
     /// Must be called from the main thread only.
     func applyOutputChannelMatrix(_ config: OutputChannelMatrixConfig) {
         guard let ctx = callbackContext else { return }
         let sr = currentSampleRate
+
+        // Stop and release any existing secondary writers before rebuilding
+        for i in 0..<OutputChannelMatrixConfig.maxChannels {
+            ctx.outputChannelWriters[i]?.stop()
+            ctx.outputChannelWriters[i] = nil
+        }
 
         guard config.isEnabled else {
             // Matrix disabled — zero out all processors and count
@@ -772,14 +790,16 @@ final class RenderPipeline {
             return
         }
 
+        // Primary device UID — channels targeting this device don't need a writer
+        let primaryUID = outputDeviceUID()
+
         var count = 0
         for (i, channel) in config.channels.prefix(OutputChannelMatrixConfig.maxChannels).enumerated() {
             guard channel.isEnabled else {
                 ctx.outputChannelProcessors[i] = nil
                 continue
             }
-            // Only rebuild the processor when the config actually changed — avoids
-            // reallocation on every minor parameter change.
+            // Only rebuild the processor when the config actually changed
             if let existing = ctx.outputChannelProcessors[i] {
                 existing.applyChannelConfig(channel, sampleRate: sr)
             } else {
@@ -791,8 +811,37 @@ final class RenderPipeline {
             }
             ctx.outputChannelSources[i] = channel.source
             count = i + 1
+
+            // Build a SecondaryOutputWriter for channels i ≥ 1 whose target device
+            // differs from the primary output device.
+            if i > 0, let target = channel.target, !target.deviceUID.isEmpty {
+                let targetUID = target.deviceUID
+                let isPrimary = primaryUID.map { $0 == targetUID } ?? false
+                if !isPrimary, let deviceID = audioDeviceID(forUID: targetUID) {
+                    let writerConfig = SecondaryOutputWriter.Config(
+                        deviceID:          deviceID,
+                        deviceUID:         targetUID,
+                        channelCount:      max(1, min(2, target.channelIndices.count)),
+                        nominalSampleRate: sr,
+                        maxFrameCount:     Int(ctx.maxFrameCount)
+                    )
+                    let writer = SecondaryOutputWriter(config: writerConfig)
+                    if writer.start() {
+                        ctx.outputChannelWriters[i] = writer
+                        logger.info("applyOutputChannelMatrix: writer started for ch\(i) → device \(targetUID)")
+                    } else {
+                        logger.error("applyOutputChannelMatrix: writer failed to start for ch\(i) → device \(targetUID)")
+                    }
+                }
+            }
         }
         ctx.activeOutputChannelCount = count
+    }
+
+    /// Returns the UID of the currently active primary output device, if resolvable.
+    private func outputDeviceUID() -> String? {
+        guard let mgr = outputHALManager else { return nil }
+        return mgr.deviceUID
     }
 
     /// Gain reduction in dB currently applied by the brickwall limiter.
