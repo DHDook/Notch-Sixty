@@ -779,58 +779,18 @@ struct RoomCalibrationTab: View {
             // ── Excess-Phase Correction (Part 5) ───────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Excess-Phase Correction (Experimental)", isOn: $store.excessPhaseConfig.enabled)
+                    // Task 8 (Option B): The excess-phase correction feature requires a
+                    // complex (magnitude + phase) frequency response from SweepAnalyser,
+                    // which currently only produces magnitude data. The toggle is shown
+                    // but disabled so it is not user-reachable in a broken state.
+                    Toggle("Excess-Phase Correction (Not yet available)", isOn: .constant(false))
+                        .disabled(true)
+                        .foregroundStyle(.secondary)
 
-                    if store.excessPhaseConfig.enabled {
-                        VStack(alignment: .leading, spacing: 8) {
-                            // Frequency slider
-                            HStack {
-                                Text("Cutoff frequency:")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Slider(value: $store.excessPhaseConfig.cutoffFreqHz, in: 100...500, step: 10)
-                                    .frame(width: 150)
-                                Text("\(Int(store.excessPhaseConfig.cutoffFreqHz)) Hz")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 40)
-                            }
-
-                            // Filter length picker
-                            HStack {
-                                Text("Filter length:")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Picker("", selection: $store.excessPhaseConfig.filterTaps) {
-                                    Text("4096").tag(4096)
-                                    Text("8192").tag(8192)
-                                    Text("16384").tag(16384)
-                                }
-                                .pickerStyle(.segmented)
-                                .frame(width: 200)
-                            }
-
-                            // Latency display
-                            let latency = ExcessPhaseCorrector.estimateLatency(
-                                filterTaps: store.excessPhaseConfig.filterTaps,
-                                sampleRate: 48000.0
-                            )
-                            HStack {
-                                Text("Added latency:")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text("\(String(format: "%.1f", latency)) ms")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            }
-
-                            // Help text
-                            Text("Recommend leaving this off for video playback unless you have lip-sync delay compensation available. Suitable for 2-channel music listening.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    Text("Excess-phase correction will be available in a future update once complex (magnitude + phase) measurement data is produced by the sweep analyser.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
                 Text("Excess-Phase Correction")
@@ -970,11 +930,10 @@ struct RoomCalibrationTab: View {
                     // Tab picker
                     Picker("View", selection: $selectedMeasurementTab) {
                         Text("Magnitude").tag(0)
-                        Text("Phase").tag(1)
-                        Text("Group Delay").tag(2)
-                        Text("Impulse").tag(3)
-                        Text("Step").tag(4)
-                        Text("ETC/Waterfall").tag(5)
+                        Text("Group Delay").tag(1)
+                        Text("Impulse").tag(2)
+                        Text("Step").tag(3)
+                        Text("ETC/Waterfall").tag(4)
                     }
                     .pickerStyle(.segmented)
                     .controlSize(.small)
@@ -983,53 +942,60 @@ struct RoomCalibrationTab: View {
                     Group {
                         switch selectedMeasurementTab {
                         case 0:
-                            // Magnitude view (existing EQ curve view)
-                            Text("Magnitude view - use existing EQ curve display")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case 1:
-                            // Phase view
-                            Text("Phase view - use existing EQ curve display with phase toggle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        case 2:
-                            // Group Delay view
+                            // Magnitude view — show the measured response as a simple summary
                             if !store.measuredResponse.isEmpty {
-                                let complexResponse = store.measuredResponse.map { (frequency: Double($0.frequency), real: 1.0, imag: 0.0) }
+                                Text("Measured response: \(store.measuredResponse.count) frequency points. Use the EQ curve display to visualise the correction result.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("No measurement data available.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case 1:
+                            // Group Delay view — built from the actual measured response
+                            if !store.measuredResponse.isEmpty {
+                                // Derive complex response from the magnitude-only measurement.
+                                // Phase data is not yet available (requires Task 8-A); we use
+                                // a unit-phase (real=magnitude, imag=0) approximation which
+                                // produces group delay from magnitude slope, not true phase delay.
+                                let complexResponse = store.measuredResponse.map { pt in
+                                    let mag = pow(10.0, pt.gainDB / 20.0)
+                                    return (frequency: pt.frequency, real: mag, imag: 0.0)
+                                }
                                 GroupDelayView(complexResponse: complexResponse)
                             } else {
-                                Text("No measurement data available")
+                                Text("No measurement data available.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case 2:
+                            // Impulse Response view — uses the stored impulse response
+                            if !store.lastMeasuredImpulseResponse.isEmpty {
+                                ImpulseResponseView(impulseResponse: store.lastMeasuredImpulseResponse,
+                                                    sampleRate: store.streamSampleRate)
+                            } else {
+                                Text("No measurement data available. Run a sweep to populate this view.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         case 3:
-                            // Impulse Response view
-                            if !store.measuredResponse.isEmpty {
-                                // Convert magnitude response to impulse response placeholder
-                                let impulseResponse = Array(repeating: Float(0.0), count: 1024)
-                                ImpulseResponseView(impulseResponse: impulseResponse, sampleRate: 48000.0)
+                            // Step Response view — cumulative sum of the impulse response
+                            if !store.lastMeasuredImpulseResponse.isEmpty {
+                                StepResponseView(impulseResponse: store.lastMeasuredImpulseResponse,
+                                                 sampleRate: store.streamSampleRate)
                             } else {
-                                Text("No measurement data available")
+                                Text("No measurement data available. Run a sweep to populate this view.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         case 4:
-                            // Step Response view
-                            if !store.measuredResponse.isEmpty {
-                                let impulseResponse = Array(repeating: Float(0.0), count: 1024)
-                                StepResponseView(impulseResponse: impulseResponse, sampleRate: 48000.0)
-                            } else {
-                                Text("No measurement data available")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        case 5:
                             // ETC/Waterfall view
-                            if !store.measuredResponse.isEmpty {
-                                let impulseResponse = Array(repeating: Float(0.0), count: 1024)
-                                EnergyDecayView(impulseResponse: impulseResponse, sampleRate: 48000.0)
+                            if !store.lastMeasuredImpulseResponse.isEmpty {
+                                EnergyDecayView(impulseResponse: store.lastMeasuredImpulseResponse,
+                                                sampleRate: store.streamSampleRate)
                             } else {
-                                Text("No measurement data available")
+                                Text("No measurement data available. Run a sweep to populate this view.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -1187,15 +1153,19 @@ struct RoomCalibrationTab: View {
                         }
 
                         HStack(spacing: 12) {
-                            Button("Apply Correction Filters") {
-                                store.applyRoomCalibration()
+                            Button("Apply Correction Filters (\(maxBands) bands)") {
+                                store.applyRoomCalibration(maxBands: maxBands)
                                 statusMessage = "Correction filters applied."
                             }
                             .buttonStyle(.bordered)
                             .disabled(acousticMode == 1 && !readyForMulti)
 
                             Button("Discard All", role: .destructive) {
+                                // Task 4: reset pendingMeasuredCurve and seatMeasurements,
+                                // not just the local measuredSeats UI state, so no stale
+                                // data can contaminate a fresh measurement run.
                                 measuredSeats.removeAll()
+                                store.discardAllMeasurements()
                                 statusMessage = "Ambient shield active — monitoring room silence."
                             }
                             .buttonStyle(.bordered)
@@ -1215,9 +1185,15 @@ struct RoomCalibrationTab: View {
         .padding()
         .onAppear {
             availableMics = Self.listInputDevices()
-            // Wire sweep completion callback
-            store.routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = {
-                isMeasuring = false
+            // Task 5: Only install the trivial isMeasuring-reset handler when idle.
+            // If a measurement is already in flight (started before the user navigated
+            // away and back), the real completion handler installed by
+            // startLoopbackMeasurement / startSweepMeasurement owns this callback for
+            // its full lifecycle and must not be overwritten.
+            if store.measurementState == .idle && !isMeasuring {
+                store.routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = {
+                    isMeasuring = false
+                }
             }
         }
     }

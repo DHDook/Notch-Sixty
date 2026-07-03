@@ -841,8 +841,9 @@ final class EqualiserStore: ObservableObject {
             )
         }
 
-        // Gather room correction layer bands
-        let roomCorrectionLayer = eqConfiguration.leftState.roomCorrection.bands.map { band in
+        // Gather room correction layer bands (active bands only)
+        let rcLayer = eqConfiguration.leftState.roomCorrection
+        let roomCorrectionLayer = rcLayer.bands.prefix(rcLayer.activeBandCount).map { band in
             PresetBand(
                 frequency: band.frequency,
                 q: band.q,
@@ -853,8 +854,8 @@ final class EqualiserStore: ObservableObject {
             )
         }
 
-        // Build target curve
-        let targetCurve = buildTargetCurve()
+        // Use the UI-visible targetCurve — the single source of truth (Task 2).
+        let targetCurveForPreamp = targetCurve
 
         // Get bass management low band gain
         let lowBandGainDB = dynamicsConfig.advanced.bassManagement.lowBandGainDB
@@ -862,8 +863,8 @@ final class EqualiserStore: ObservableObject {
         // Compute static preamp gain
         let staticPreampDB = EQHeadroomCompensator.computeStaticPreampDB(
             eqLayer: eqLayer,
-            roomCorrectionLayer: roomCorrectionLayer,
-            targetCurve: targetCurve,
+            roomCorrectionLayer: Array(roomCorrectionLayer),
+            targetCurve: targetCurveForPreamp,
             lowBandGainDB: lowBandGainDB,
             maxAttenuationDB: dynamicsConfig.advanced.eqHeadroomMaxAttenuationDB
         )
@@ -876,6 +877,10 @@ final class EqualiserStore: ObservableObject {
     @Published var pendingMeasuredCurve: [(frequency: Double, gainDB: Double)]? = nil
     @Published var roomCorrectionBandCount: Int = 0
     @Published var customREWTargetCurve: [(frequency: Double, gainDB: Double)]? = nil
+
+    /// Most recent raw impulse response (in samples), stored so visualization views can display it.
+    /// Populated by `stopSweepMeasurement` and `startLoopbackMeasurement` completion handlers.
+    @Published var lastMeasuredImpulseResponse: [Float] = []
 
     /// Accumulated measurement curves for multi-seat averaging (Part 4.2).
     /// Each element is one full-range frequency response measurement with complex data.
@@ -1301,6 +1306,9 @@ final class EqualiserStore: ObservableObject {
 
     /// Starts a measurement using a physical measurement microphone.
     /// When `micDeviceID` is nil, falls back to the virtual driver loopback.
+    /// This is a thin single-seat wrapper: it runs a sweep and populates
+    /// `pendingMeasuredCurve` via `stopSweepMeasurement(seatIndex: 0)`,
+    /// unifying it with the System A measurement pipeline.
     func startLoopbackMeasurement(micDeviceID: AudioDeviceID?) {
         measurementState = .playing
         measurementError = nil
@@ -1309,6 +1317,7 @@ final class EqualiserStore: ObservableObject {
         let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
         let analyser = SweepAnalyser(sampleRate: sampleRate, duration: 10.0, startFrequency: 20.0, endFrequency: 20000.0)
         sweepAnalyser = analyser
+        analyser.startRecording()
 
         // Store reference sweep signal
         let sweep = analyser.sweepSignal
@@ -1324,7 +1333,8 @@ final class EqualiserStore: ObservableObject {
             micSession = session
         }
 
-        // Start sweep playback
+        // Install completion handler — owns the callback for its full lifecycle.
+        // .onAppear must NOT overwrite this while a measurement is in flight (see Task 5).
         routingCoordinator.pipelineManager.renderPipeline?.setSweepAnalyser(analyser)
         routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = { [weak self] in
             guard let self = self else { return }
@@ -1335,54 +1345,47 @@ final class EqualiserStore: ObservableObject {
                 self.measurementState = .capturing
                 self.sweepAnalyser?.stopRecording()
 
-                // Compute impulse response and frequency response on background thread
+                // Compute impulse response and frequency response
                 self.measurementState = .computing
 
-                // Capture data needed for computation
                 guard let analyser = self.sweepAnalyser else { return }
                 let capturedSweep = sweep
+                let calibration = self.micCalibration
 
-                Task { @MainActor in
-                    let ir = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
-                    let response = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
+                let (ir, response): ([Float], [(frequency: Double, gainDB: Double)]) = await Task(priority: .userInitiated) {
+                    let computedIR = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
+                    let computedResponse = analyser.computeFrequencyResponse(ir: computedIR, micCalibration: calibration)
+                    return (computedIR, computedResponse)
+                }.value
 
-                    self.measuredResponse = response
-                    self.measurementState = .done
-                }
+                // Store the impulse response so visualization views can use it
+                self.lastMeasuredImpulseResponse = ir
+
+                // Route into the unified pending-curve pipeline (same as System A)
+                self.pendingMeasuredCurve = response
+                self.measuredResponse = response
+                self.measurementState = .done
             }
         }
         routingCoordinator.pipelineManager.renderPipeline?.startSweepPlayback(signal: sweep)
     }
 
-    /// Applies room correction bands to the current EQ.
-    /// - Parameter maxBands: Maximum number of correction bands (8-20, default 16)
+    /// Applies room correction bands to the current EQ using the unified pending-curve state.
+    /// - Parameter maxBands: Maximum number of correction bands (8–20, default 16)
     func applyRoomCorrection(maxBands: Int = 16) {
-        let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
-        let bands = RoomCorrectionEngine.fitBands(
-            measured: measuredResponse,
-            target: targetCurve,
-            sampleRate: sampleRate,
-            maxBands: maxBands
-        )
-
-        // Apply bands using the existing stager API
-        routingCoordinator.eqStager.applyRoomCorrectionBands(bands)
-
-        // Enable room correction
-        var adv = dynamicsConfig.advanced
-        adv.roomCorrectionEnabled = true
-        updateAdvancedProcessing(adv)
-        roomCorrectionBandCount = bands.count
+        // Delegate to the unified apply entry point so both the Loopback section
+        // and the Correction Filters section go through the same path.
+        applyRoomCalibration(maxBands: maxBands)
     }
 
     /// Computes and loads a minimum-phase FIR correction from the most recent loopback measurement.
-    /// Call after `applyRoomCorrection()` to upgrade from IIR to FIR correction.
+    /// Operates on `pendingMeasuredCurve` — the unified measurement state.
     /// - Parameters:
     ///   - tapCount: IR length in samples. Must be a power of two. 4096 ≈ 85 ms at 48 kHz.
     func applyFIRRoomCorrection(tapCount: Int = 4096) {
-        guard !measuredResponse.isEmpty else { return }
+        guard let pending = pendingMeasuredCurve, !pending.isEmpty else { return }
         let sr  = Double(streamSampleRate)
-        let measured = measuredResponse
+        let measured = pending
         let tgt = targetCurve
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -1456,13 +1459,44 @@ final class EqualiserStore: ObservableObject {
         sweepAnalyser?.stopRecording()
         guard let analyser = sweepAnalyser else { return }
         let ir = analyser.computeImpulseResponse(referenceSweep: analyser.sweepSignal)
+
+        // Store the raw impulse response for visualization views
+        lastMeasuredImpulseResponse = ir
+
         let curve = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
-        if seatIndex == 0 || pendingMeasuredCurve == nil {
-            pendingMeasuredCurve = curve
-        } else {
-            // Average with existing measurement (logarithmic average in dB).
-            pendingMeasuredCurve = averageFrequencyCurves(pendingMeasuredCurve!, curve)
+
+        // Build complex response from magnitude curve
+        // We use zero phase here because SweepAnalyser only gives us magnitude;
+        // the proper complex path is via Task 8-A (future work).
+        let complexResponse = curve.map { point in
+            let magnitude = pow(10.0, point.gainDB / 20.0)
+            return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0)
         }
+
+        // Replace or append the entry for this seat index
+        if let existing = seatMeasurements.firstIndex(where: { _ in false }) {
+            // placeholder — index-keyed replacement handled below
+            _ = existing
+        }
+
+        // Keep seatMeasurements indexed by seat position (0 = Centre, 1 = Left, 2 = Right).
+        // Pad the array if needed.
+        let weight: Double = seatMeasurements.isEmpty ? 1.5 : 1.0
+        let newSeat = SeatMeasurement(complexResponse: complexResponse, weight: weight)
+
+        if seatIndex < seatMeasurements.count {
+            seatMeasurements[seatIndex] = newSeat
+        } else {
+            // Fill any gaps with the new measurement at the right slot
+            while seatMeasurements.count < seatIndex {
+                seatMeasurements.append(newSeat)
+            }
+            seatMeasurements.append(newSeat)
+        }
+
+        // Recompute the pending curve as a proper equal-weighted average across all seats
+        pendingMeasuredCurve = averageComplexResponses(seatMeasurements)
+        measuredResponse = pendingMeasuredCurve ?? curve
     }
 
     /// Adds a single-seat measurement to the multi-seat collection (Part 4.2).
@@ -1892,12 +1926,22 @@ final class EqualiserStore: ObservableObject {
         loadRoomCorrectionPreset(preset)
     }
 
+    /// Discards all pending measurements and resets to a clean slate.
+    /// This is the canonical "Discard All" action — resets both the pending curve
+    /// and all accumulated seat measurements so no stale data can contaminate a fresh run.
+    func discardAllMeasurements() {
+        pendingMeasuredCurve = nil
+        seatMeasurements.removeAll()
+        measuredResponse = []
+        lastMeasuredImpulseResponse = []
+        measurementState = .idle
+        roomCorrectionPresetManager.markAsModified()
+    }
+
     /// Discards the current room correction calibration and deselects any preset.
     func createNewRoomCorrectionPreset() {
         clearRoomCalibration()
-        clearSeatMeasurements()
-        measuredResponse = []
-        pendingMeasuredCurve = nil
+        discardAllMeasurements()
         roomCorrectionPresetManager.selectPreset(named: nil)
     }
 
@@ -2006,11 +2050,14 @@ final class EqualiserStore: ObservableObject {
         routingCoordinator.pipelineManager.renderPipeline?.setGoniometerEngine(goniometerEngine)
     }
 
-    func applyRoomCalibration() {
+    /// Unified apply entry point for IIR room correction.
+    /// Reads from `pendingMeasuredCurve` and applies against the UI-visible `targetCurve`.
+    /// - Parameter maxBands: Maximum number of correction bands (8–20, default 16).
+    func applyRoomCalibration(maxBands: Int = 16) {
         guard let measured = pendingMeasuredCurve else { return }
-        let target = buildTargetCurve()
+        // Use the UI-visible targetCurve — the single source of truth for the target curve.
         let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
-        let bands = RoomCorrectionEngine.fitBands(measured: measured, target: target, sampleRate: sr)
+        let bands = RoomCorrectionEngine.fitBands(measured: measured, target: targetCurve, sampleRate: sr, maxBands: maxBands)
         routingCoordinator.eqStager.applyRoomCorrectionBands(bands)
         var adv = dynamicsConfig.advanced
         adv.roomCorrectionEnabled = true

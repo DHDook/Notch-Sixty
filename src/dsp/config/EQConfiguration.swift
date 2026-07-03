@@ -954,6 +954,33 @@ final class EQConfiguration: ObservableObject {
     }
 }
 
+// MARK: - Room Correction Layer
+
+extension EQConfiguration {
+    /// Updates the room correction model layer on both channels.
+    /// Called by `EQCoefficientStager` after staging bands to the render pipeline (Task 6).
+    func setRoomCorrectionLayer(_ state: EQLayerState) {
+        leftState.roomCorrection  = state
+        rightState.roomCorrection = state
+        objectWillChange.send()
+    }
+
+    /// Resets the room correction model layer to passthrough on both channels.
+    func clearRoomCorrectionLayer() {
+        let cleared = EQLayerState.passthrough(label: "Room Correction")
+        leftState.roomCorrection  = cleared
+        rightState.roomCorrection = cleared
+        objectWillChange.send()
+    }
+
+    /// Updates the bypass flag on the room correction model layer without changing bands.
+    func setRoomCorrectionLayerBypass(_ bypass: Bool) {
+        leftState.roomCorrection.bypass  = bypass
+        rightState.roomCorrection.bypass = bypass
+        objectWillChange.send()
+    }
+}
+
 // MARK: - Dynamic EQ Bridge
 
 extension EQConfiguration {
