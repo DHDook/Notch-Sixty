@@ -7,6 +7,8 @@ struct EQWindowView: View {
     @EnvironmentObject var store: EqualiserStore
     @StateObject private var driverManager = DriverManager.shared
     @State private var showCompareHelp = false
+    @State private var showSnapshotCompareHelp = false
+    @State private var showChannelHelp = false
     @State private var metersEnabledUI = true
     @State private var showSnapshotCompare = false
     @State private var localVolume: Float = 1.0
@@ -174,15 +176,37 @@ struct EQWindowView: View {
                     .frame(minWidth: 280, maxWidth: 280, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Compare")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Text("Compare")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            showSnapshotCompareHelp = true
+                        } label: {
+                            Image(systemName: "questionmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showSnapshotCompareHelp, arrowEdge: .trailing) {
+                            Text("""
+                                A/B/C/D snapshot compare lets you save up to four EQ configurations and switch between them instantly.
+
+                                Click a slot to recall its saved EQ.
+                                Right-click a slot to save the current EQ into it, or to clear it.
+                                """)
+                                .font(.caption)
+                                .padding(12)
+                                .frame(width: 280)
+                        }
+                    }
 
                     HStack(spacing: 4) {
                         Toggle("", isOn: $showSnapshotCompare)
                             .labelsHidden()
                             .toggleStyle(.switch)
-                            .controlSize(.mini)
+                            .controlSize(.small)
 
                         if showSnapshotCompare {
                             HStack(spacing: 2) {
@@ -239,9 +263,30 @@ struct EQWindowView: View {
 
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {
-                        Text("Channel")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text("Channel")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                showChannelHelp = true
+                            } label: {
+                                Image(systemName: "questionmark.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: $showChannelHelp, arrowEdge: .trailing) {
+                                Text("""
+                                    Linked — One EQ curve applied equally to both channels.
+                                    Stereo — Independent left and right EQ curves. Use the Edit picker to choose which channel you're editing.
+                                    M/S — Independent Mid (center, L+R) and Side (width, L−R) EQ curves. Use the Edit picker to choose which one you're editing.
+                                    """)
+                                    .font(.caption)
+                                    .padding(12)
+                                    .frame(width: 300)
+                            }
+                        }
                         Picker("", selection: $store.channelMode) {
                             Text("Linked").tag(ChannelMode.linked)
                             Text("Stereo").tag(ChannelMode.stereo)
