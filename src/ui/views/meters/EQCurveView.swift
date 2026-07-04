@@ -58,14 +58,24 @@ struct EQCurveView: View {
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showCurveHelp, arrowEdge: .trailing) {
-                    Text("""
-                        Curve — Net magnitude (amplitude) response in dB of all active, non-bypassed EQ bands, across frequency.
-                        GD — Group delay overlay, in milliseconds: how much the current EQ delays each frequency.
-                        φ (Phase) — Phase response overlay, in degrees (±180°): how much the current EQ shifts each frequency's phase.
-                        """)
-                        .font(.caption)
-                        .padding(12)
-                        .frame(width: 280)
+                    VStack(alignment: .leading, spacing: 10) {
+                        TooltipDefinitionEntry(
+                            title: "Curve",
+                            detail: "Net magnitude (amplitude) response in dB of all active, non-bypassed EQ bands, across frequency."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "GD (Group Delay)",
+                            detail: "Group delay overlay, in milliseconds: how much the current EQ delays each frequency."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "φ (Phase)",
+                            detail: "Phase response overlay, in degrees (±180°): how much the current EQ shifts each frequency's phase."
+                        )
+                    }
+                    .padding(12)
+                    .frame(width: 280)
                 }
 
                 // Group delay toggle

@@ -93,6 +93,7 @@ struct EQWindowView: View {
             )
 
             Divider()
+                .frame(width: 120)
 
             HStack(spacing: 6) {
                 Toggle("", isOn: $metersEnabledUI)
@@ -114,14 +115,76 @@ struct EQWindowView: View {
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showMetersHelp, arrowEdge: .trailing) {
-                    Text("""
-                        Peak In / Peak Out — Instantaneous peak level (highest sample amplitude), captured before and after all EQ, dynamics, and gain processing. Fast-reacting; shows transients and clipping.
-                        RMS In / RMS Out — Time-averaged level (root-mean-square), captured before and after all processing. Slower-reacting; better reflects perceived loudness.
-                        RTA — 31-band real-time spectrum analyzer plotting input and output frequency content simultaneously, shown below the meters.
-                        """)
-                        .font(.caption)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            TooltipDefinitionEntry(
+                                title: "Peak In / Peak Out",
+                                detail: "Instantaneous peak level (highest sample amplitude), captured before and after all EQ, dynamics, and gain processing. Fast-reacting; shows transients and clipping."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "RMS In / RMS Out",
+                                detail: "Time-averaged level (root-mean-square), captured before and after all processing. Slower-reacting; better reflects perceived loudness."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "RTA",
+                                detail: "31-band real-time spectrum analyzer plotting input and output frequency content simultaneously, shown below the meters."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "Gain Structure",
+                                detail: "Live gain reduction, in dB, for every active dynamics stage — De-Esser, Multiband Compressor (low/mid/high), Compressor, Expander, Clipper, and Limiter — shown in the Dynamics section."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "Phase",
+                                detail: "Left/right correlation, from +1 (in phase, mono-compatible) through 0 (decorrelated/wide) to −1 (out of phase — will cancel in mono)."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "Crest Factor",
+                                detail: "Input peak-to-RMS ratio in dB. Higher means a more dynamic, less dense signal arriving at the plugin."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "DR Factor",
+                                detail: "Output peak-to-RMS ratio in dB, after processing. Shows how much dynamic range the dynamics chain has removed."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "ISP Latch",
+                                detail: "Overload indicator that latches on and stays lit once the input or output peak exceeds about −0.1 dBFS. Tap it to reset."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "TP-In / TP-Out",
+                                detail: "Live, non-latching clip indicator for the input and output peak level."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "True Peak Meter",
+                                detail: "Continuous true-peak level in dBTP, with an indicator for when oversampled peak detection is active."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "Bit Stream",
+                                detail: "24-bit activity monitor — one LED per bit of the input signal, lit when that bit carries energy."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "Sample Rate",
+                                detail: "Live input sample rate and its equivalent nominal bit rate."
+                            )
+                            Divider()
+                            TooltipDefinitionEntry(
+                                title: "Goniometer",
+                                detail: "Circular Lissajous (X/Y) plot of the stereo image, showing left/right correlation and width visually."
+                            )
+                        }
                         .padding(12)
-                        .frame(width: 320)
+                    }
+                    .frame(width: 320, height: 420)
                 }
             }
             .padding(.top, 12)
@@ -213,15 +276,24 @@ struct EQWindowView: View {
                         }
                         .buttonStyle(.plain)
                         .popover(isPresented: $showSnapshotCompareHelp, arrowEdge: .trailing) {
-                            Text("""
-                                A/B/C/D snapshot compare lets you save up to four EQ configurations and switch between them instantly.
-
-                                Click a slot to recall its saved EQ.
-                                Right-click a slot to save the current EQ into it, or to clear it.
-                                """)
-                                .font(.caption)
-                                .padding(12)
-                                .frame(width: 280)
+                            VStack(alignment: .leading, spacing: 10) {
+                                TooltipDefinitionEntry(
+                                    title: "A/B/C/D Snapshot Compare",
+                                    detail: "Save up to four full EQ configurations and switch between them instantly for A/B comparison."
+                                )
+                                Divider()
+                                TooltipDefinitionEntry(
+                                    title: "Click to Recall",
+                                    detail: "Click a lettered slot to load its saved EQ."
+                                )
+                                Divider()
+                                TooltipDefinitionEntry(
+                                    title: "Right-Click to Save or Clear",
+                                    detail: "Right-click a slot to save the current EQ into it, or to clear it."
+                                )
+                            }
+                            .padding(12)
+                            .frame(width: 280)
                         }
                     }
 
@@ -300,14 +372,24 @@ struct EQWindowView: View {
                             }
                             .buttonStyle(.plain)
                             .popover(isPresented: $showChannelHelp, arrowEdge: .trailing) {
-                                Text("""
-                                    Linked — One EQ curve applied equally to both channels.
-                                    Stereo — Independent left and right EQ curves. Use the Edit picker to choose which channel you're editing.
-                                    M/S — Independent Mid (center, L+R) and Side (width, L−R) EQ curves. Use the Edit picker to choose which one you're editing.
-                                    """)
-                                    .font(.caption)
-                                    .padding(12)
-                                    .frame(width: 300)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TooltipDefinitionEntry(
+                                        title: "Linked",
+                                        detail: "One EQ curve applied equally to both channels."
+                                    )
+                                    Divider()
+                                    TooltipDefinitionEntry(
+                                        title: "Stereo",
+                                        detail: "Independent left and right EQ curves. Use the Edit picker to choose which channel you're editing."
+                                    )
+                                    Divider()
+                                    TooltipDefinitionEntry(
+                                        title: "M/S",
+                                        detail: "Independent Mid (center, L+R) and Side (width, L−R) EQ curves. Use the Edit picker to choose which one you're editing."
+                                    )
+                                }
+                                .padding(12)
+                                .frame(width: 300)
                             }
                         }
                         Picker("", selection: $store.channelMode) {
@@ -362,16 +444,19 @@ struct EQWindowView: View {
                             }
                             .buttonStyle(.plain)
                             .popover(isPresented: $showCompareHelp, arrowEdge: .trailing) {
-                                Text("""
-                                    EQ — Full biquad IIR processing. Minimum latency.
-                                    Linear — Zero-phase FIR convolution EQ. Eliminates phase distortion entirely at the cost of increased latency and pre-ringing artefacts.
-                                    Mixed — Biquad EQ with all-pass phase correction. Reduces phase distortion without pre-ringing or added latency. A practical middle ground between EQ and Linear modes.
-                                    Flat — Bypasses EQ at matched volume to audition unprocessed audio. Reverts automatically after 5 minutes.
-                                    Delta — Solos the EQ difference signal to hear the processed effect.
-                                    """)
-                                    .font(.caption)
-                                    .padding(12)
-                                    .frame(width: 320)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TooltipDefinitionEntry(title: "EQ", detail: "Full biquad IIR processing. Minimum latency.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Linear", detail: "Zero-phase FIR convolution EQ. Eliminates phase distortion entirely at the cost of increased latency and pre-ringing artefacts.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Mixed", detail: "Biquad EQ with all-pass phase correction. Reduces phase distortion without pre-ringing or added latency. A practical middle ground between EQ and Linear modes.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Flat", detail: "Bypasses EQ at matched volume to audition unprocessed audio. Reverts automatically after 5 minutes.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Delta", detail: "Solos the EQ difference signal to hear the processed effect.")
+                                }
+                                .padding(12)
+                                .frame(width: 320)
                             }
                         }
 
