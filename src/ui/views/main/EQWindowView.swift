@@ -8,6 +8,7 @@ struct EQWindowView: View {
     @StateObject private var driverManager = DriverManager.shared
     @State private var showCompareHelp = false
     @State private var metersEnabledUI = true
+    @State private var showSnapshotCompare = false
     @State private var localVolume: Float = 1.0
     @State private var localIsMuted: Bool = false
     @State private var showDriverSheet = true
@@ -87,6 +88,17 @@ struct EQWindowView: View {
                     }
                 )
             )
+
+            HStack(spacing: 6) {
+                Toggle("", isOn: $metersEnabledUI)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                Text("Meters")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
         }
     }
 
@@ -102,7 +114,6 @@ struct EQWindowView: View {
 
             EQCurveView(metersEnabled: metersEnabledUI)
                 .frame(width: 333, alignment: .leading)
-                .padding(.leading, 16)
                 .padding(.top, 4)
         }
     }
@@ -161,8 +172,47 @@ struct EQWindowView: View {
                 PresetToolbar()
                     .frame(minWidth: 280, maxWidth: 280, alignment: .leading)
 
-                Spacer()
+                VStack(spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text("Compare")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Toggle("", isOn: $showSnapshotCompare)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                    }
+                    if showSnapshotCompare {
+                        HStack(spacing: 2) {
+                            ForEach(["A", "B", "C", "D"], id: \.self) { key in
+                                Button(action: {
+                                    if store.selectedSnapshotKey == key {
+                                        store.saveSnapshot(key: key)
+                                    } else {
+                                        store.restoreSnapshot(key: key)
+                                    }
+                                }) {
+                                    Text(key)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .frame(width: 18, height: 20)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .background(store.selectedSnapshotKey == key ? Color.accentColor.opacity(0.3) : Color.clear)
+                                .overlay(
+                                    store.snapshots[key] != nil ?
+                                        Circle()
+                                            .fill(Color.accentColor)
+                                            .frame(width: 4, height: 4)
+                                            .offset(x: 6, y: -8)
+                                        : nil
+                                )
+                            }
+                        }
+                    }
+                }
 
+                Spacer()
                 Spacer()
                     .frame(width: 192)
 
@@ -175,41 +225,6 @@ struct EQWindowView: View {
 
                 Spacer()
                     .frame(width: 128)
-
-                // Snapshot comparison controls (Part 9.1)
-                VStack(spacing: 4) {
-                    Text("Compare")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 4) {
-                        ForEach(["A", "B", "C", "D"], id: \.self) { key in
-                            Button(action: {
-                                if store.selectedSnapshotKey == key {
-                                    // Already selected - save current state
-                                    store.saveSnapshot(key: key)
-                                } else {
-                                    // Restore snapshot
-                                    store.restoreSnapshot(key: key)
-                                }
-                            }) {
-                                Text(key)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .background(store.selectedSnapshotKey == key ? Color.accentColor.opacity(0.3) : Color.clear)
-                            .overlay(
-                                store.snapshots[key] != nil ?
-                                    Circle()
-                                        .fill(Color.accentColor)
-                                        .frame(width: 4, height: 4)
-                                        .offset(x: 8, y: -8)
-                                    : nil
-                            )
-                        }
-                    }
-                }
 
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {
@@ -334,22 +349,6 @@ struct EQWindowView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
-                }
-                .frame(minWidth: 40, alignment: .center)
-                .padding(.top, 10)
-                .padding(.bottom, 2)
-                .padding(.leading, 4)
-                .padding(.trailing, 8)
-
-                VStack(spacing: 2) {
-                    Text("Meters")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                    Toggle("", isOn: $metersEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
                 }
                 .frame(minWidth: 40, alignment: .center)
                 .padding(.top, 10)

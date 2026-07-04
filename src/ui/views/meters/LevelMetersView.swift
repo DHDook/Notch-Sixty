@@ -4,13 +4,14 @@ struct LevelMetersView: View {
     let meterStore: MeterStore
     private let barLength: CGFloat = MeterConstants.meterHeight   // 126pt — now a length, not a height
     private let labelColumnWidth: CGFloat = 80
+    private let barThickness: CGFloat = 14
 
     var body: some View {
         VStack(alignment: .center, spacing: 4) {
-            MeterRow(title: "Peak In",  meterStore: meterStore, leftType: .inputPeakLeft,  rightType: .inputPeakRight,  thickness: 18, isRMS: false, barLength: barLength, labelColumnWidth: labelColumnWidth)
-            MeterRow(title: "Peak Out", meterStore: meterStore, leftType: .outputPeakLeft, rightType: .outputPeakRight, thickness: 18, isRMS: false, barLength: barLength, labelColumnWidth: labelColumnWidth)
-            MeterRow(title: "RMS In",   meterStore: meterStore, leftType: .inputRMSLeft,   rightType: .inputRMSRight,   thickness: 14, isRMS: true,  barLength: barLength, labelColumnWidth: labelColumnWidth)
-            MeterRow(title: "RMS Out",  meterStore: meterStore, leftType: .outputRMSLeft,  rightType: .outputRMSRight,  thickness: 14, isRMS: true,  barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "Peak In",  meterStore: meterStore, leftType: .inputPeakLeft,  rightType: .inputPeakRight,  thickness: barThickness, isRMS: false, barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "Peak Out", meterStore: meterStore, leftType: .outputPeakLeft, rightType: .outputPeakRight, thickness: barThickness, isRMS: false, barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "RMS In",   meterStore: meterStore, leftType: .inputRMSLeft,   rightType: .inputRMSRight,   thickness: barThickness, isRMS: true,  barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "RMS Out",  meterStore: meterStore, leftType: .outputRMSLeft,  rightType: .outputRMSRight,  thickness: barThickness, isRMS: true,  barLength: barLength, labelColumnWidth: labelColumnWidth)
             MirroredMeterScaleView(barLength: barLength, labelColumnWidth: labelColumnWidth)
         }
     }

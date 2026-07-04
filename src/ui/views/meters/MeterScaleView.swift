@@ -60,61 +60,35 @@ struct MeterScaleView: View {
 struct MirroredMeterScaleView: View {
     let barLength: CGFloat
     let labelColumnWidth: CGFloat
+    private let tickHeight: CGFloat = 4
+    private let canvasHeight: CGFloat = 22
 
     var body: some View {
         let totalWidth = barLength * 2 + labelColumnWidth
         Canvas { context, size in
             for db in MeterConstants.standardTickValues {
                 let position = MeterConstants.normalizedPosition(for: db)  // 0 = silence, 1 = full scale
-
-                // Left half: x ∈ [0, barLength], grows leftward from center
                 let leftX = barLength * (1 - CGFloat(position))
-                // Right half: x ∈ [barLength + labelColumnWidth, totalWidth], grows rightward from center
                 let rightX = (barLength + labelColumnWidth) + barLength * CGFloat(position)
-
-                // Draw tick mark
                 let tickWidth: CGFloat = db == 0 ? 6 : 4
-                let tickHeight: CGFloat = 1
 
-                // Left tick
-                let leftTickRect = CGRect(
-                    x: leftX - tickWidth,
-                    y: size.height - tickHeight,
-                    width: tickWidth,
-                    height: tickHeight
-                )
-                context.fill(Path(leftTickRect), with: .color(.gray.opacity(0.6)))
+                // Ticks hug the TOP of the canvas (right against the last meter row above)
+                context.fill(Path(CGRect(x: leftX - tickWidth, y: 0, width: tickWidth, height: tickHeight)), with: .color(.gray.opacity(0.6)))
+                context.fill(Path(CGRect(x: rightX, y: 0, width: tickWidth, height: tickHeight)), with: .color(.gray.opacity(0.6)))
 
-                // Right tick
-                let rightTickRect = CGRect(
-                    x: rightX,
-                    y: size.height - tickHeight,
-                    width: tickWidth,
-                    height: tickHeight
-                )
-                context.fill(Path(rightTickRect), with: .color(.gray.opacity(0.6)))
-
-                // Draw label
                 let label = db == 0 ? "0" : String(format: "%.0f", db)
                 let text = Text(label)
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                // Left label (anchor at trailing edge of tick)
-                context.draw(
-                    context.resolve(text),
-                    at: CGPoint(x: leftX - tickWidth - 2, y: size.height),
-                    anchor: .topLeading
-                )
-
-                // Right label (anchor at leading edge of tick)
-                context.draw(
-                    context.resolve(text),
-                    at: CGPoint(x: rightX + tickWidth + 2, y: size.height),
-                    anchor: .topTrailing
-                )
+                // Center each label horizontally on its own tick, positioned below the tick,
+                // fully inside [0, canvasHeight] vertically. Centering (rather than the old
+                // outward-offset anchors) also keeps the 0 dB labels from overflowing left/right,
+                // at the cost of a pixel or two of harmless overhang at the true outer edges.
+                context.draw(context.resolve(text), at: CGPoint(x: leftX, y: tickHeight + 2), anchor: .top)
+                context.draw(context.resolve(text), at: CGPoint(x: rightX, y: tickHeight + 2), anchor: .top)
             }
         }
-        .frame(width: totalWidth, height: 20)
+        .frame(width: totalWidth, height: canvasHeight)
     }
 }
