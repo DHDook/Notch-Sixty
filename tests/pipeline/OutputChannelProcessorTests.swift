@@ -47,4 +47,21 @@ final class OutputChannelProcessorTests: XCTestCase {
         // TODO: Implement actual test.
         XCTAssertTrue(true)
     }
+
+    func testProcessDoesNotCrashForMainsLeftAndRightSources() {
+        // Regression test for output channel limiter crash.
+        // The bug was that OutputChannelProcessor assumed .mainsLeft/.mainsRight were stereo pairs
+        // and allocated channelCount=2, but resolveSource always returns nil for the right channel.
+        // This caused a precondition failure in LookAheadLimiter.process when it received 1 buffer
+        // but expected 2. The fix allocates for max capacity (2) and processes however many buffers
+        // are actually passed.
+        for source in [SignalSource.mainsLeft, .mainsRight] {
+            let processor = OutputChannelProcessor(source: source, maxFrameCount: 512, sampleRate: 48000)
+            processor.applyChannelConfig(.default, sampleRate: 48000) // limiter enabled by default
+            var buf = [Float](repeating: 0.5, count: 512)
+            buf.withUnsafeMutableBufferPointer { ptr in
+                processor.process(leftBuf: ptr.baseAddress!, rightBuf: nil, frameCount: 512)
+            }
+        }
+    }
 }

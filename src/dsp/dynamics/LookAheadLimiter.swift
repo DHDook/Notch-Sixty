@@ -106,7 +106,11 @@ final class LookAheadLimiter {
     @inline(__always)
     func process(buffers: [UnsafeMutablePointer<Float>], frameCount: Int) {
         guard _enabled.load(ordering: .relaxed) else { return }
-        precondition(buffers.count == channelCount, "LookAheadLimiter: buffer count mismatch")
+        let activeChannels = buffers.count
+        precondition(
+            activeChannels > 0 && activeChannels <= channelCount,
+            "LookAheadLimiter: expected 1...\(channelCount) buffers, got \(activeChannels)"
+        )
 
         let rawCeiling   = Float(bitPattern: UInt32(bitPattern: _ceilingBits.load(ordering: .relaxed)))
         let tpGuardOn    = _tpGuardEnabled.load(ordering: .relaxed)
@@ -125,11 +129,11 @@ final class LookAheadLimiter {
         var postLimiterPeak: Float = 0.0
 
         for frame in 0..<frameCount {
-            for ch in 0..<channelCount {
+            for ch in 0..<activeChannels {
                 lookAheadBufs[ch][writeIdx] = buffers[ch][frame]
             }
             var peakAmplitude: Float = 0.0
-            for ch in 0..<channelCount {
+            for ch in 0..<activeChannels {
                 let p = Self.scanPeak(lookAheadBufs[ch], size: la)
                 if p > peakAmplitude { peakAmplitude = p }
             }
@@ -141,11 +145,11 @@ final class LookAheadLimiter {
                 gC = gC * alphaRelease + gTarget * (1.0 - alphaRelease)
             }
             let readIdx = (writeIdx + 1) % la
-            for ch in 0..<channelCount {
+            for ch in 0..<activeChannels {
                 buffers[ch][frame] = lookAheadBufs[ch][readIdx] * gC
             }
             if tpGuardOn {
-                for ch in 0..<channelCount {
+                for ch in 0..<activeChannels {
                     let s = abs(buffers[ch][frame])
                     if s > postLimiterPeak { postLimiterPeak = s }
                 }

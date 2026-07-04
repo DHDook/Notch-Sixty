@@ -71,16 +71,10 @@ final class OutputChannelProcessor {
                                                maxFrameCount: maxFrameCount,
                                                sampleRate: sampleRate)
         delayBuffer = [Float](repeating: 0, count: Self.maxDelaySamples)
-        // Initialize look-ahead limiter with correct channel count
-        // channelCount depends on whether this channel's source is stereo-capable
-        let channelCount: Int
-        switch source {
-        case .mainsLeft, .mainsRight:
-            channelCount = 2
-        default:
-            channelCount = 1
-        }
-        limiter = LookAheadLimiter(channelCount: channelCount, sampleRate: sampleRate, lookAheadMs: 2.0)
+        // Allocate for the maximum supported channel count (mono or stereo).
+        // The limiter processes whatever number of buffers it's actually given
+        // on each call — see LookAheadLimiter.process for details.
+        limiter = LookAheadLimiter(channelCount: 2, sampleRate: sampleRate, lookAheadMs: 2.0)
     }
 
     // MARK: - Main Thread Configuration (all real-time safe via atomics)
