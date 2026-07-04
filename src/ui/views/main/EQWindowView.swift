@@ -98,6 +98,7 @@ struct EQWindowView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .padding(.top, 8)
             .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
         }
     }
@@ -172,41 +173,43 @@ struct EQWindowView: View {
                 PresetToolbar()
                     .frame(minWidth: 280, maxWidth: 280, alignment: .leading)
 
-                VStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Compare")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     HStack(spacing: 4) {
-                        Text("Compare")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         Toggle("", isOn: $showSnapshotCompare)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .controlSize(.mini)
-                    }
-                    if showSnapshotCompare {
-                        HStack(spacing: 2) {
-                            ForEach(["A", "B", "C", "D"], id: \.self) { key in
-                                Button(action: {
-                                    if store.selectedSnapshotKey == key {
-                                        store.saveSnapshot(key: key)
-                                    } else {
-                                        store.restoreSnapshot(key: key)
+
+                        if showSnapshotCompare {
+                            HStack(spacing: 2) {
+                                ForEach(["A", "B", "C", "D"], id: \.self) { key in
+                                    Button(action: {
+                                        if store.selectedSnapshotKey == key {
+                                            store.saveSnapshot(key: key)
+                                        } else {
+                                            store.restoreSnapshot(key: key)
+                                        }
+                                    }) {
+                                        Text(key)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .frame(width: 18, height: 20)
                                     }
-                                }) {
-                                    Text(key)
-                                        .font(.system(size: 11, weight: .medium))
-                                        .frame(width: 18, height: 20)
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .background(store.selectedSnapshotKey == key ? Color.accentColor.opacity(0.3) : Color.clear)
+                                    .overlay(
+                                        store.snapshots[key] != nil ?
+                                            Circle()
+                                                .fill(Color.accentColor)
+                                                .frame(width: 4, height: 4)
+                                                .offset(x: 6, y: -8)
+                                            : nil
+                                    )
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .background(store.selectedSnapshotKey == key ? Color.accentColor.opacity(0.3) : Color.clear)
-                                .overlay(
-                                    store.snapshots[key] != nil ?
-                                        Circle()
-                                            .fill(Color.accentColor)
-                                            .frame(width: 4, height: 4)
-                                            .offset(x: 6, y: -8)
-                                        : nil
-                                )
                             }
                         }
                     }

@@ -62,14 +62,16 @@ struct MirroredMeterScaleView: View {
     let labelColumnWidth: CGFloat
     private let tickHeight: CGFloat = 4
     private let canvasHeight: CGFloat = 22
+    private let edgeInset: CGFloat = 6
 
     var body: some View {
         let totalWidth = barLength * 2 + labelColumnWidth
         Canvas { context, size in
             for db in MeterConstants.standardTickValues {
                 let position = MeterConstants.normalizedPosition(for: db)  // 0 = silence, 1 = full scale
-                let leftX = barLength * (1 - CGFloat(position))
-                let rightX = (barLength + labelColumnWidth) + barLength * CGFloat(position)
+                let usable = barLength - edgeInset
+                let leftX = edgeInset + usable * (1 - CGFloat(position))
+                let rightX = (barLength + labelColumnWidth) + usable * CGFloat(position)
                 let tickWidth: CGFloat = db == 0 ? 6 : 4
 
                 // Ticks hug the TOP of the canvas (right against the last meter row above)
