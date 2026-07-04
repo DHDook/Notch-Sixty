@@ -24,6 +24,7 @@ final class RMSMeterLayer: NSView, MeterObserver {
 
     // MARK: - State
 
+    var orientation: MeterOrientation = .vertical
     private var currentRMS: Float = 0
     private var isSetupComplete = false
 
@@ -54,13 +55,10 @@ final class RMSMeterLayer: NSView, MeterObserver {
         // Fill gradient layer
         fillLayer.colors = gradientColors
         fillLayer.locations = gradientLocations
-        fillLayer.startPoint = CGPoint(x: 0.5, y: 0)  // bottom (y=0 in CALayer is bottom)
-        fillLayer.endPoint = CGPoint(x: 0.5, y: 1)    // top (y=1 in CALayer is top)
         fillLayer.cornerRadius = 3
-        
+
         // Fill mask - use a solid color layer that we scale via transform
         fillMaskLayer.backgroundColor = NSColor.white.cgColor
-        fillMaskLayer.anchorPoint = CGPoint(x: 0.5, y: 0)  // Anchor at bottom center
         fillLayer.mask = fillMaskLayer
         layer.addSublayer(fillLayer)
 
@@ -69,7 +67,7 @@ final class RMSMeterLayer: NSView, MeterObserver {
         borderLayer.strokeColor = NSColor.gray.withAlphaComponent(0.4).cgColor
         borderLayer.lineWidth = 1
         layer.addSublayer(borderLayer)
-        
+
         isSetupComplete = true
     }
 
@@ -79,7 +77,7 @@ final class RMSMeterLayer: NSView, MeterObserver {
         super.layout()
 
         let bounds = self.bounds
-        
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
@@ -91,20 +89,45 @@ final class RMSMeterLayer: NSView, MeterObserver {
 
         // Fill layer fills entire bounds
         fillLayer.frame = bounds
-        
-        // Fill mask layer - use bounds + position with explicit anchor point
-        // This prevents issues when appearance changes trigger re-layout
-        fillMaskLayer.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
-        fillMaskLayer.position = CGPoint(x: bounds.midX, y: 0)
+
+        // Configure orientation-specific properties
+        switch orientation {
+        case .vertical:
+            // Fill mask - anchor at bottom center
+            fillMaskLayer.anchorPoint = CGPoint(x: 0.5, y: 0)
+            fillMaskLayer.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
+            fillMaskLayer.position = CGPoint(x: bounds.midX, y: 0)
+            // Gradient: bottom to top
+            fillLayer.startPoint = CGPoint(x: 0.5, y: 0)
+            fillLayer.endPoint = CGPoint(x: 0.5, y: 1)
+
+        case .horizontalGrowingLeft:
+            // Fill mask - anchor at trailing (right) edge
+            fillMaskLayer.anchorPoint = CGPoint(x: 1.0, y: 0.5)
+            fillMaskLayer.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
+            fillMaskLayer.position = CGPoint(x: bounds.width, y: bounds.midY)
+            // Gradient: right to left
+            fillLayer.startPoint = CGPoint(x: 1, y: 0.5)
+            fillLayer.endPoint = CGPoint(x: 0, y: 0.5)
+
+        case .horizontalGrowingRight:
+            // Fill mask - anchor at leading (left) edge
+            fillMaskLayer.anchorPoint = CGPoint(x: 0.0, y: 0.5)
+            fillMaskLayer.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
+            fillMaskLayer.position = CGPoint(x: 0, y: bounds.midY)
+            // Gradient: left to right
+            fillLayer.startPoint = CGPoint(x: 0, y: 0.5)
+            fillLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        }
 
         // Border path
         let borderPath = CGPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), cornerWidth: 4, cornerHeight: 4, transform: nil)
         borderLayer.path = borderPath
         borderLayer.frame = bounds
-        
+
         // Re-apply current state - must be done after all frame/bounds operations
         updateFillTransform()
-        
+
         CATransaction.commit()
     }
 
@@ -119,10 +142,18 @@ final class RMSMeterLayer: NSView, MeterObserver {
 
     private func updateFillTransform() {
         guard isSetupComplete else { return }
-        
+
         let scale = CGFloat(currentRMS)
-        
-        // Scale from bottom: scale Y, no translation needed because anchor is at bottom
-        fillMaskLayer.transform = CATransform3DMakeScale(1.0, scale, 1.0)
+
+        // Scale based on orientation
+        switch orientation {
+        case .vertical:
+            // Scale from bottom: scale Y
+            fillMaskLayer.transform = CATransform3DMakeScale(1.0, scale, 1.0)
+
+        case .horizontalGrowingLeft, .horizontalGrowingRight:
+            // Scale horizontally: scale X
+            fillMaskLayer.transform = CATransform3DMakeScale(scale, 1.0, 1.0)
+        }
     }
 }

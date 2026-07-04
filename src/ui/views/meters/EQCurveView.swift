@@ -14,7 +14,7 @@ struct EQCurveView: View {
     @State private var showGroupDelay: Bool = false
 
     // MARK: - Constants
-    private let plotHeight:  CGFloat = 100   // total canvas height in points
+    private let plotHeight:  CGFloat = 200   // total canvas height in points (expanded from 100)
     private let maxDB:       Double  =  15   // ±15 dB display range
     private let freqMin:     Double  =  20
     private let freqMax:     Double  = 20_000

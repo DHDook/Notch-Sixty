@@ -34,111 +34,119 @@ struct EQWindowView: View {
         EQViewModel(store: store)
     }
 
+    // MARK: - Column Views
+
+    /// Preamp and volume controls column.
+    private var preampVolumeColumn: some View {
+        VStack(spacing: 12) {
+            GainControlsView(
+                inputGain: store.inputGain,
+                outputGain: store.outputGain,
+                onInputGainChange: { store.updateInputGain($0) },
+                onOutputGainChange: { store.updateOutputGain($0) }
+            )
+
+            ChannelBalanceSlider(
+                balance: Binding(
+                    get: { store.dynamicsConfig.channelBalance },
+                    set: { store.updateChannelBalance($0) }
+                )
+            )
+
+            MasterVolumeSlider(
+                volume: Binding(
+                    get: {
+                        if store.routingStatus.isActive {
+                            return store.routingCoordinator.masterVolume
+                        } else {
+                            return localVolume
+                        }
+                    },
+                    set: { newVolume in
+                        if store.routingStatus.isActive {
+                            store.routingCoordinator.setMasterVolume(newVolume)
+                        } else {
+                            localVolume = newVolume
+                        }
+                    }
+                ),
+                isMuted: Binding(
+                    get: {
+                        if store.routingStatus.isActive {
+                            return store.routingCoordinator.isMuted
+                        } else {
+                            return localIsMuted
+                        }
+                    },
+                    set: { newMuted in
+                        if store.routingStatus.isActive {
+                            store.routingCoordinator.setMuted(newMuted)
+                        } else {
+                            localIsMuted = newMuted
+                        }
+                    }
+                )
+            )
+        }
+    }
+
+    /// Meters and EQ curve column.
+    private var metersAndCurveColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            LevelMetersView(meterStore: store.meterStore)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
+                .opacity(metersEnabledUI ? 1.0 : 0.35)
+                .saturation(metersEnabledUI ? 1.0 : 0.0)
+                .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+
+            EQCurveView(metersEnabled: metersEnabledUI)
+                .frame(width: 333, alignment: .leading)
+                .padding(.leading, 16)
+                .padding(.top, 4)
+        }
+    }
+
+    /// Manual routing column (device pickers + routing toggle).
+    private var manualRoutingColumn: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            DevicePickerView()
+
+            ToggleWithHelp(
+                label: "Audio Routing",
+                isOn: Binding(
+                    get: { routingViewModel.isActive },
+                    set: { newValue in
+                        if newValue {
+                            store.reconfigureRouting()
+                        } else {
+                            store.stopRouting()
+                        }
+                    }
+                ),
+                helpText: "Enable or disable audio routing between the selected input and output devices. Both devices must be selected to enable routing."
+            )
+            .disabled(!routingViewModel.canToggleRouting)
+            .errorTint({
+                if case .error = store.routingStatus { return true }
+                return false
+            }())
+        }
+        .frame(minWidth: 376)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Level meters + control panel
-            HStack(alignment: .top, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    LevelMetersView(meterStore: store.meterStore)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(1)
-                        .offset(x: -8)
-                        .opacity(metersEnabledUI ? 1.0 : 0.35)
-                        .saturation(metersEnabledUI ? 1.0 : 0.0)
-                        .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
-
-                    EQCurveView(metersEnabled: metersEnabledUI)
-                        .frame(width: 333, alignment: .leading)
-                        .offset(x: -8)
-                        .padding(.leading, 16)
-                        .padding(.top, 4)
-                }
-
-                Spacer(minLength: 64)
-
-                VStack(spacing: 12) {
-                    GainControlsView(
-                        inputGain: store.inputGain,
-                        outputGain: store.outputGain,
-                        onInputGainChange: { store.updateInputGain($0) },
-                        onOutputGainChange: { store.updateOutputGain($0) }
-                    )
-
-                    ChannelBalanceSlider(
-                        balance: Binding(
-                            get: { store.dynamicsConfig.channelBalance },
-                            set: { store.updateChannelBalance($0) }
-                        )
-                    )
-
-                    MasterVolumeSlider(
-                        volume: Binding(
-                            get: {
-                                if store.routingStatus.isActive {
-                                    return store.routingCoordinator.masterVolume
-                                } else {
-                                    return localVolume
-                                }
-                            },
-                            set: { newVolume in
-                                if store.routingStatus.isActive {
-                                    store.routingCoordinator.setMasterVolume(newVolume)
-                                } else {
-                                    localVolume = newVolume
-                                }
-                            }
-                        ),
-                        isMuted: Binding(
-                            get: {
-                                if store.routingStatus.isActive {
-                                    return store.routingCoordinator.isMuted
-                                } else {
-                                    return localIsMuted
-                                }
-                            },
-                            set: { newMuted in
-                                if store.routingStatus.isActive {
-                                    store.routingCoordinator.setMuted(newMuted)
-                                } else {
-                                    localIsMuted = newMuted
-                                }
-                            }
-                        )
-                    )
-                }
-
+            // Top section: 8-column layout
+            HStack(alignment: .top, spacing: 12) {
+                preampVolumeColumn
+                Divider()
+                metersAndCurveColumn
+                Divider()
                 DynamicsInlineView()
-                    .padding(.leading, 24)
-                    .padding(.bottom, 0)
-                    .padding(.trailing, 4)
-
-                // Manual-mode controls (device pickers + routing toggle)
-                // Only reserve horizontal space when manual mode is active.
                 if routingViewModel.manualModeEnabled {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        DevicePickerView()
-
-                        ToggleWithHelp(
-                            label: "Audio Routing",
-                            isOn: Binding(
-                                get: { routingViewModel.isActive },
-                                set: { newValue in
-                                    if newValue {
-                                        store.reconfigureRouting()
-                                    } else {
-                                        store.stopRouting()
-                                    }
-                                }
-                            ),
-                            helpText: "Enable or disable audio routing between the selected input and output devices. Both devices must be selected to enable routing."
-                        )
-                        .disabled(!routingViewModel.canToggleRouting)
-                        .errorTint({
-                            if case .error = store.routingStatus { return true }
-                            return false
-                        }())
-                    }
-                    .frame(minWidth: 376)
+                    Divider()
+                    manualRoutingColumn
                 }
             }
 

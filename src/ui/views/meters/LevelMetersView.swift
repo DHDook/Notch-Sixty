@@ -2,38 +2,56 @@ import SwiftUI
 
 struct LevelMetersView: View {
     let meterStore: MeterStore
-    
+    private let barLength: CGFloat = MeterConstants.meterHeight   // 126pt — now a length, not a height
+    private let labelColumnWidth: CGFloat = 80
+
     var body: some View {
-        HStack(alignment: .top, spacing: 20) {
-            StereoMeterGroup(
-                title: "Peak In",
-                meterStore: meterStore,
-                leftType: .inputPeakLeft,
-                rightType: .inputPeakRight,
-                showScale: true
-            )
-            StereoMeterGroup(
-                title: "Peak Out",
-                meterStore: meterStore,
-                leftType: .outputPeakLeft,
-                rightType: .outputPeakRight,
-                showScale: true
-            )
-            
-            StereoMeterGroupRMS(
-                title: "RMS In",
-                meterStore: meterStore,
-                leftType: .inputRMSLeft,
-                rightType: .inputRMSRight,
-                showScale: true
-            )
-            StereoMeterGroupRMS(
-                title: "RMS Out",
-                meterStore: meterStore,
-                leftType: .outputRMSLeft,
-                rightType: .outputRMSRight,
-                showScale: true
-            )
+        VStack(alignment: .center, spacing: 4) {
+            MeterRow(title: "Peak In",  meterStore: meterStore, leftType: .inputPeakLeft,  rightType: .inputPeakRight,  thickness: 18, isRMS: false, barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "Peak Out", meterStore: meterStore, leftType: .outputPeakLeft, rightType: .outputPeakRight, thickness: 18, isRMS: false, barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "RMS In",   meterStore: meterStore, leftType: .inputRMSLeft,   rightType: .inputRMSRight,   thickness: 14, isRMS: true,  barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MeterRow(title: "RMS Out",  meterStore: meterStore, leftType: .outputRMSLeft,  rightType: .outputRMSRight,  thickness: 14, isRMS: true,  barLength: barLength, labelColumnWidth: labelColumnWidth)
+            MirroredMeterScaleView(barLength: barLength, labelColumnWidth: labelColumnWidth)
+        }
+    }
+}
+
+struct MeterRow: View {
+    let title: String
+    let meterStore: MeterStore
+    let leftType: MeterType
+    let rightType: MeterType
+    let thickness: CGFloat
+    let isRMS: Bool
+    let barLength: CGFloat
+    let labelColumnWidth: CGFloat
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left meter (grows leftward from center)
+            if isRMS {
+                RMSMeterNSView(meterStore: meterStore, meterType: leftType, orientation: .horizontalGrowingLeft)
+                    .frame(width: barLength, height: thickness)
+            } else {
+                PeakMeterNSView(meterStore: meterStore, meterType: leftType, orientation: .horizontalGrowingLeft)
+                    .frame(width: barLength, height: thickness)
+            }
+
+            // Center label column
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: labelColumnWidth)
+                .multilineTextAlignment(.center)
+
+            // Right meter (grows rightward from center)
+            if isRMS {
+                RMSMeterNSView(meterStore: meterStore, meterType: rightType, orientation: .horizontalGrowingRight)
+                    .frame(width: barLength, height: thickness)
+            } else {
+                PeakMeterNSView(meterStore: meterStore, meterType: rightType, orientation: .horizontalGrowingRight)
+                    .frame(width: barLength, height: thickness)
+            }
         }
     }
 }
