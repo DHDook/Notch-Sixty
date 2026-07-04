@@ -201,8 +201,11 @@ final class PeakMeterLayer: NSView, MeterObserver {
         currentPeakHold = max(0, min(1, hold))
         isCurrentlyClipping = clipping
 
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         updateFillTransform()
         updatePeakHoldPosition()
+        CATransaction.commit()
         updateClipIndicator()
     }
 

@@ -26,9 +26,9 @@ enum MeterConstants {
     // MARK: - Display Range
     
     /// The dB range for meter display.
-    /// -36 dB to 0 dB is a common range for audio meters.
+    /// -60 dB to 0 dB is a common range for professional audio meters.
     /// Values outside this range are clamped to the range boundaries.
-    static let meterRange: ClosedRange<Float> = -36...0
+    static let meterRange: ClosedRange<Float> = -60...0
     
     // MARK: - Timing
     
@@ -86,7 +86,7 @@ enum MeterConstants {
     
     /// Standard dB tick values for meter scale marks.
     /// These are the labeled positions on the meter scale.
-    static let standardTickValues: [Float] = [0, -6, -12, -18, -24, -30, -36]
+    static let standardTickValues: [Float] = [0, -10, -20, -30, -40, -50, -60]
     
     // MARK: - Normalization
     
