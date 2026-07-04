@@ -12,6 +12,7 @@ struct EQCurveView: View {
     var metersEnabled: Bool   // dims the view when meters are globally off
     @State private var showPhase:      Bool = false
     @State private var showGroupDelay: Bool = false
+    @State private var showCurveHelp:  Bool = false
 
     // MARK: - Constants
     private let plotHeight:  CGFloat = 200   // total canvas height in points (expanded from 100)
@@ -48,6 +49,25 @@ struct EQCurveView: View {
             .id(snapshot.changeToken &+ (showPhase ? 1 : 0) &+ (showGroupDelay ? 2 : 0))
 
             HStack(spacing: 4) {
+                Button {
+                    showCurveHelp = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showCurveHelp, arrowEdge: .trailing) {
+                    Text("""
+                        Curve — Net magnitude (amplitude) response in dB of all active, non-bypassed EQ bands, across frequency.
+                        GD — Group delay overlay, in milliseconds: how much the current EQ delays each frequency.
+                        φ (Phase) — Phase response overlay, in degrees (±180°): how much the current EQ shifts each frequency's phase.
+                        """)
+                        .font(.caption)
+                        .padding(12)
+                        .frame(width: 280)
+                }
+
                 // Group delay toggle
                 Button(action: { showGroupDelay.toggle() }) {
                     Text("GD")

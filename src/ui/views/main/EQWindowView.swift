@@ -9,6 +9,7 @@ struct EQWindowView: View {
     @State private var showCompareHelp = false
     @State private var showSnapshotCompareHelp = false
     @State private var showChannelHelp = false
+    @State private var showMetersHelp = false
     @State private var metersEnabledUI = true
     @State private var showSnapshotCompare = false
     @State private var localVolume: Float = 1.0
@@ -91,17 +92,39 @@ struct EQWindowView: View {
                 )
             )
 
+            Divider()
+
             HStack(spacing: 6) {
                 Toggle("", isOn: $metersEnabledUI)
                     .labelsHidden()
                     .toggleStyle(.switch)
-                    .controlSize(.mini)
+                    .controlSize(.small)
+                    .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
+
                 Text("Meters")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Button {
+                    showMetersHelp = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showMetersHelp, arrowEdge: .trailing) {
+                    Text("""
+                        Peak In / Peak Out — Instantaneous peak level (highest sample amplitude), captured before and after all EQ, dynamics, and gain processing. Fast-reacting; shows transients and clipping.
+                        RMS In / RMS Out — Time-averaged level (root-mean-square), captured before and after all processing. Slower-reacting; better reflects perceived loudness.
+                        RTA — 31-band real-time spectrum analyzer plotting input and output frequency content simultaneously, shown below the meters.
+                        """)
+                        .font(.caption)
+                        .padding(12)
+                        .frame(width: 320)
+                }
             }
-            .padding(.top, 8)
-            .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
+            .padding(.top, 12)
         }
     }
 

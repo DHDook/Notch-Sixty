@@ -60,8 +60,7 @@ struct MeterScaleView: View {
 struct MirroredMeterScaleView: View {
     let barLength: CGFloat
     let labelColumnWidth: CGFloat
-    private let tickHeight: CGFloat = 4
-    private let canvasHeight: CGFloat = 22
+    private let canvasHeight: CGFloat = 14
     private let edgeInset: CGFloat = 6
 
     var body: some View {
@@ -72,23 +71,14 @@ struct MirroredMeterScaleView: View {
                 let usable = barLength - edgeInset
                 let leftX = edgeInset + usable * (1 - CGFloat(position))
                 let rightX = (barLength + labelColumnWidth) + usable * CGFloat(position)
-                let tickWidth: CGFloat = db == 0 ? 6 : 4
-
-                // Ticks hug the TOP of the canvas (right against the last meter row above)
-                context.fill(Path(CGRect(x: leftX - tickWidth, y: 0, width: tickWidth, height: tickHeight)), with: .color(.gray.opacity(0.6)))
-                context.fill(Path(CGRect(x: rightX, y: 0, width: tickWidth, height: tickHeight)), with: .color(.gray.opacity(0.6)))
 
                 let label = db == 0 ? "0" : String(format: "%.0f", db)
                 let text = Text(label)
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                // Center each label horizontally on its own tick, positioned below the tick,
-                // fully inside [0, canvasHeight] vertically. Centering (rather than the old
-                // outward-offset anchors) also keeps the 0 dB labels from overflowing left/right,
-                // at the cost of a pixel or two of harmless overhang at the true outer edges.
-                context.draw(context.resolve(text), at: CGPoint(x: leftX, y: tickHeight + 2), anchor: .top)
-                context.draw(context.resolve(text), at: CGPoint(x: rightX, y: tickHeight + 2), anchor: .top)
+                context.draw(context.resolve(text), at: CGPoint(x: leftX, y: 2), anchor: .top)
+                context.draw(context.resolve(text), at: CGPoint(x: rightX, y: 2), anchor: .top)
             }
         }
         .frame(width: totalWidth, height: canvasHeight)
