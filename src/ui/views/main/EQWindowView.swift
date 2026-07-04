@@ -188,11 +188,7 @@ struct EQWindowView: View {
                             HStack(spacing: 2) {
                                 ForEach(["A", "B", "C", "D"], id: \.self) { key in
                                     Button(action: {
-                                        if store.selectedSnapshotKey == key {
-                                            store.saveSnapshot(key: key)
-                                        } else {
-                                            store.restoreSnapshot(key: key)
-                                        }
+                                        store.restoreSnapshot(key: key)
                                     }) {
                                         Text(key)
                                             .font(.system(size: 11, weight: .medium))
@@ -209,6 +205,18 @@ struct EQWindowView: View {
                                                 .offset(x: 6, y: -8)
                                             : nil
                                     )
+                                    .contextMenu {
+                                        Button("Save Current EQ to Slot \(key)") {
+                                            store.saveSnapshot(key: key)
+                                        }
+                                        if store.snapshots[key] != nil {
+                                            Divider()
+                                            Button("Clear Slot \(key)", role: .destructive) {
+                                                store.clearSnapshot(key: key)
+                                            }
+                                        }
+                                    }
+                                    .help("Click to recall slot \(key). Right-click to save or clear.")
                                 }
                             }
                         }

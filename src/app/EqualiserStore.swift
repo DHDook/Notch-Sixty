@@ -469,6 +469,7 @@ final class EqualiserStore: ObservableObject {
             timestamp: Date()
         )
         snapshots[key] = snapshot
+        selectedSnapshotKey = key
         logger.info("Saved EQ snapshot to slot: \(key)")
     }
 
