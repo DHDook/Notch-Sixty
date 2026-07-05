@@ -49,4 +49,33 @@ final class RTAAnalyzerTests: XCTestCase {
         // Verify peak decay is ≈0.959 (derived from 0.4s time constant @ 60Hz)
         XCTAssertEqual(analyzer.peakDecay, 0.959, accuracy: 0.01)
     }
+
+    func testBandMappingAcrossAllSupportedSampleRatesUpTo384kHz() {
+        // Regression test: 1/3-octave bands narrower than one FFT bin (common at the
+        // low end, and increasingly common at higher sample rates since bin width
+        // grows with sample rate for a fixed FFT size) used to produce an invalid
+        // loBinIndex > hiBinIndex range in computeBandRanges, which trapped when
+        // mapBinsToBands constructed loBinIndex...hiBinIndex directly. The app is
+        // designed to support every sample rate up to 384kHz, so every tier needs
+        // to be exercised here, not just the common 44.1/48kHz ones.
+        let analyzer = AdvancedDualSpectrumAnalyzer(fftSize: 8192)
+        let supportedSampleRates: [Float] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000]
+        let silence = [Float](repeating: 0, count: 8192)
+
+        for sr in supportedSampleRates {
+            analyzer.updateSmearedSpectrums(
+                inputSamples: silence, inputGainDb: 0,
+                outputSamples: silence, outputGainDb: 0,
+                sampleRate: sr
+            )
+            // Should not crash (the regression itself), and every band should still
+            // produce a finite, in-range value even when it had to fall back to a
+            // single nearest bin because the band was narrower than one bin.
+            for band in analyzer.inputBands {
+                XCTAssertTrue(band.currentValue.isFinite, "sampleRate \(sr): band value should be finite")
+                XCTAssertGreaterThanOrEqual(band.currentValue, analyzer.minDb, "sampleRate \(sr): band value should not be below the floor")
+                XCTAssertLessThanOrEqual(band.currentValue, analyzer.maxDb, "sampleRate \(sr): band value should not exceed 0 dBFS")
+            }
+        }
+    }
 }

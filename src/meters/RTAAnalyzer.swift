@@ -352,7 +352,6 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     private func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {
         var out = [Float](repeating: minDb, count: 31)
-        let half = fftSize / 2
 
         // Get or compute band ranges for this sample rate
         let ranges: [BandRange]
@@ -369,9 +368,15 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
             // Use MAX within the 1/3-octave band.
             // This gives correct amplitude for pure tones (one dominant bin)
             // and a representative level for broadband signals.
-            for i in range.loBinIndex...range.hiBinIndex {
-                if dbMagnitudes[i] > out[k] {
-                    out[k] = dbMagnitudes[i]
+            // Guard required: for narrow low-frequency bands (e.g. the 20Hz band at
+            // typical FFT sizes/sample rates), loBinIndex can exceed hiBinIndex when
+            // no bin center falls inside the band — constructing loBinIndex...hiBinIndex
+            // directly in that case traps (ClosedRange requires lowerBound <= upperBound).
+            if range.loBinIndex <= range.hiBinIndex {
+                for i in range.loBinIndex...range.hiBinIndex {
+                    if dbMagnitudes[i] > out[k] {
+                        out[k] = dbMagnitudes[i]
+                    }
                 }
             }
             // Fallback: if no bin falls in range, use nearest bin
