@@ -103,7 +103,10 @@ struct MirroredMeterScaleView: View {
                 // Label: centered vertically on midY, immediately adjacent to tick.
                 // Left side: label sits to the RIGHT of the tick (reads outward from center).
                 // Right side: label sits to the LEFT of the tick (mirror).
-                let label    = String(format: "%.0f", abs(db))
+                // Drop labels for 3, 12, 24, 30, 48 (keep 6, 18, 36, 60).
+                let dbAbs = abs(db)
+                guard dbAbs == 6 || dbAbs == 18 || dbAbs == 36 || dbAbs == 60 else { continue }
+                let label    = String(format: "%.0f", dbAbs)
                 let resolved = context.resolve(
                     Text(label).font(labelFont).foregroundStyle(.secondary)
                 )

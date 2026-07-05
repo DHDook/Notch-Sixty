@@ -187,7 +187,6 @@ struct EQWindowView: View {
                     .frame(width: 320, height: 420)
                 }
             }
-            .padding(.top, 8)
         }
     }
 
