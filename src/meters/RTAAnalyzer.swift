@@ -107,8 +107,8 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     let maxDb: Float =   0.0   // 0 dBFS = full bar height
 
     // MARK: Ring buffers — written by the audio thread
-    let inputRingBuffer  = LockFreeAudioRingBuffer(bufferSize: 8192)
-    let outputRingBuffer = LockFreeAudioRingBuffer(bufferSize: 8192)
+    let inputRingBuffer  = LockFreeAudioRingBuffer(bufferSize: 16384)
+    let outputRingBuffer = LockFreeAudioRingBuffer(bufferSize: 16384)
 
     // MARK: FFT state
     private let fftSize:  Int
@@ -166,7 +166,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // MARK: - Init / deinit
 
-    init(fftSize: Int = 2048) {
+    init(fftSize: Int = 8192) {
         precondition(fftSize > 0 && (fftSize & (fftSize - 1)) == 0,
                      "fftSize must be a power of two")
         self.fftSize = fftSize
@@ -324,7 +324,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         vDSP_vsmul(amps, 1, &norm, &amps, 1, vDSP_Length(half))
         
         var ref: Float = 1.0
-        vDSP_vdbcon(amps, 1, &ref, &resultDb, 1, vDSP_Length(half), 2)
+        vDSP_vdbcon(amps, 1, &ref, &resultDb, 1, vDSP_Length(half), 1)
         
         var clipped = resultDb
         var floorVal = self.minDb

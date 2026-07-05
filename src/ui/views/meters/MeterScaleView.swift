@@ -62,52 +62,72 @@ struct MirroredMeterScaleView: View {
     let labelColumnWidth: CGFloat
     private let canvasHeight: CGFloat = 14
     private let edgeInset: CGFloat = 6
-    private let minLabelSpacing: CGFloat = 5   // just under the tightest validated gap (6px)
+    private let minLabelSpacing: CGFloat = 5
+    private let tickH: CGFloat = 4        // vertical tick height (px)
+    private let tickW: CGFloat = 1        // tick stroke width (px)
+    private let labelFont = Font.system(size: 7, weight: .medium, design: .monospaced)
+    private let unitFont  = Font.system(size: 7, weight: .medium, design: .monospaced)
 
     var body: some View {
         let totalWidth = barLength * 2 + labelColumnWidth
         Canvas { context, size in
-            var lastLeftLabelX: CGFloat?
+            var lastLeftLabelX:  CGFloat?
             var lastRightLabelX: CGFloat?
 
             for db in MeterConstants.standardTickValues {
                 let position = MeterConstants.normalizedPosition(for: db)
-                let usable = barLength - edgeInset
-                let leftX = edgeInset + usable * (1 - CGFloat(position))
-                let rightX = (barLength + labelColumnWidth) + usable * CGFloat(position)
+                let usable   = barLength - edgeInset
+                // leftX: 0 dB at edgeInset (outer left edge, pulled in slightly),
+                //        -60 dB at barLength (inner edge, next to label column).
+                let leftX    = edgeInset + usable * (1 - CGFloat(position))
+                // rightX: mirror — 0 dB at totalWidth - edgeInset (outer right),
+                //         -60 dB at barLength + labelColumnWidth (inner edge).
+                let rightX   = (barLength + labelColumnWidth) + usable * CGFloat(position)
 
-                // Tick marks always draw.
-                let tickWidth: CGFloat = 4
-                context.fill(Path(CGRect(x: leftX - tickWidth / 2, y: 0, width: tickWidth, height: 3)),
-                             with: .color(.gray.opacity(0.6)))
-                context.fill(Path(CGRect(x: rightX - tickWidth / 2, y: 0, width: tickWidth, height: 3)),
-                             with: .color(.gray.opacity(0.6)))
-
-                // Labels drop the sign — the shared "-dBFS" label covers that.
-                let label = String(format: "%.0f", abs(db))
-                let text = context.resolve(
-                    Text(label)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                // Thin vertical tick mark — always drawn.
+                // Left side: tick sits to the LEFT of its label, so the label reads rightward away
+                // from the tick: "|3   |6   |12 ...". Tick x anchored to leftX.
+                context.fill(
+                    Path(CGRect(x: leftX - tickW / 2, y: 0, width: tickW, height: tickH)),
+                    with: .color(.gray.opacity(0.5))
+                )
+                // Right side: tick to the RIGHT of its label (mirror): "... 12|   6|   3|"
+                context.fill(
+                    Path(CGRect(x: rightX - tickW / 2, y: 0, width: tickW, height: tickH)),
+                    with: .color(.gray.opacity(0.5))
                 )
 
+                // Label — dropped negative sign, collision-avoidance guard.
+                let label = String(format: "%.0f", abs(db))
+                let resolved = context.resolve(
+                    Text(label).font(labelFont).foregroundStyle(.secondary)
+                )
+
+                // Left label: draw to the RIGHT of the tick (anchor .topLeading on tick x).
+                // Add 2px gap between tick and text.
                 if lastLeftLabelX == nil || abs(leftX - lastLeftLabelX!) >= minLabelSpacing {
-                    context.draw(text, at: CGPoint(x: leftX, y: 4), anchor: .top)
+                    context.draw(resolved,
+                                 at: CGPoint(x: leftX + tickW / 2 + 2, y: tickH),
+                                 anchor: .topLeading)
                     lastLeftLabelX = leftX
                 }
+
+                // Right label: draw to the LEFT of the tick (anchor .topTrailing on tick x).
                 if lastRightLabelX == nil || abs(rightX - lastRightLabelX!) >= minLabelSpacing {
-                    context.draw(text, at: CGPoint(x: rightX, y: 4), anchor: .top)
+                    context.draw(resolved,
+                                 at: CGPoint(x: rightX - tickW / 2 - 2, y: tickH),
+                                 anchor: .topTrailing)
                     lastRightLabelX = rightX
                 }
             }
 
-            // Shared unit label, centered between the two halves.
-            let unitText = context.resolve(
-                Text("-dBFS")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+            // Shared "-dBFS" unit label, centered between the two halves.
+            let unit = context.resolve(
+                Text("-dBFS").font(unitFont).foregroundStyle(.tertiary)
             )
-            context.draw(unitText, at: CGPoint(x: barLength + labelColumnWidth / 2, y: 4), anchor: .top)
+            context.draw(unit,
+                         at: CGPoint(x: barLength + labelColumnWidth / 2, y: tickH),
+                         anchor: .top)
         }
         .frame(width: totalWidth, height: canvasHeight)
     }

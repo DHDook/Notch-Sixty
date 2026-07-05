@@ -147,7 +147,7 @@ struct RTADashboardView: View {
                                 let segNorm = Float(seg) / Float(segmentCount - 1)
                                 let col: Color = isBypassed
                                     ? Color(white: 0.45).opacity(0.5)
-                                    : RTADashboardView.levelColor(norm: segNorm)
+                                    : RTADashboardView.levelColor(norm: segNorm, minDb: minDb)
                                 ctx.fill(
                                     Path(CGRect(x: x, y: segY, width: barW, height: segH)),
                                     with: .color(col)
@@ -246,20 +246,15 @@ struct RTADashboardView: View {
 
     // MARK: - Level Color (static so Canvas closure captures the function reference)
 
-    static func levelColor(norm: Float) -> Color {
+    static func levelColor(norm: Float, minDb: Float = -80, maxDb: Float = 0) -> Color {
         let n = max(0, min(1, norm))
-        if n < 0.65 {
-            return .green
-        } else if n < 0.82 {
-            let t = CGFloat((n - 0.65) / 0.17)
-            return Color(red: t, green: 1.0, blue: 0.0)
-        } else if n < 0.92 {
-            let t = CGFloat((n - 0.82) / 0.10)
-            return Color(red: 1.0, green: 1.0 - t * 0.5, blue: 0.0)
-        } else {
-            let t = CGFloat(min(1.0, (n - 0.92) / 0.08))
-            return Color(red: 1.0, green: 0.5 - t * 0.5, blue: 0.0)
-        }
+        func t(_ db: Float) -> Float { (db - minDb) / (maxDb - minDb) }
+        if n < t(-40)  { return .blue }
+        if n < t(-18)  { return .green }
+        if n < t(-6)   { return .yellow }
+        if n < t(-3)   { return Color(red: 1.0, green: 0.45, blue: 0.0) }
+        if n < t(-1)   { return .red }
+        return .white
     }
 
     // MARK: - Hover Tooltip
