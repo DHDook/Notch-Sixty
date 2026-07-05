@@ -95,8 +95,6 @@ struct EQWindowView: View {
             Divider()
                 .frame(width: 120)
 
-            Spacer(minLength: 0)
-
             HStack(spacing: 6) {
                 Toggle("", isOn: $metersEnabledUI)
                     .labelsHidden()
@@ -189,7 +187,7 @@ struct EQWindowView: View {
                     .frame(width: 320, height: 420)
                 }
             }
-            // .padding(.top, 12) — removed, Spacer handles vertical push
+            .padding(.top, 8)
         }
     }
 
