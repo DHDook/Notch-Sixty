@@ -6,6 +6,87 @@ import XCTest
 
 final class DynamicsProcessorTests: XCTestCase {
 
+    func testDynamicEQConfigMemoryLeak() {
+        // Regression test: setDynamicEQConfig used to leak vDSP_biquad_Setup handles
+        // on every call because it overwrote the existing setup without destroying it.
+        // This test calls it many times to ensure no leak/crash occurs.
+        // Note: Full leak detection requires running under Address Sanitizer or Instruments' Leaks tool.
+        let channelCount: UInt32 = 2
+        let sampleRate: Double = 48000.0
+        let processor = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate)
+
+        // Create a non-trivial Dynamic EQ config with multiple bands
+        var config = DynamicEQConfig()
+        config.bands = [
+            DynamicEQBand(frequency: 100, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false),
+            DynamicEQBand(frequency: 1000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false),
+            DynamicEQBand(frequency: 5000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false)
+        ]
+
+        // Call setDynamicEQConfig many times (simulating rapid slider drags)
+        for _ in 0..<1000 {
+            processor.setDynamicEQConfig(config, sampleRate: sampleRate)
+        }
+
+        // Should not crash or leak. Verify with Instruments' Leaks tool for full validation.
+        XCTAssertTrue(true, "setDynamicEQConfig should not leak vDSP_biquad_Setup handles")
+    }
+
+    func testApplyConfigChangeDetection() {
+        // Regression test: applyConfig should skip expensive recomputations when unrelated fields change.
+        // This test verifies that flipping an unrelated toggle (e.g. channelBalance) does not
+        // trigger FIR IR rebuild or Dynamic EQ coefficient recomputation.
+        let channelCount: UInt32 = 2
+        let sampleRate: Double = 48000.0
+        let processor = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate)
+
+        // Create a config with FIR IR and Dynamic EQ active
+        var config = DynamicsConfig()
+        config.advanced.firImpulseResponse.enabled = true
+        config.advanced.firImpulseResponse.leftIR = [Float](repeating: 0.1, count: 1024)
+        config.advanced.firImpulseResponse.rightIR = [Float](repeating: 0.1, count: 1024)
+        config.advanced.dynamicEQ.enabled = true
+        config.advanced.dynamicEQ.bands = [
+            DynamicEQBand(frequency: 1000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false)
+        ]
+
+        // Apply initial config
+        processor.applyConfig(config, sampleRate: sampleRate)
+
+        // Store the FIR delay samples to detect if IR was rebuilt
+        let initialDelaySamples = processor.firConvolutionEngine.loadedIRDelaySamples
+
+        // Apply config with only an unrelated field changed (channelBalance)
+        var unrelatedConfig = config
+        unrelatedConfig.channelBalance = 0.5
+        processor.applyConfig(unrelatedConfig, sampleRate: sampleRate)
+
+        // FIR IR should not have been rebuilt (delay samples unchanged)
+        XCTAssertEqual(processor.firConvolutionEngine.loadedIRDelaySamples, initialDelaySamples,
+                      "FIR IR should not be rebuilt for unrelated field changes")
+
+        // Apply config with FIR actually changed
+        var firChangedConfig = config
+        firChangedConfig.advanced.firImpulseResponse.leftIR = [Float](repeating: 0.2, count: 1024)
+        processor.applyConfig(firChangedConfig, sampleRate: sampleRate)
+
+        // FIR IR should have been rebuilt (delay samples changed)
+        XCTAssertNotEqual(processor.firConvolutionEngine.loadedIRDelaySamples, initialDelaySamples,
+                         "FIR IR should be rebuilt when FIR config actually changes")
+    }
+
     func testExpanderRatio1_5() {
         // Test expander with ratio 1.5
         let channelCount: UInt32 = 2

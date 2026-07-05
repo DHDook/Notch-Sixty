@@ -126,18 +126,22 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
         vDSP_vsmul(tickSide, 1, &inv_sqrt2, &tickSide, 1, vDSP_Length(n))
         vDSP_vsmul(tickMid,  1, &inv_sqrt2, &tickMid,  1, vDSP_Length(n))
 
-        for i in trailPoints.indices {
-            trailPoints[i].age += refreshInterval
+        // Mutate a local copy so @Published fires once for this whole tick,
+        // not once per element.
+        var points = trailPoints
+        for i in points.indices {
+            points[i].age += refreshInterval
         }
-        trailPoints.removeAll { $0.age >= trailDecayDuration }
+        points.removeAll { $0.age >= trailDecayDuration }
 
         for i in stride(from: 0, to: n, by: 4) {
-            trailPoints.append(GoniometerTrailPoint(x: tickSide[i], y: tickMid[i], age: 0))
+            points.append(GoniometerTrailPoint(x: tickSide[i], y: tickMid[i], age: 0))
         }
         let maxTrail = 4_096
-        if trailPoints.count > maxTrail {
-            trailPoints.removeFirst(trailPoints.count - maxTrail)
+        if points.count > maxTrail {
+            points.removeFirst(points.count - maxTrail)
         }
+        trailPoints = points
     }
 
     // MARK: - Lifecycle

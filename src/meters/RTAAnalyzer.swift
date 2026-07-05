@@ -177,6 +177,16 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     private var tickInputSamples:  [Float]
     private var tickOutputSamples: [Float]
 
+    // Reusable FFT scratch buffers — avoids per-tick heap allocation.
+    // Safe to share between input/output calls because executeFFT is only
+    // ever invoked synchronously and sequentially from tick() on the main actor.
+    private var scratchWindowed: [Float]
+    private var scratchReal:     [Float]
+    private var scratchImag:     [Float]
+    private var scratchMags:     [Float]
+    private var scratchAmps:     [Float]
+    private var scratchResultDb: [Float]
+
     // MARK: Timer
     private var updateTimer: AnyCancellable?
 
@@ -192,6 +202,13 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         self.window = [Float](repeating: 0, count: fftSize)
         self.tickInputSamples  = [Float](repeating: 0, count: fftSize)
         self.tickOutputSamples = [Float](repeating: 0, count: fftSize)
+        let half = fftSize / 2
+        self.scratchWindowed = [Float](repeating: 0, count: fftSize)
+        self.scratchReal     = [Float](repeating: 0, count: half)
+        self.scratchImag     = [Float](repeating: 0, count: half)
+        self.scratchMags     = [Float](repeating: 0, count: half)
+        self.scratchAmps     = [Float](repeating: 0, count: half)
+        self.scratchResultDb = [Float](repeating: 0, count: half)
         vDSP_hann_window(&self.window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
         startTimer()
     }
@@ -299,19 +316,12 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         let half = fftSize / 2
         guard samples.count >= fftSize else { return [Float](repeating: minDb, count: half) }
 
-        var windowed = [Float](repeating: 0, count: fftSize)
-        vDSP_vmul(samples, 1, window, 1, &windowed, 1, vDSP_Length(fftSize))
+        vDSP_vmul(samples, 1, window, 1, &scratchWindowed, 1, vDSP_Length(fftSize))
 
-        var real = [Float](repeating: 0, count: half)
-        var imag = [Float](repeating: 0, count: half)
-        var resultDb = [Float](repeating: 0, count: half)
-        var mags = [Float](repeating: 0, count: half)
-        var amps = [Float](repeating: 0, count: half)
-        
         // Perform FFT using interleaved buffer approach to avoid compiler issues
-        windowed.withUnsafeBytes { windowBytes in
-            real.withUnsafeMutableBytes { realBytes in
-                imag.withUnsafeMutableBytes { imagBytes in
+        scratchWindowed.withUnsafeBytes { windowBytes in
+            scratchReal.withUnsafeMutableBytes { realBytes in
+                scratchImag.withUnsafeMutableBytes { imagBytes in
                     let complexPtr = windowBytes.bindMemory(to: DSPComplex.self)
                     let realPtr = realBytes.bindMemory(to: Float.self).baseAddress!
                     let imagPtr = imagBytes.bindMemory(to: Float.self).baseAddress!
@@ -320,34 +330,34 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
                 }
             }
         }
-        
+
         // Perform FFT
-        real.withUnsafeMutableBytes { realBytes in
-            imag.withUnsafeMutableBytes { imagBytes in
+        scratchReal.withUnsafeMutableBytes { realBytes in
+            scratchImag.withUnsafeMutableBytes { imagBytes in
                 let realPtr = realBytes.bindMemory(to: Float.self).baseAddress!
                 let imagPtr = imagBytes.bindMemory(to: Float.self).baseAddress!
                 var split = DSPSplitComplex(realp: realPtr, imagp: imagPtr)
                 vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
-                vDSP_zvmags(&split, 1, &mags, 1, vDSP_Length(half))
+                vDSP_zvmags(&split, 1, &scratchMags, 1, vDSP_Length(half))
             }
         }
-        
+
         // Post-processing: magnitude to dB
         var n = Int32(half)
-        vvsqrtf(&amps, &mags, &n)
-        
+        vvsqrtf(&scratchAmps, &scratchMags, &n)
+
         var norm: Float = 4.0 / Float(fftSize)
-        vDSP_vsmul(amps, 1, &norm, &amps, 1, vDSP_Length(half))
-        
+        vDSP_vsmul(scratchAmps, 1, &norm, &scratchAmps, 1, vDSP_Length(half))
+
         var ref: Float = 1.0
-        vDSP_vdbcon(amps, 1, &ref, &resultDb, 1, vDSP_Length(half), 1)
-        
-        var clipped = resultDb
+        vDSP_vdbcon(scratchAmps, 1, &ref, &scratchResultDb, 1, vDSP_Length(half), 1)
+
+        var clipped = scratchResultDb
         var floorVal = self.minDb
         var ceilVal  = self.maxDb
-        vDSP_vclip(&clipped, 1, &floorVal, &ceilVal, &resultDb, 1, vDSP_Length(half))
-        
-        return resultDb
+        vDSP_vclip(&clipped, 1, &floorVal, &ceilVal, &scratchResultDb, 1, vDSP_Length(half))
+
+        return Array(scratchResultDb)
     }
 
     private func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {

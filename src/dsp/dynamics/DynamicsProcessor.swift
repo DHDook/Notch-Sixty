@@ -258,6 +258,16 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var lastMainsHighPassSampleRate: Double = 0
     /// Last applied infrasonic filter config (for change detection).
     private var previousInfrasonicFilter: InfrasonicFilterConfig?
+    /// Last applied FIR config (for change detection).
+    private var previousFIRConfig: FIRImpulseResponseConfig?
+    /// Last applied Dynamic EQ config (for change detection).
+    private var previousDynamicEQConfig: DynamicEQConfig?
+    /// Last sample rate used for Dynamic EQ (for change detection).
+    private var previousDynamicEQSampleRate: Double = 0.0
+    /// Last applied Sub EQ bands (for change detection).
+    private var previousSubEQBands: [SubEQBand]?
+    /// Last sample rate used for Sub EQ (for change detection).
+    private var previousSubEQSampleRate: Double = 0.0
     /// Bass Management enabled flag (atomic).
     private let _bassManagementEnabled: ManagedAtomic<Int32>
     /// Asymmetric crossover enabled flag (atomic).
@@ -1741,6 +1751,10 @@ final class DynamicsProcessor: @unchecked Sendable {
             // Coefficients format: [b0, b1, b2, a1, a2] for single-section biquad
             // vDSP_biquad_CreateSetup expects Double coefficients
             var coeffsD = [c.b0, c.b1, c.b2, c.a1, c.a2]
+            // Destroy existing setup before creating new one to prevent memory leak
+            if let existingSetup = dynamicEQBiquadSetups[idx] {
+                vDSP_biquad_DestroySetup(existingSetup)
+            }
             dynamicEQBiquadSetups[idx] = vDSP_biquad_CreateSetup(&coeffsD, 1)
         }
         pendingDynamicEQBandCount = n
@@ -1972,7 +1986,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         setAsymmetricCrossoverEnabled(adv.bassManagement.asymmetricCrossoverEnabled)
         setDynamicEQEnabled(adv.dynamicEQ.enabled)
         setFIREnabled(adv.firImpulseResponse.enabled)
-        setFIRConfig(adv.firImpulseResponse)
+        // FIR — only rebuild the convolution engine's IR when the config actually changed.
+        if adv.firImpulseResponse != previousFIRConfig {
+            setFIRConfig(adv.firImpulseResponse)
+            previousFIRConfig = adv.firImpulseResponse
+        }
         setBassManagementCrossoverHz(adv.bassManagement.crossoverHz)
         setBassManagementSlope(adv.bassManagement.slope)
         setLowBandGainDB(adv.bassManagement.lowBandGainDB)
@@ -1981,8 +1999,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLowBandLowShelfFreqHz(adv.bassManagement.lowBandLowShelfFreqHz)
         setLowBandLowShelfGainDB(adv.bassManagement.lowBandLowShelfGainDB)
         setLowBandDelaySamples(adv.bassManagement.lowBandDelaySamples)
-        setSubEQBands(adv.bassManagement.subEQBands, sampleRate: sampleRate)
-        setDynamicEQConfig(adv.dynamicEQ, sampleRate: sampleRate)
+        // Sub EQ bands — only recompute when bands or sample rate actually changed.
+        if adv.bassManagement.subEQBands != previousSubEQBands || storedSampleRate != previousSubEQSampleRate {
+            setSubEQBands(adv.bassManagement.subEQBands, sampleRate: sampleRate)
+            previousSubEQBands = adv.bassManagement.subEQBands
+            previousSubEQSampleRate = storedSampleRate
+        }
+        // Dynamic EQ — only recompute coefficients/vDSP setups when bands or sample rate actually changed.
+        if adv.dynamicEQ != previousDynamicEQConfig || storedSampleRate != previousDynamicEQSampleRate {
+            setDynamicEQConfig(adv.dynamicEQ, sampleRate: sampleRate)
+            previousDynamicEQConfig = adv.dynamicEQ
+            previousDynamicEQSampleRate = storedSampleRate
+        }
 
         // Stage bass management crossover update if parameters changed
         if adv.bassManagement.crossoverHz != lastBassCrossoverHz

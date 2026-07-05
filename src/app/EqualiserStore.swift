@@ -807,14 +807,21 @@ final class EqualiserStore: ObservableObject {
     /// Updates advanced processing parameters (sections A–J) and propagates to the audio pipeline.
     func updateAdvancedProcessing(_ advanced: AdvancedProcessingConfig) {
         let prevDecoupling = dynamicsConfig.advanced.coefficientDecouplingEnabled
+        let prevAdvanced = eqConfiguration.dynamicsConfig.advanced
         var config = eqConfiguration.dynamicsConfig
         config.advanced = advanced
         dynamicsConfig = config
         if prevDecoupling != advanced.coefficientDecouplingEnabled {
             refreshHighResDecouplingStatus(forceReapply: true)
         }
-        // Recompute static preamp when bass management gain changes
-        recomputeStaticPreamp()
+        // Only recompute static preamp when a field that actually feeds
+        // EQHeadroomCompensator.computeStaticPreampDB changed — this sweep runs
+        // 200 frequency bins and shouldn't fire on every unrelated toggle.
+        if prevAdvanced.eqHeadroomCompensationEnabled != advanced.eqHeadroomCompensationEnabled
+            || prevAdvanced.eqHeadroomMaxAttenuationDB != advanced.eqHeadroomMaxAttenuationDB
+            || prevAdvanced.bassManagement.lowBandGainDB != advanced.bassManagement.lowBandGainDB {
+            recomputeStaticPreamp()
+        }
     }
 
     /// Recomputes the static preamp gain based on current EQ, room correction, target curve, and bass management settings.
