@@ -89,6 +89,12 @@ final class VolumeManager: ObservableObject {
     /// from causing rapid mute cycling.
     private var isProcessingVolumeChange = false
 
+    /// Single cancelable work item for clearing the volume-processing suppression
+    /// window. Using one reschedulable item instead of independent asyncAfter calls
+    /// per event ensures the window doesn't prematurely collapse mid-barrage when
+    /// the user holds/repeats the volume key faster than the debounce interval.
+    private var volumeSettleWorkItem: DispatchWorkItem?
+
     // MARK: - Callbacks
 
     /// Called when boost gain changes (for render pipeline to apply).
@@ -222,6 +228,8 @@ final class VolumeManager: ObservableObject {
         outputDeviceID = nil
         lastKnownVolume = nil
         isSettling = false
+        volumeSettleWorkItem?.cancel()
+        volumeSettleWorkItem = nil
     }
     
     // MARK: - Volume Change Handlers
@@ -242,19 +250,7 @@ final class VolumeManager: ObservableObject {
         // Set flag to suppress mute sync during volume change
         // This prevents macOS auto-mute at zero volume from causing rapid cycling
         isProcessingVolumeChange = true
-        defer {
-            // Clear flag after a short delay to allow mute sync to resume
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self else { return }
-                self.isProcessingVolumeChange = false
-                // Reconcile in case a mute-direction event was suppressed during the window.
-                if let outputID = self.outputDeviceID,
-                   let actualMuted = self.volumeService.getDeviceMute(deviceID: outputID),
-                   actualMuted != self.muted {
-                    self.handleOutputMuteChanged(actualMuted)
-                }
-            }
-        }
+        scheduleVolumeSettle()
 
         // Capture values before dispatching to background queue
         guard let outputID = outputDeviceID else { return }
@@ -287,18 +283,7 @@ final class VolumeManager: ObservableObject {
 
         // Set flag to suppress mute sync during volume change
         isProcessingVolumeChange = true
-        defer {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self else { return }
-                self.isProcessingVolumeChange = false
-                // Reconcile in case a mute-direction event was suppressed during the window.
-                if let outputID = self.outputDeviceID,
-                   let actualMuted = self.volumeService.getDeviceMute(deviceID: outputID),
-                   actualMuted != self.muted {
-                    self.handleOutputMuteChanged(actualMuted)
-                }
-            }
-        }
+        scheduleVolumeSettle()
 
         // Capture values before dispatching to background queue
         guard let driverID = driverDeviceID else { return }
@@ -333,7 +318,26 @@ final class VolumeManager: ObservableObject {
         lastKnownVolume = newVolume
         _ = volumeService.setDeviceVolumeScalar(deviceID: driverID, volume: newVolume)
     }
-    
+
+    /// (Re)schedules the volume-settle check. Cancels any pending check first, so a
+    /// burst of rapid volume events collapses into a single check that only runs
+    /// once activity has actually stopped for 100ms.
+    private func scheduleVolumeSettle() {
+        volumeSettleWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.isProcessingVolumeChange = false
+            // Reconcile in case a mute-direction event was suppressed during the window.
+            if let outputID = self.outputDeviceID,
+               let actualMuted = self.volumeService.getDeviceMute(deviceID: outputID),
+               actualMuted != self.muted {
+                self.handleOutputMuteChanged(actualMuted)
+            }
+        }
+        volumeSettleWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+    }
+
     // MARK: - Mute Change Handlers
     
     /// Handles mute changes from the driver device.
@@ -349,6 +353,15 @@ final class VolumeManager: ObservableObject {
         // redeliver a swallowed notification) and leave the app stuck silent.
         guard !(isProcessingVolumeChange && newMuted) else {
             logger.debug("handleDriverMuteChanged: skipping spurious auto-mute during volume change")
+            return
+        }
+
+        // Idempotency guard: skip no-ops (an echo of our own last-applied state, or
+        // a redundant notification from a device that doesn't dedupe internally).
+        // This is what actually stops the driver<->output mute ping-pong, since it
+        // doesn't depend on catching the echo before some other guard expires.
+        guard newMuted != muted else {
+            logger.debug("handleDriverMuteChanged: no-op, already \(newMuted)")
             return
         }
 
@@ -381,6 +394,15 @@ final class VolumeManager: ObservableObject {
 
         guard !(isProcessingVolumeChange && newMuted) else {
             logger.debug("handleOutputMuteChanged: skipping spurious auto-mute during volume change")
+            return
+        }
+
+        // Idempotency guard: skip no-ops (an echo of our own last-applied state, or
+        // a redundant notification from a device that doesn't dedupe internally).
+        // This is what actually stops the driver<->output mute ping-pong, since it
+        // doesn't depend on catching the echo before some other guard expires.
+        guard newMuted != muted else {
+            logger.debug("handleOutputMuteChanged: no-op, already \(newMuted)")
             return
         }
 
