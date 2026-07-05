@@ -110,14 +110,14 @@ struct MirroredMeterScaleView: View {
 
                 if lastLeftLabelX == nil || abs(leftX - lastLeftLabelX!) >= minLabelSpacing {
                     context.draw(resolved,
-                                 at: CGPoint(x: leftX + tickW + 1, y: midY),
+                                 at: CGPoint(x: leftX, y: midY),
                                  anchor: .leading)
                     lastLeftLabelX = leftX
                 }
 
                 if lastRightLabelX == nil || abs(rightX - lastRightLabelX!) >= minLabelSpacing {
                     context.draw(resolved,
-                                 at: CGPoint(x: rightX - tickW - 1, y: midY),
+                                 at: CGPoint(x: rightX, y: midY),
                                  anchor: .trailing)
                     lastRightLabelX = rightX
                 }
