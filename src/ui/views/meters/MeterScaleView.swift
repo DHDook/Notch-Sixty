@@ -56,30 +56,58 @@ struct MeterScaleView: View {
 
 /// Horizontal, mirrored dB scale for the new meter layout.
 /// Draws a single scale spanning the full row width (barLength × 2 + labelColumnWidth).
-/// The scale is mirrored: 0 dB at the outer edges, -36 dB at the center (next to label column).
+/// The scale is mirrored: 0 dB at the outer edges, -60 dB at the center (next to label column).
 struct MirroredMeterScaleView: View {
     let barLength: CGFloat
     let labelColumnWidth: CGFloat
     private let canvasHeight: CGFloat = 14
     private let edgeInset: CGFloat = 6
+    private let minLabelSpacing: CGFloat = 5   // just under the tightest validated gap (6px)
 
     var body: some View {
         let totalWidth = barLength * 2 + labelColumnWidth
         Canvas { context, size in
+            var lastLeftLabelX: CGFloat?
+            var lastRightLabelX: CGFloat?
+
             for db in MeterConstants.standardTickValues {
-                let position = MeterConstants.normalizedPosition(for: db)  // 0 = silence, 1 = full scale
+                let position = MeterConstants.normalizedPosition(for: db)
                 let usable = barLength - edgeInset
                 let leftX = edgeInset + usable * (1 - CGFloat(position))
                 let rightX = (barLength + labelColumnWidth) + usable * CGFloat(position)
 
-                let label = db == 0 ? "0" : String(format: "%.0f", db)
-                let text = Text(label)
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                // Tick marks always draw.
+                let tickWidth: CGFloat = 4
+                context.fill(Path(CGRect(x: leftX - tickWidth / 2, y: 0, width: tickWidth, height: 3)),
+                             with: .color(.gray.opacity(0.6)))
+                context.fill(Path(CGRect(x: rightX - tickWidth / 2, y: 0, width: tickWidth, height: 3)),
+                             with: .color(.gray.opacity(0.6)))
 
-                context.draw(context.resolve(text), at: CGPoint(x: leftX, y: 2), anchor: .top)
-                context.draw(context.resolve(text), at: CGPoint(x: rightX, y: 2), anchor: .top)
+                // Labels drop the sign — the shared "-dBFS" label covers that.
+                let label = String(format: "%.0f", abs(db))
+                let text = context.resolve(
+                    Text(label)
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                )
+
+                if lastLeftLabelX == nil || abs(leftX - lastLeftLabelX!) >= minLabelSpacing {
+                    context.draw(text, at: CGPoint(x: leftX, y: 4), anchor: .top)
+                    lastLeftLabelX = leftX
+                }
+                if lastRightLabelX == nil || abs(rightX - lastRightLabelX!) >= minLabelSpacing {
+                    context.draw(text, at: CGPoint(x: rightX, y: 4), anchor: .top)
+                    lastRightLabelX = rightX
+                }
             }
+
+            // Shared unit label, centered between the two halves.
+            let unitText = context.resolve(
+                Text("-dBFS")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            )
+            context.draw(unitText, at: CGPoint(x: barLength + labelColumnWidth / 2, y: 4), anchor: .top)
         }
         .frame(width: totalWidth, height: canvasHeight)
     }
