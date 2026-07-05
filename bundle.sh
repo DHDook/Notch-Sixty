@@ -14,7 +14,7 @@ ICON_DARK_SVG="$ROOT_DIR/resources/AppIcon-dark.svg"
 MENUBAR_SVG="$ROOT_DIR/resources/MenuBarIcon.svg"
 ICONSET_DIR="$ROOT_DIR/.build/AppIcon.iconset"
 ICON_ICNS="$ROOT_DIR/.build/AppIcon.icns"
-ASSETS_CAR="$ROOT_DIR/.build/Assets.car"
+ASSETS_CAR="$ROOT_DIR/.build/actool-out/Assets.car"
 DRIVER_BUNDLE="$ROOT_DIR/driver/.build/Equaliser.driver"
 
 if [[ ! -f "$ROOT_DIR/Package.swift" ]]; then
