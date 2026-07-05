@@ -46,60 +46,116 @@ struct OutputChannelMatrixView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+        Form {
+            Section {
+                Text("Active crossover splits the mains signal into two or three frequency bands and routes each band to a separate physical output channel, so you can bi-amp or tri-amp a system with dedicated amplifiers per driver.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("About Active Crossover")
+            }
 
-                // Master enable toggle — drives whether the rest of this view is interactive.
-                // OutputChannelMatrixConfig.isEnabled (Task D)
+            Section {
                 matrixEnableHeader
+                Text("Enable active crossover mode to configure frequency bands and assign them to output channels.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Active Crossover")
+            }
 
-                if store.outputChannelMatrix.isEnabled {
-
-                    // TASK B: Active Crossover section
-                    // (mode picker, lower/upper frequency, slope, type, LR vs Butterworth note)
+            if store.outputChannelMatrix.isEnabled {
+                // TASK B: Active Crossover section
+                // (mode picker, lower/upper frequency, slope, type, LR vs Butterworth note)
+                Section {
                     activeCrossoverSection
+                } header: {
+                    Text("Crossover Configuration")
+                }
 
-                    // TASK M: Topology template quick-select buttons
-                    // (Vertical Bi-Amp / Horizontal Bi-Amp / Vertical Tri-Amp / Horizontal Tri-Amp)
+                // TASK M: Topology template quick-select buttons
+                // (Vertical Bi-Amp / Horizontal Bi-Amp / Vertical Tri-Amp / Horizontal Tri-Amp)
+                Section {
                     topologyTemplateSection
+                } header: {
+                    Text("Quick Topology")
+                }
 
-                    // TASK M (sync section): Device Synchronisation
-                    // (sync mode picker, clock master picker, PLL parameters, PLL status)
-                    // Shown only when channels target >1 physical device.
-                    if store.hasMultipleDevices {
+                // TASK M (sync section): Device Synchronisation
+                // (sync mode picker, clock master picker, PLL parameters, PLL status)
+                // Shown only when channels target >1 physical device.
+                if store.hasMultipleDevices {
+                    Section {
                         deviceSynchronisationSection
+                    } header: {
+                        Text("Device Synchronisation")
                     }
+                }
 
-                    // TASK D/G: Output channel list — one OutputChannelRowView per channel
+                // TASK D/G: Output channel list — one OutputChannelRowView per channel
+                Section {
                     outputChannelListSection
+                } header: {
+                    Text("Output Channels")
+                }
 
-                    // TASK AA: Dynamic Loudness (Fletcher–Munson) section
-                    // Shown only when activeCrossover.bandCount != .fullRange
-                    if store.activeCrossoverConfig.bandCount != .fullRange {
+                // TASK AA: Dynamic Loudness (Fletcher–Munson) section
+                // Shown only when activeCrossover.bandCount != .fullRange
+                if store.activeCrossoverConfig.bandCount != .fullRange {
+                    Section {
                         dynamicLoudnessSection
+                    } header: {
+                        Text("Dynamic Loudness")
                     }
+                }
 
-                    // TASK Q/R/X/V/W/AF: Analysis tab strip
-                    // (Group Delay / Summation / Optimise / Time Alignment)
+                // TASK Q/R/X/V/W/AF: Analysis tab strip
+                // (Group Delay / Summation / Optimise / Time Alignment)
+                Section {
                     analysisTabSection
+                } header: {
+                    Text("Analysis")
+                }
 
-                    // TASK T: Coordination warnings (band-reject notch, overlap, missing sub)
-                    // Non-blocking amber/red banners. Always visible when warnings exist,
-                    // regardless of which section of the view is scrolled into view.
-                    coordinationWarningsSection
+                // TASK T: Coordination warnings (band-reject notch, overlap, missing sub)
+                // Non-blocking amber/red banners. Always visible when warnings exist,
+                // regardless of which section of the view is scrolled into view.
+                if !coordinationWarnings.isEmpty {
+                    Section {
+                        coordinationWarningsSection
+                    } header: {
+                        Text("Coordination Warnings")
+                    }
+                }
 
-                    // TASK S: Speaker System Preset save/load buttons
+                // TASK S: Speaker System Preset save/load buttons
+                Section {
                     speakerSystemPresetSection
+                } header: {
+                    Text("Speaker System Preset")
+                }
 
-                    // TASK P: "Calibrate Levels…" button — opens BandLevelCalibrationView sheet
+                // TASK P: "Calibrate Levels…" button — opens BandLevelCalibrationView sheet
+                Section {
+                    Text("Calibrate output channel levels using pink noise and SPL measurement.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     calibrateLevelsButton
+                } header: {
+                    Text("Level Calibration")
+                }
 
-                    // TASK N: Sample-rate mismatch / device-not-found warning banner
+                // TASK N: Sample-rate mismatch / device-not-found warning banner
+                Section {
                     deviceStatusBanner
+                } header: {
+                    Text("Device Status")
                 }
             }
-            .padding()
         }
+        .formStyle(.grouped)
+        .padding()
         .navigationTitle("Output Channel Matrix")
         .onChange(of: store.activeCrossoverConfig) { oldValue, newValue in
             validateCoordination()
@@ -127,37 +183,37 @@ struct OutputChannelMatrixView: View {
     // MARK: - Section stubs (implement each from its corresponding V7 task)
 
     @ViewBuilder private var matrixEnableHeader: some View {
-        HStack {
-            Toggle("Enable Output Channel Matrix", isOn: Binding(
-                get: { store.outputChannelMatrix.isEnabled },
-                set: { store.outputChannelMatrix.isEnabled = $0 }
-            ))
-            .toggleStyle(.switch)
-            Spacer()
-        }
-        .padding(.vertical, 8)
+        Toggle("Enable Output Channel Matrix", isOn: Binding(
+            get: { store.outputChannelMatrix.isEnabled },
+            set: { store.outputChannelMatrix.isEnabled = $0 }
+        ))
+        .toggleStyle(.switch)
     }
     @ViewBuilder private var activeCrossoverSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Mains Active Crossover")
-                .font(.headline)
-            HStack {
-                Picker("Mode", selection: $store.activeCrossoverConfig.bandCount) {
-                    Text("Full Range").tag(ActiveCrossoverBandCount.fullRange)
-                    Text("Bi-Amp").tag(ActiveCrossoverBandCount.biAmp)
-                    Text("Tri-Amp").tag(ActiveCrossoverBandCount.triAmp)
-                }
-                .pickerStyle(.segmented)
-                Spacer()
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Crossover Mode")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("", selection: $store.activeCrossoverConfig.bandCount) {
+                Text("Full Range").tag(ActiveCrossoverBandCount.fullRange)
+                Text("Bi-Amp").tag(ActiveCrossoverBandCount.biAmp)
+                Text("Tri-Amp").tag(ActiveCrossoverBandCount.triAmp)
             }
-            if store.activeCrossoverConfig.bandCount != .fullRange {
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .frame(width: 280)
+        }
+        .padding(.vertical, 4)
+
+        if store.activeCrossoverConfig.bandCount != .fullRange {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Lower Frequency:")
                     Slider(value: Binding(
                         get: { store.activeCrossoverConfig.lowerCrossoverHz },
                         set: { store.activeCrossoverConfig.lowerCrossoverHz = $0 }
                     ), in: 50...500)
-                    .frame(width: 100)
+                    .frame(width: 160)
                     Text(String(format: "%.0f Hz", store.activeCrossoverConfig.lowerCrossoverHz))
                         .frame(width: 60)
                 }
@@ -168,54 +224,49 @@ struct OutputChannelMatrixView: View {
                             get: { store.activeCrossoverConfig.upperCrossoverHz },
                             set: { store.activeCrossoverConfig.upperCrossoverHz = $0 }
                         ), in: 500...5000)
-                        .frame(width: 100)
+                        .frame(width: 160)
                         Text(String(format: "%.0f Hz", store.activeCrossoverConfig.upperCrossoverHz))
                             .frame(width: 60)
                     }
                 }
-                HStack {
-                    Text("Slope:")
-                    Picker("", selection: $store.activeCrossoverConfig.slope) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Slope", selection: $store.activeCrossoverConfig.slope) {
                         Text("Gentle (24 dB/oct)").tag(CrossoverSlope.gentle)
                         Text("Steep (48 dB/oct)").tag(CrossoverSlope.steep)
                     }
                     .pickerStyle(.menu)
+                    .controlSize(.small)
                     Text("Steep provides sharper roll-off between frequency bands.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
+            .padding(.vertical, 4)
         }
-        .padding(.vertical, 8)
     }
     @ViewBuilder private var topologyTemplateSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Quick Topology")
-                .font(.headline)
-            HStack(spacing: 8) {
-                Button("Single Amp") {
-                    applySingleAmpTemplate()
-                }
-                .buttonStyle(.bordered)
-                Button("Vertical Bi-Amp") {
-                    applyVerticalBiAmpTemplate()
-                }
-                .buttonStyle(.bordered)
-                Button("Horizontal Bi-Amp") {
-                    applyHorizontalBiAmpTemplate()
-                }
-                .buttonStyle(.bordered)
-                Button("Vertical Tri-Amp") {
-                    applyVerticalTriAmpTemplate()
-                }
-                .buttonStyle(.bordered)
-                Button("Horizontal Tri-Amp") {
-                    applyHorizontalTriAmpTemplate()
-                }
-                .buttonStyle(.bordered)
+        HStack(spacing: 8) {
+            Button("Single Amp") {
+                applySingleAmpTemplate()
             }
+            .buttonStyle(.bordered)
+            Button("Vertical Bi-Amp") {
+                applyVerticalBiAmpTemplate()
+            }
+            .buttonStyle(.bordered)
+            Button("Horizontal Bi-Amp") {
+                applyHorizontalBiAmpTemplate()
+            }
+            .buttonStyle(.bordered)
+            Button("Vertical Tri-Amp") {
+                applyVerticalTriAmpTemplate()
+            }
+            .buttonStyle(.bordered)
+            Button("Horizontal Tri-Amp") {
+                applyHorizontalTriAmpTemplate()
+            }
+            .buttonStyle(.bordered)
         }
-        .padding(.vertical, 8)
     }
 
     // MARK: - Topology Templates
@@ -273,20 +324,22 @@ struct OutputChannelMatrixView: View {
     }
     @ViewBuilder private var deviceSynchronisationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Device Synchronisation")
-                .font(.headline)
-            HStack {
-                Text("Sync Mode:")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sync Mode")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Picker("", selection: $store.multiDeviceSyncMode) {
                     Text("Aggregate Device").tag(MultiDeviceSyncMode.aggregateDevice)
                     Text("Software PLL").tag(MultiDeviceSyncMode.softwarePLL)
                 }
                 .pickerStyle(.menu)
-                Spacer()
+                .controlSize(.small)
             }
             if store.multiDeviceSyncMode == .aggregateDevice {
-                HStack {
-                    Text("Clock Master:")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Clock Master")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Picker("", selection: $store.aggregateClockMasterUID) {
                         Text("Auto").tag(nil as String?)
                         ForEach(store.outputDevices, id: \.uid) { device in
@@ -294,35 +347,35 @@ struct OutputChannelMatrixView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    Spacer()
+                    .controlSize(.small)
                 }
             }
             if store.multiDeviceSyncMode == .softwarePLL {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("PLL Parameters")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     HStack {
                         Text("Bandwidth:")
                         Slider(value: Binding(
                             get: { 0.5 },
                             set: { _ in }
                         ), in: 0.01...1.0)
-                        .frame(width: 100)
+                        .frame(width: 160)
                         Text("0.5 Hz")
-                            .frame(width: 50)
+                            .frame(width: 60)
                         Spacer()
                     }
                     HStack {
-                        Text("Status:")
+                        Circle().fill(Color.green).frame(width: 7, height: 7)
                         Text("PLL locked")
-                            .foregroundColor(.green)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Spacer()
                     }
                 }
             }
         }
-        .padding(.vertical, 8)
     }
     @ViewBuilder private var outputChannelListSection: some View {
         ForEach(store.outputChannelMatrix.channels.indices, id: \.self) { idx in
@@ -348,15 +401,13 @@ struct OutputChannelMatrixView: View {
         }
     }
     @ViewBuilder private var dynamicLoudnessSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Dynamic Loudness (Fletcher–Munson)")
-                .font(.headline)
-            Toggle("Enable", isOn: $store.dynamicsConfig.advanced.perBandLoudness.isEnabled)
-            if store.dynamicsConfig.advanced.perBandLoudness.isEnabled {
+        Toggle("Enable Dynamic Loudness", isOn: $store.dynamicsConfig.advanced.perBandLoudness.isEnabled)
+        if store.dynamicsConfig.advanced.perBandLoudness.isEnabled {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Reference level:")
                     Slider(value: $store.dynamicsConfig.advanced.perBandLoudness.referencePhons, in: 60...95)
-                    Text("\(Int(store.dynamicsConfig.advanced.perBandLoudness.referencePhons)) phons")
+                    Text(String(format: "%d phons", Int(store.dynamicsConfig.advanced.perBandLoudness.referencePhons)))
                 }
                 HStack {
                     Text("Max boost:")
@@ -368,21 +419,26 @@ struct OutputChannelMatrixView: View {
                     Slider(value: $store.dynamicsConfig.advanced.perBandLoudness.maxCutDB, in: 0...6)
                     Text(String(format: "%.0f dB", store.dynamicsConfig.advanced.perBandLoudness.maxCutDB))
                 }
-                Picker("Level source", selection: $store.dynamicsConfig.advanced.perBandLoudness.levelSource) {
-                    Text("System volume").tag(PerBandLoudnessConfig.LevelSource.systemVolume)
-                    Text("Programme LUFS").tag(PerBandLoudnessConfig.LevelSource.integrated)
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Level source", selection: $store.dynamicsConfig.advanced.perBandLoudness.levelSource) {
+                        Text("System volume").tag(PerBandLoudnessConfig.LevelSource.systemVolume)
+                        Text("Programme LUFS").tag(PerBandLoudnessConfig.LevelSource.integrated)
+                    }
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
                 }
             }
-            Text("Compensates for human hearing sensitivity at different volume levels by independently adjusting bass and treble band levels. Requires bi-amp or tri-amp mode.")
-                .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(.vertical, 8)
+        Text("Compensates for human hearing sensitivity at different volume levels by independently adjusting bass and treble band levels. Requires bi-amp or tri-amp mode.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
     @ViewBuilder private var analysisTabSection: some View {
         Picker("", selection: $selectedAnalysisTab) {
             ForEach(AnalysisTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
+        .controlSize(.small)
 
         // Route to CrossoverAnalysisView, passing the selected tab.
         // CrossoverAnalysisView owns the actual tab content (see Section C below).
@@ -391,19 +447,14 @@ struct OutputChannelMatrixView: View {
     @ViewBuilder private var coordinationWarningsSection: some View {
         // Task T: Coordination warnings (band-reject notch, overlap, missing sub)
         // Non-blocking amber/red banners. Always visible when warnings exist.
-        if !coordinationWarnings.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(coordinationWarnings.indices, id: \.self) { index in
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text(warningText(coordinationWarnings[index]))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+        ForEach(coordinationWarnings.indices, id: \.self) { index in
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text(warningText(coordinationWarnings[index]))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 8)
         }
     }
     @ViewBuilder private var speakerSystemPresetSection: some View {
@@ -424,14 +475,12 @@ struct OutputChannelMatrixView: View {
             .buttonStyle(.bordered)
             Spacer()
         }
-        .padding(.vertical, 8)
     }
     @ViewBuilder private var calibrateLevelsButton: some View {
         Button("Calibrate Levels…") {
             showCalibrationSheet = true
         }
         .buttonStyle(.borderedProminent)
-        .padding(.vertical, 8)
     }
     @ViewBuilder private var deviceStatusBanner: some View {
         // Task N: Sample-rate mismatch / device-not-found warning banner
@@ -443,7 +492,6 @@ struct OutputChannelMatrixView: View {
                 .foregroundStyle(.secondary)
             Spacer()
         }
-        .padding(.vertical, 8)
     }
 
     @ViewBuilder private var calibrationSheet: some View {
