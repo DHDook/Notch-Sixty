@@ -39,4 +39,14 @@ final class RTAAnalyzerTests: XCTestCase {
         XCTAssertEqual(analyzer.normaliseDb(-80), 0, accuracy: 0.001)
         XCTAssertEqual(analyzer.normaliseDb(0), 1, accuracy: 0.001)
     }
+
+    func testBallisticsConstantsAt60Hz() {
+        let analyzer = AdvancedDualSpectrumAnalyzer()
+        // Verify peak hold is 60 frames (1.0s @ 60Hz)
+        XCTAssertEqual(analyzer.peakHoldMax, 60)
+        // Verify falling alpha is ≈0.847 (derived from 0.1s time constant @ 60Hz)
+        XCTAssertEqual(analyzer.fallingAlpha, 0.847, accuracy: 0.01)
+        // Verify peak decay is ≈0.959 (derived from 0.4s time constant @ 60Hz)
+        XCTAssertEqual(analyzer.peakDecay, 0.959, accuracy: 0.01)
+    }
 }

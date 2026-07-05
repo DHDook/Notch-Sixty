@@ -116,11 +116,19 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     private var log2n:    vDSP_Length
     private var window:   [Float]
 
-    // MARK: Ballistics
+    // MARK: Analysis rate
+    private let analysisRateHz: Double = 60.0
+    private var tickInterval: TimeInterval { 1.0 / analysisRateHz }
+
+    // MARK: Ballistics (time constants are real-world seconds; per-tick alphas are derived below)
+    private let fallingTimeConstant: Double = 0.1     // ~existing falling feel, ~98ms measured from old 0.60 @20Hz
+    private let peakDecayTimeConstant: Double = 0.4    // ~existing post-hold decay feel, ~391ms measured from old 0.88 @20Hz
+    private let peakHoldSeconds: Double = 1.0          // was 1.5s @20Hz; product decision: speed up to 1.0s @60Hz
+
     private let risingAlpha:  Float = 1.00  // instant attack
-    private let fallingAlpha: Float = 0.60  // ~80 ms decay at 20 Hz
-    private let peakHoldMax:  Int   = 30    // 1.5 seconds at 20 Hz
-    private let peakDecay:    Float = 0.88  // slower fall — each dB step reads as a discrete segment drop
+    internal lazy var fallingAlpha: Float  = Float(exp(-tickInterval / fallingTimeConstant))
+    internal lazy var peakDecay: Float     = Float(exp(-tickInterval / peakDecayTimeConstant))
+    internal lazy var peakHoldMax: Int     = Int((peakHoldSeconds * analysisRateHz).rounded())
 
     // MARK: Display Mode
     enum RTADisplayMode: Sendable {
@@ -152,6 +160,14 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // Assumed sample rate when no pipeline info is available.
     var assumedSampleRate: Float = 48000
+
+    // MARK: Band range cache for mapBinsToBands optimization
+    private struct BandRange {
+        let loBinIndex: Int
+        let hiBinIndex: Int
+        let fallbackBinIndex: Int
+    }
+    private var bandRangeCache: [Float: [BandRange]] = [:]
 
     // MARK: FPS tracking
     private var frameCount: Int  = 0
@@ -187,7 +203,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     // MARK: - Timer
 
     private func startTimer() {
-        updateTimer = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common)
+        updateTimer = Timer.publish(every: tickInterval, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.tick() }
     }
@@ -336,30 +352,58 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     private func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {
         var out = [Float](repeating: minDb, count: 31)
+        let half = fftSize / 2
+
+        // Get or compute band ranges for this sample rate
+        let ranges: [BandRange]
+        if let cached = bandRangeCache[sampleRate] {
+            ranges = cached
+        } else {
+            ranges = computeBandRanges(sampleRate: sampleRate)
+            bandRangeCache[sampleRate] = ranges
+        }
+
+        for k in 0..<31 {
+            let range = ranges[k]
+
+            // Use MAX within the 1/3-octave band.
+            // This gives correct amplitude for pure tones (one dominant bin)
+            // and a representative level for broadband signals.
+            for i in range.loBinIndex...range.hiBinIndex {
+                if dbMagnitudes[i] > out[k] {
+                    out[k] = dbMagnitudes[i]
+                }
+            }
+            // Fallback: if no bin falls in range, use nearest bin
+            if out[k] == minDb {
+                out[k] = dbMagnitudes[range.fallbackBinIndex]
+            }
+        }
+        return out
+    }
+
+    private func computeBandRanges(sampleRate: Float) -> [BandRange] {
+        var ranges: [BandRange] = []
         let binWidth = sampleRate / Float(fftSize)
-        let half     = fftSize / 2
+        let half = fftSize / 2
 
         for k in 0..<31 {
             let fc = centerFrequencies[k]
             let lo = fc * pow(2.0, -1.0 / 6.0)
             let hi = fc * pow(2.0,  1.0 / 6.0)
 
-            // Use MAX within the 1/3-octave band.
-            // This gives correct amplitude for pure tones (one dominant bin)
-            // and a representative level for broadband signals.
-            for i in 0..<half {
-                let freq = Float(i) * binWidth
-                if freq >= lo && freq <= hi && dbMagnitudes[i] > out[k] {
-                    out[k] = dbMagnitudes[i]
-                }
-            }
-            // Fallback: if no bin falls in range, use nearest bin
-            if out[k] == minDb {
-                let idx = max(0, min(Int(round(fc / binWidth)), half - 1))
-                out[k] = dbMagnitudes[idx]
-            }
+            // Find bin indices that span the 1/3-octave band
+            let loBinIndex = max(0, Int(ceil(lo / binWidth)))
+            let hiBinIndex = min(half - 1, Int(floor(hi / binWidth)))
+            let fallbackBinIndex = max(0, min(Int(round(fc / binWidth)), half - 1))
+
+            ranges.append(BandRange(
+                loBinIndex: loBinIndex,
+                hiBinIndex: hiBinIndex,
+                fallbackBinIndex: fallbackBinIndex
+            ))
         }
-        return out
+        return ranges
     }
 
     private func applyBallistics(bands: inout [BandData], targets: [Float]) {
@@ -386,8 +430,8 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         // Apply slow averaging if enabled
         if case .slowAverage(let seconds) = displayMode {
             // Compute alpha from time constant: alpha = 1 - exp(-dt / tau)
-            // where dt = 1/20 = 0.05s (timer interval) and tau = seconds
-            slowAverageAlpha = 1.0 - Float(exp(-0.05 / seconds))
+            // where dt = tickInterval and tau = seconds
+            slowAverageAlpha = 1.0 - Float(exp(-tickInterval / seconds))
 
             for i in 0..<min(slowAverageBands.count, targets.count) {
                 slowAverageBands[i] = slowAverageBands[i] * slowAverageAlpha + targets[i] * (1.0 - slowAverageAlpha)
