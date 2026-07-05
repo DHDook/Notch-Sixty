@@ -81,8 +81,7 @@ enum MeterConstants {
     /// Standard dB tick values for meter scale marks.
     /// These are the labeled positions on the meter scale.
     /// Uses industry-standard 3/6 dB increments near the top, doubling from there.
-    /// 0 dB is intentionally omitted from display — it's the implicit ceiling just past -3.
-    static let standardTickValues: [Float] = [-3, -6, -12, -18, -24, -30, -36, -48, -60]
+    static let standardTickValues: [Float] = [0, -3, -6, -12, -18, -24, -30, -36, -48, -60]
     
     // MARK: - Normalization
     

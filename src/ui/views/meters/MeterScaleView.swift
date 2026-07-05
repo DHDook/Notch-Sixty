@@ -63,10 +63,10 @@ struct MirroredMeterScaleView: View {
     private let canvasHeight: CGFloat = 12
     private let edgeInset: CGFloat = 6
     private let minLabelSpacing: CGFloat = 5
-    private let tickH: CGFloat = 7        // tick height — matches text cap height at 7pt font
+    private let tickH: CGFloat = 6        // tick height — matches text cap height at 6pt font
     private let tickW: CGFloat = 1
-    private let labelFont = Font.system(size: 7, weight: .medium, design: .monospaced)
-    private let unitFont  = Font.system(size: 7, weight: .medium, design: .monospaced)
+    private let labelFont = Font.system(size: 6, weight: .medium, design: .monospaced)
+    private let unitFont  = Font.system(size: 6, weight: .medium, design: .monospaced)
 
     var body: some View {
         let totalWidth = barLength * 2 + labelColumnWidth
@@ -103,10 +103,7 @@ struct MirroredMeterScaleView: View {
                 // Label: centered vertically on midY, immediately adjacent to tick.
                 // Left side: label sits to the RIGHT of the tick (reads outward from center).
                 // Right side: label sits to the LEFT of the tick (mirror).
-                // Drop labels for 3, 12, 24, 30, 48 (keep 6, 18, 36, 60).
-                let dbAbs = abs(db)
-                guard dbAbs == 6 || dbAbs == 18 || dbAbs == 36 || dbAbs == 60 else { continue }
-                let label    = String(format: "%.0f", dbAbs)
+                let label    = String(format: "%.0f", abs(db))
                 let resolved = context.resolve(
                     Text(label).font(labelFont).foregroundStyle(.secondary)
                 )
