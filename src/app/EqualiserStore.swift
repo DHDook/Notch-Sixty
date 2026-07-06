@@ -1235,6 +1235,18 @@ final class EqualiserStore: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Pause/resume the RTA analyzer's 60Hz FFT timer in lockstep with the
+        // meters-enabled toggle — previously this toggle only blanked the RTA's
+        // displayed bars while the underlying analysis kept running unconditionally.
+        meterStore.$metersEnabled
+            .sink { [weak self] enabled in
+                self?.rtaAnalyzer.setMetersEnabled(enabled)
+            }
+            .store(in: &cancellables)
+
+        // Sync initial metersEnabled state to RTA analyzer (subscription only fires on changes)
+        rtaAnalyzer.setMetersEnabled(meterStore.metersEnabled)
+
         // Listen for app termination
         NotificationCenter.default.addObserver(
             self,
@@ -1747,6 +1759,7 @@ final class EqualiserStore: ObservableObject {
     /// Sets the window reference for visibility checking.
     func setEqualiserWindow(_ window: NSWindow?) {
         meterStore.setEqualiserWindow(window)
+        rtaAnalyzer.setEqualiserWindow(window)
     }
 
     /// Starts noise profile capture on the denoiser.

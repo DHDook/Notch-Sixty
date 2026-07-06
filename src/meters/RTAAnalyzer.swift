@@ -2,6 +2,7 @@
 // Dual 31-band real-time spectrum analyser — pre-EQ (input) and post-dynamics (output).
 
 import Accelerate
+import AppKit
 import Combine
 import Foundation
 
@@ -190,6 +191,11 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     // MARK: Timer
     private var updateTimer: AnyCancellable?
 
+    // MARK: Run state gating
+    private var isWindowVisible = true
+    private var isMetersEnabled = true
+    private weak var equaliserWindow: NSWindow?
+
     // MARK: - Init / deinit
 
     init(fftSize: Int = 8192) {
@@ -210,7 +216,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         self.scratchAmps     = [Float](repeating: 0, count: half)
         self.scratchResultDb = [Float](repeating: 0, count: half)
         vDSP_hann_window(&self.window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
-        startTimer()
+        updateRunState()
     }
 
     deinit {
@@ -219,10 +225,65 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // MARK: - Timer
 
+    private func updateRunState() {
+        if isWindowVisible && isMetersEnabled {
+            guard updateTimer == nil else { return }
+            startTimer()
+        } else {
+            updateTimer?.cancel()
+            updateTimer = nil
+        }
+    }
+
     private func startTimer() {
         updateTimer = Timer.publish(every: tickInterval, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.tick() }
+    }
+
+    // MARK: - Public API for run state control
+
+    func setMetersEnabled(_ enabled: Bool) {
+        isMetersEnabled = enabled
+        updateRunState()
+    }
+
+    /// Mirrors MeterStore.setEqualiserWindow's NSWindow visibility observation —
+    /// see MeterStore.swift for the exact notification pattern being replicated here.
+    func setEqualiserWindow(_ window: NSWindow?) {
+        if let oldWindow = equaliserWindow {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didMiniaturizeNotification, object: oldWindow)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didDeminiaturizeNotification, object: oldWindow)
+        }
+        equaliserWindow = window
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidMiniaturize),
+                name: NSWindow.didMiniaturizeNotification,
+                object: window
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidDeminiaturize),
+                name: NSWindow.didDeminiaturizeNotification,
+                object: window
+            )
+            isWindowVisible = window.isVisible
+        } else {
+            isWindowVisible = true  // no window reference yet — don't block on it
+        }
+        updateRunState()
+    }
+
+    @objc private func windowDidMiniaturize() {
+        isWindowVisible = false
+        updateRunState()
+    }
+
+    @objc private func windowDidDeminiaturize() {
+        isWindowVisible = true
+        updateRunState()
     }
 
     private func tick() {
