@@ -144,7 +144,29 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
         trailPoints = points
     }
 
+    // MARK: Run state gating
+    private var isViewVisible = true
+    private var isMetersEnabled = true
+
     // MARK: - Lifecycle
+
+    private func updateRunState() {
+        if isViewVisible && isMetersEnabled {
+            startRefresh()
+        } else {
+            stopRefresh()
+        }
+    }
+
+    func setViewVisible(_ visible: Bool) {
+        isViewVisible = visible
+        updateRunState()
+    }
+
+    func setMetersEnabled(_ enabled: Bool) {
+        isMetersEnabled = enabled
+        updateRunState()
+    }
 
     func startRefresh() {
         guard cancellable == nil else { return }
@@ -230,8 +252,8 @@ struct StereoGoniometerView: View {
             }
             .frame(width: 110, height: 110)
         }
-        .onAppear  { engine.startRefresh() }
-        .onDisappear { engine.stopRefresh() }
+        .onAppear    { engine.setViewVisible(true) }
+        .onDisappear { engine.setViewVisible(false) }
     }
 
     /// Applies a sign-preserving logarithmic scaling to amplify low-level signals

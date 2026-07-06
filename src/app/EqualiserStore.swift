@@ -1241,11 +1241,13 @@ final class EqualiserStore: ObservableObject {
         meterStore.$metersEnabled
             .sink { [weak self] enabled in
                 self?.rtaAnalyzer.setMetersEnabled(enabled)
+                self?.goniometerEngine.setMetersEnabled(enabled)
             }
             .store(in: &cancellables)
 
         // Sync initial metersEnabled state to RTA analyzer (subscription only fires on changes)
         rtaAnalyzer.setMetersEnabled(meterStore.metersEnabled)
+        goniometerEngine.setMetersEnabled(meterStore.metersEnabled)
 
         // Listen for app termination
         NotificationCenter.default.addObserver(

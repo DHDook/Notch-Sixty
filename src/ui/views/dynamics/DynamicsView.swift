@@ -152,20 +152,30 @@ struct DynamicsInlineView: View {
             headerRow
 
             HStack(alignment: .top, spacing: 12) {
-                column1
-                Divider()
-                column2
-                Divider()
-                column3
-                Divider()
-                column4
-                Divider()
-                column5
+                controlColumns
                 Divider()
                 column6
             }
         }
         .onAppear { inlineMeterBridge.register(with: store.meterStore, equaliserStore: store) }
+    }
+
+    // Columns 1–5 grouped into their own container so the goniometer's updates
+    // (column6, which redraws whenever the goniometer is active) don't force
+    // SwiftUI to re-run stack sizing across these five static/control-heavy
+    // columns on every tick.
+    private var controlColumns: some View {
+        HStack(alignment: .top, spacing: 12) {
+            column1
+            Divider()
+            column2
+            Divider()
+            column3
+            Divider()
+            column4
+            Divider()
+            column5
+        }
     }
 
     // MARK: - Header
