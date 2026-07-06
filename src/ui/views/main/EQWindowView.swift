@@ -550,6 +550,8 @@ struct EQWindowView: View {
             if metersEnabledUI != value { metersEnabledUI = value }
         }
         .onDisappear {
+            // Temporary diagnostic — remove after confirming.
+            print("EQWindowView disappeared")
             store.meterStore.windowBecameHidden()
         }
         .sheet(isPresented: $showDriverSheet) {

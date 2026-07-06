@@ -2159,47 +2159,55 @@ struct InlinePhaseCorrelationView: View {
     @EnvironmentObject private var store: EqualiserStore
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            let correlation = store.livePhaseCorrelation
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 3) {
-                    Text("Phase")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Text(String(format: "%+.2f", correlation))
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(phaseColour(for: correlation))
-                }
-                GeometryReader { geo in
-                    let w = geo.size.width
-                    let h = geo.size.height
-                    let mid = w / 2
-                    let clamped = CGFloat(max(-1, min(1, correlation)))
-                    let tipX = mid + clamped * (mid - 1)
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.secondary.opacity(0.10))
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.35))
-                            .frame(width: 1, height: h)
-                            .position(x: mid, y: h / 2)
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(phaseColour(for: correlation).opacity(0.85))
-                            .frame(
-                                width: max(2, abs(tipX - mid)),
-                                height: h - 1
-                            )
-                            .position(
-                                x: mid + (tipX - mid) / 2,
-                                y: h / 2
-                            )
-                    }
-                }
-                .frame(height: 6)
+        if store.meterStore.metersEnabled {
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+                phaseContent(correlation: store.livePhaseCorrelation)
             }
-            .frame(width: 90)
+        } else {
+            phaseContent(correlation: 0)
         }
+    }
+
+    @ViewBuilder
+    private func phaseContent(correlation: Float) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Text("Phase")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Text(String(format: "%+.2f", correlation))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(phaseColour(for: correlation))
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let mid = w / 2
+                let clamped = CGFloat(max(-1, min(1, correlation)))
+                let tipX = mid + clamped * (mid - 1)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.secondary.opacity(0.10))
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.35))
+                        .frame(width: 1, height: h)
+                        .position(x: mid, y: h / 2)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(phaseColour(for: correlation).opacity(0.85))
+                        .frame(
+                            width: max(2, abs(tipX - mid)),
+                            height: h - 1
+                        )
+                        .position(
+                            x: mid + (tipX - mid) / 2,
+                            y: h / 2
+                        )
+                }
+            }
+            .frame(height: 6)
+        }
+        .frame(width: 90)
     }
 
     private func phaseColour(for correlation: Float) -> Color {
@@ -2217,11 +2225,15 @@ struct InlineTruePeakMeterView: View {
     @EnvironmentObject private var store: EqualiserStore
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            TruePeakMeterView(
-                truePeakDB: store.liveTruePeakDB,
-                isOversampled: store.isOversamplingActive
-            )
+        if store.meterStore.metersEnabled {
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+                TruePeakMeterView(
+                    truePeakDB: store.liveTruePeakDB,
+                    isOversampled: store.isOversamplingActive
+                )
+            }
+        } else {
+            TruePeakMeterView(truePeakDB: -.infinity, isOversampled: false)
         }
     }
 }
@@ -2348,23 +2360,21 @@ struct InlineBitRateView: View {
     private let bitsPerSample = 32
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            let sr = store.streamSampleRate
-            let kbps = Int(sr * Double(bitsPerSample) * 2.0 / 1000.0)
-            let srText = sr >= 1000
-                ? String(format: "%.0f kHz", sr / 1000)
-                : String(format: "%.0f Hz", sr)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Sample Rate")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Text(srText)
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Text("\(kbps) kbps")
-                    .font(.system(size: 7, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
+        let sr = store.streamSampleRate
+        let kbps = Int(sr * Double(bitsPerSample) * 2.0 / 1000.0)
+        let srText = sr >= 1000
+            ? String(format: "%.0f kHz", sr / 1000)
+            : String(format: "%.0f Hz", sr)
+        VStack(alignment: .leading, spacing: 1) {
+            Text("Sample Rate")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text(srText)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text("\(kbps) kbps")
+                .font(.system(size: 7, weight: .regular, design: .monospaced))
+                .foregroundStyle(.tertiary)
         }
     }
 }

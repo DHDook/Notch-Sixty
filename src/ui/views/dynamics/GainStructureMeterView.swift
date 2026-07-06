@@ -13,16 +13,23 @@ struct GainStructureMeterView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
-            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+            if store.meterStore.metersEnabled {
+                TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+                    VStack(alignment: .leading, spacing: 2) {
+                        gainRow("DE", store.deEsserGainReductionDB)
+                        gainRow("MB-L", store.mbLowGainReductionDB)
+                        gainRow("MB-M", store.mbMidGainReductionDB)
+                        gainRow("MB-H", store.mbHighGainReductionDB)
+                        gainRow("Comp", store.compressorGainReductionDB)
+                        gainRow("Exp", store.expanderGainReductionDB)
+                        gainRow("Clip", store.clipperGainReductionDB)
+                        gainRow("Lim", store.limiterGainReductionDB)
+                    }
+                }
+            } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    gainRow("DE", store.deEsserGainReductionDB)
-                    gainRow("MB-L", store.mbLowGainReductionDB)
-                    gainRow("MB-M", store.mbMidGainReductionDB)
-                    gainRow("MB-H", store.mbHighGainReductionDB)
-                    gainRow("Comp", store.compressorGainReductionDB)
-                    gainRow("Exp", store.expanderGainReductionDB)
-                    gainRow("Clip", store.clipperGainReductionDB)
-                    gainRow("Lim", store.limiterGainReductionDB)
+                    gainRow("DE", 0); gainRow("MB-L", 0); gainRow("MB-M", 0); gainRow("MB-H", 0)
+                    gainRow("Comp", 0); gainRow("Exp", 0); gainRow("Clip", 0); gainRow("Lim", 0)
                 }
             }
         }
