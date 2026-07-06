@@ -118,7 +118,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     private var window:   [Float]
 
     // MARK: Analysis rate
-    private let analysisRateHz: Double = 60.0
+    private let analysisRateHz: Double = 30.0
     private var tickInterval: TimeInterval { 1.0 / analysisRateHz }
 
     // MARK: Ballistics (time constants are real-world seconds; per-tick alphas are derived below)

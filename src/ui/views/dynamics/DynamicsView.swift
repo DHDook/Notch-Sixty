@@ -2006,23 +2006,24 @@ struct DynamicsInlineView: View {
 
 // MARK: - Inline Meter Bridge
 
+struct InlineMeterSnapshot: Equatable {
+    var peakL: Float = 0
+    var peakR: Float = 0
+    var rmsL:  Float = 0
+    var rmsR:  Float = 0
+    var peakOutL: Float = 0
+    var peakOutR: Float = 0
+    var rmsOutL:  Float = 0
+    var rmsOutR:  Float = 0
+    var ispInputLatched:  Bool = false
+    var ispOutputLatched: Bool = false
+}
+
 /// Bridges MeterStore observer callbacks to SwiftUI @Published properties
 /// for the analytics metrics and goniometer displays in DynamicsInlineView.
 @MainActor
 final class InlineMeterBridge: ObservableObject {
-    // Input channels
-    @Published var peakL: Float = 0
-    @Published var peakR: Float = 0
-    @Published var rmsL:  Float = 0
-    @Published var rmsR:  Float = 0
-    // Output channels
-    @Published var peakOutL: Float = 0
-    @Published var peakOutR: Float = 0
-    @Published var rmsOutL:  Float = 0
-    @Published var rmsOutR:  Float = 0
-    // Latching indicators
-    @Published var ispInputLatched:  Bool = false
-    @Published var ispOutputLatched: Bool = false
+    @Published private(set) var snapshot = InlineMeterSnapshot()
 
     private let obsPeakL    = BridgeChannelObs()
     private let obsPeakR    = BridgeChannelObs()
@@ -2040,67 +2041,71 @@ final class InlineMeterBridge: ObservableObject {
 
     /// Input peak-to-RMS crest factor in dB. Higher = more dynamic.
     var crestFactorDb: Float {
-        let peak = max(peakL, peakR)
-        let rms  = max(rmsL, rmsR)
+        let peak = max(snapshot.peakL, snapshot.peakR)
+        let rms  = max(snapshot.rmsL, snapshot.rmsR)
         guard rms > 0.001 else { return 0 }
         return max(0, 20 * log10(peak / rms))
     }
 
     /// Output dynamic range factor (peak/RMS) clamped to 0–24 dB.
     var drFactor: Float {
-        let peak = max(peakOutL, peakOutR)
-        let rms  = max(rmsOutL, rmsOutR)
+        let peak = max(snapshot.peakOutL, snapshot.peakOutR)
+        let rms  = max(snapshot.rmsOutL, snapshot.rmsOutR)
         guard rms > 0.001 else { return 0 }
         return max(0, min(24, 20 * log10(peak / rms)))
     }
 
-    var truePeakInputClipped:  Bool { max(peakL, peakR) >= 0.9 }
-    var truePeakOutputClipped: Bool { max(peakOutL, peakOutR) >= 0.9 }
+    var truePeakInputClipped:  Bool { max(snapshot.peakL, snapshot.peakR) >= 0.9 }
+    var truePeakOutputClipped: Bool { max(snapshot.peakOutL, snapshot.peakOutR) >= 0.9 }
 
     /// -1.0 = fully left, 0 = centred, +1.0 = fully right.
     var balance: Float {
-        let l = peakL, r = peakR
+        let l = snapshot.peakL, r = snapshot.peakR
         guard l + r > 0.001 else { return 0 }
         return (r - l) / (l + r)
     }
 
     /// 24-bit activity mask — bits lit when set in the quantised peak sample.
     var inputBitMask: UInt32 {
-        let p = max(peakL, peakR)
+        let p = max(snapshot.peakL, snapshot.peakR)
         guard p > 1e-6 else { return 0 }
         let sample24 = UInt32(min(0xFFFFFF, p * 8_388_607.0 + 0.5))
         return sample24
     }
 
     func resetIspLatches() {
-        ispInputLatched  = false
-        ispOutputLatched = false
+        snapshot.ispInputLatched  = false
+        snapshot.ispOutputLatched = false
     }
 
     // MARK: - Registration
 
     func register(with store: MeterStore, equaliserStore: EqualiserStore?) {
         self.store = equaliserStore
-        obsPeakL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakL = v
-            if v > 0.99 { self?.ispInputLatched = true }
-        }}
-        obsPeakR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakR = v
-            if v > 0.99 { self?.ispInputLatched = true }
-        }}
-        obsRmsL.onUpdate  = { [weak self] v in Task { @MainActor [weak self] in self?.rmsL  = v } }
-        obsRmsR.onUpdate  = { [weak self] v in Task { @MainActor [weak self] in self?.rmsR  = v } }
-        obsPeakOutL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakOutL = v
-            if v > 0.99 { self?.ispOutputLatched = true }
-        }}
-        obsPeakOutR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakOutR = v
-            if v > 0.99 { self?.ispOutputLatched = true }
-        }}
-        obsRmsOutL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.rmsOutL = v } }
-        obsRmsOutR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.rmsOutR = v } }
+        obsPeakL.onUpdate = { [weak self] v in
+            guard let self else { return }
+            self.snapshot.peakL = v
+            if v > 0.99 { self.snapshot.ispInputLatched = true }
+        }
+        obsPeakR.onUpdate = { [weak self] v in
+            guard let self else { return }
+            self.snapshot.peakR = v
+            if v > 0.99 { self.snapshot.ispInputLatched = true }
+        }
+        obsRmsL.onUpdate  = { [weak self] v in self?.snapshot.rmsL  = v }
+        obsRmsR.onUpdate  = { [weak self] v in self?.snapshot.rmsR  = v }
+        obsPeakOutL.onUpdate = { [weak self] v in
+            guard let self else { return }
+            self.snapshot.peakOutL = v
+            if v > 0.99 { self.snapshot.ispOutputLatched = true }
+        }
+        obsPeakOutR.onUpdate = { [weak self] v in
+            guard let self else { return }
+            self.snapshot.peakOutR = v
+            if v > 0.99 { self.snapshot.ispOutputLatched = true }
+        }
+        obsRmsOutL.onUpdate = { [weak self] v in self?.snapshot.rmsOutL = v }
+        obsRmsOutR.onUpdate = { [weak self] v in self?.snapshot.rmsOutR = v }
 
         store.addObserver(obsPeakL,    for: .inputPeakLeft)
         store.addObserver(obsPeakR,    for: .inputPeakRight)
@@ -2272,8 +2277,8 @@ struct InlineIspLatchView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            ispIndicator(label: "ISP-In",  latched: bridge.ispInputLatched)
-            ispIndicator(label: "ISP-Out", latched: bridge.ispOutputLatched)
+            ispIndicator(label: "ISP-In",  latched: bridge.snapshot.ispInputLatched)
+            ispIndicator(label: "ISP-Out", latched: bridge.snapshot.ispOutputLatched)
         }
         .onTapGesture { bridge.resetIspLatches() }
         .help("Tap to reset over-load latches")
