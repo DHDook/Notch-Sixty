@@ -1643,37 +1643,51 @@ struct DynamicsInlineView: View {
                 Text("5th").tag(DitherMode.highOrder)
             }
             Divider()
-            GainStructureMeterView()
+            hostedGainStructureMeter
         }
+    }
+
+    private var hostedGainStructureMeter: some View {
+        HostedContent {
+            GainStructureMeterView()
+                .environmentObject(store)
+        }
+        .frame(width: 100, height: 90)
     }
 
     // MARK: - Column 5: Meters only
 
     private var column5: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            InlinePhaseCorrelationView()
-            InlineCrestFactorView(bridge: inlineMeterBridge)
-            InlineIspLatchView(bridge: inlineMeterBridge)
-            InlineDRFactorView(bridge: inlineMeterBridge)
-            InlineBitStreamView(bridge: inlineMeterBridge)
-            InlineBitRateView()
-            InlineTruePeakView(bridge: inlineMeterBridge)
-            InlineTruePeakMeterView()
+        HostedContent {
+            VStack(alignment: .leading, spacing: 4) {
+                InlinePhaseCorrelationView()
+                InlineCrestFactorView(bridge: inlineMeterBridge)
+                InlineIspLatchView(bridge: inlineMeterBridge)
+                InlineDRFactorView(bridge: inlineMeterBridge)
+                InlineBitStreamView(bridge: inlineMeterBridge)
+                InlineBitRateView()
+                InlineTruePeakView(bridge: inlineMeterBridge)
+                InlineTruePeakMeterView()
+            }
+            .environmentObject(store)
         }
-        .frame(minWidth: 110)
+        .frame(width: 110, height: 140)
     }
 
     // MARK: - Column 6: Stereo Goniometer
 
     private var column6: some View {
-        VStack(spacing: 8) {
-            StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-            LatencyReadoutView(
-                totalLatencyMs: store.totalLatencyMs,
-                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
-                sampleRate: store.streamSampleRate
-            )
+        HostedContent {
+            VStack(spacing: 8) {
+                StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
+                LatencyReadoutView(
+                    totalLatencyMs: store.totalLatencyMs,
+                    alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
+                    sampleRate: store.streamSampleRate
+                )
+            }
         }
+        .frame(width: 130, height: 165)
     }
 
 
@@ -2185,34 +2199,37 @@ struct InlinePhaseCorrelationView: View {
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(phaseColour(for: correlation))
             }
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                let mid = w / 2
-                let clamped = CGFloat(max(-1, min(1, correlation)))
-                let tipX = mid + clamped * (mid - 1)
-                ZStack {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.secondary.opacity(0.10))
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.35))
-                        .frame(width: 1, height: h)
-                        .position(x: mid, y: h / 2)
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(phaseColour(for: correlation).opacity(0.85))
-                        .frame(
-                            width: max(2, abs(tipX - mid)),
-                            height: h - 1
-                        )
-                        .position(
-                            x: mid + (tipX - mid) / 2,
-                            y: h / 2
-                        )
-                }
-            }
-            .frame(height: 6)
+            phaseIndicator(correlation: correlation)
         }
         .frame(width: 90)
+    }
+
+    @ViewBuilder
+    private func phaseIndicator(correlation: Float) -> some View {
+        let w: CGFloat = 90
+        let h: CGFloat = 6
+        let mid = w / 2
+        let clamped = CGFloat(max(-1, min(1, correlation)))
+        let tipX = mid + clamped * (mid - 1)
+        ZStack {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.secondary.opacity(0.10))
+            Rectangle()
+                .fill(Color.secondary.opacity(0.35))
+                .frame(width: 1, height: h)
+                .position(x: mid, y: h / 2)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(phaseColour(for: correlation).opacity(0.85))
+                .frame(
+                    width: max(2, abs(tipX - mid)),
+                    height: h - 1
+                )
+                .position(
+                    x: mid + (tipX - mid) / 2,
+                    y: h / 2
+                )
+        }
+        .frame(width: w, height: h)
     }
 
     private func phaseColour(for correlation: Float) -> Color {
