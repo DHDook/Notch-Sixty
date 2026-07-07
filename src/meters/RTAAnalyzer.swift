@@ -194,6 +194,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     // MARK: Run state gating
     private var isWindowVisible = true
     private var isMetersEnabled = true
+    private var isIndividuallyEnabled = true
     private weak var equaliserWindow: NSWindow?
 
     // MARK: - Init / deinit
@@ -226,7 +227,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     // MARK: - Timer
 
     private func updateRunState() {
-        if isWindowVisible && isMetersEnabled {
+        if isWindowVisible && isMetersEnabled && isIndividuallyEnabled {
             guard updateTimer == nil else { return }
             startTimer()
         } else {
@@ -245,6 +246,11 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     func setMetersEnabled(_ enabled: Bool) {
         isMetersEnabled = enabled
+        updateRunState()
+    }
+
+    func setIndividuallyEnabled(_ enabled: Bool) {
+        isIndividuallyEnabled = enabled
         updateRunState()
     }
 

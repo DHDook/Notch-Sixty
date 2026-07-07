@@ -725,7 +725,12 @@ final class EqualiserStore: ObservableObject {
             manualModeEnabled: manualModeEnabled,
             captureMode: routingCoordinator.captureMode.rawValue,
             dynamicsConfig: eqConfiguration.dynamicsConfig,
-            metersEnabled: meterStore.metersEnabled
+            metersEnabled: meterStore.metersEnabled,
+            rtaEnabled: meterStore.rtaEnabled,
+            goniometerEnabled: meterStore.goniometerEnabled,
+            analyticsMetersEnabled: meterStore.analyticsMetersEnabled,
+            gainStructureEnabled: meterStore.gainStructureEnabled,
+            levelMetersEnabled: meterStore.levelMetersEnabled
         )
     }
 
@@ -1048,7 +1053,14 @@ final class EqualiserStore: ObservableObject {
 
         // Initialize other components
         self.presetManager = PresetManager()
-        self.meterStore = MeterStore(metersEnabled: snapshot.metersEnabled)
+        self.meterStore = MeterStore(
+            metersEnabled: snapshot.metersEnabled,
+            rtaEnabled: snapshot.rtaEnabled,
+            goniometerEnabled: snapshot.goniometerEnabled,
+            analyticsMetersEnabled: snapshot.analyticsMetersEnabled,
+            gainStructureEnabled: snapshot.gainStructureEnabled,
+            levelMetersEnabled: snapshot.levelMetersEnabled
+        )
 
         // Set reset flag if state was reset
         self.didResetStateOnLaunch = didReset
@@ -1248,6 +1260,22 @@ final class EqualiserStore: ObservableObject {
         // Sync initial metersEnabled state to RTA analyzer (subscription only fires on changes)
         rtaAnalyzer.setMetersEnabled(meterStore.metersEnabled)
         goniometerEngine.setMetersEnabled(meterStore.metersEnabled)
+
+        // RTA individual enable/disable toggle
+        meterStore.$rtaEnabled
+            .sink { [weak self] enabled in
+                self?.rtaAnalyzer.setIndividuallyEnabled(enabled)
+            }
+            .store(in: &cancellables)
+        rtaAnalyzer.setIndividuallyEnabled(meterStore.rtaEnabled)
+
+        // Goniometer individual enable/disable toggle
+        meterStore.$goniometerEnabled
+            .sink { [weak self] enabled in
+                self?.goniometerEngine.setIndividuallyEnabled(enabled)
+            }
+            .store(in: &cancellables)
+        goniometerEngine.setIndividuallyEnabled(meterStore.goniometerEnabled)
 
         // Listen for app termination
         NotificationCenter.default.addObserver(

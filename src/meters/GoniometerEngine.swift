@@ -147,11 +147,12 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
     // MARK: Run state gating
     private var isViewVisible = true
     private var isMetersEnabled = true
+    private var isIndividuallyEnabled = true
 
     // MARK: - Lifecycle
 
     private func updateRunState() {
-        if isViewVisible && isMetersEnabled {
+        if isViewVisible && isMetersEnabled && isIndividuallyEnabled {
             startRefresh()
         } else {
             stopRefresh()
@@ -165,6 +166,11 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
 
     func setMetersEnabled(_ enabled: Bool) {
         isMetersEnabled = enabled
+        updateRunState()
+    }
+
+    func setIndividuallyEnabled(_ enabled: Bool) {
+        isIndividuallyEnabled = enabled
         updateRunState()
     }
 

@@ -443,7 +443,13 @@ final class EQConfigurationTests: XCTestCase {
             bandwidthDisplayMode: "octaves",
             manualModeEnabled: false,
             captureMode: 0,
-            metersEnabled: true
+            dynamicsConfig: .default,
+            metersEnabled: true,
+            rtaEnabled: true,
+            goniometerEnabled: true,
+            analyticsMetersEnabled: true,
+            gainStructureEnabled: true,
+            levelMetersEnabled: true
         )
 
         // Create new config from snapshot
@@ -484,7 +490,13 @@ final class EQConfigurationTests: XCTestCase {
             bandwidthDisplayMode: "octaves",
             manualModeEnabled: false,
             captureMode: 0,
-            metersEnabled: true
+            dynamicsConfig: .default,
+            metersEnabled: true,
+            rtaEnabled: true,
+            goniometerEnabled: true,
+            analyticsMetersEnabled: true,
+            gainStructureEnabled: true,
+            levelMetersEnabled: true
         )
 
         // Restore from snapshot

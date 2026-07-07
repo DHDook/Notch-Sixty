@@ -17,6 +17,7 @@ struct RTADashboardView: View {
 
     @State private var hoveredBandIndex: Int  = -1
     @State private var hoverPane: Int         = -1   // 0 = input, 1 = output
+    @State private var rtaEnabledUI = true
 
     private let segmentCount: Int = 30
 
@@ -49,7 +50,13 @@ struct RTADashboardView: View {
         }
         .padding(.top, 0)
         .padding(.bottom, 2)
-        .onAppear { store.wireRTAAnalyzer() }
+        .onAppear {
+            store.wireRTAAnalyzer()
+            rtaEnabledUI = store.meterStore.rtaEnabled
+        }
+        .onChange(of: store.meterStore.rtaEnabled) { newValue in
+            rtaEnabledUI = newValue
+        }
     }
 
     private func displayBands(from bands: [BandData]) -> [BandData] {
@@ -91,6 +98,13 @@ struct RTADashboardView: View {
                         .toggleStyle(.checkbox)
                         .font(.system(size: 8))
                         .controlSize(.mini)
+                    Toggle("RTA", isOn: $rtaEnabledUI)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 8))
+                        .controlSize(.mini)
+                        .onChange(of: rtaEnabledUI) { newValue in
+                            store.meterStore.rtaEnabled = newValue
+                        }
                 }
             }
             .padding(.horizontal, 2)

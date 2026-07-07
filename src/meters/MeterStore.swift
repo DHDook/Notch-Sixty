@@ -33,6 +33,13 @@ final class MeterStore: ObservableObject {
         }
     }
 
+    /// Per-visualization enable/disable flags
+    @Published var rtaEnabled: Bool = true
+    @Published var goniometerEnabled: Bool = true
+    @Published var analyticsMetersEnabled: Bool = true
+    @Published var gainStructureEnabled: Bool = true
+    @Published var levelMetersEnabled: Bool = true
+
     // MARK: - Per-Output Channel Metering (Part 2 Task AG)
 
     /// Per-output channel level data (polled at MeterStore's standard 30 Hz rate)
@@ -70,9 +77,19 @@ final class MeterStore: ObservableObject {
     }
     
     // MARK: - Initialization
-    
-    init(metersEnabled: Bool = true) {
+
+    init(metersEnabled: Bool = true,
+         rtaEnabled: Bool = true,
+         goniometerEnabled: Bool = true,
+         analyticsMetersEnabled: Bool = true,
+         gainStructureEnabled: Bool = true,
+         levelMetersEnabled: Bool = true) {
         self.metersEnabled = metersEnabled
+        self.rtaEnabled = rtaEnabled
+        self.goniometerEnabled = goniometerEnabled
+        self.analyticsMetersEnabled = analyticsMetersEnabled
+        self.gainStructureEnabled = gainStructureEnabled
+        self.levelMetersEnabled = levelMetersEnabled
     }
     
     // MARK: - Observer Registration

@@ -37,6 +37,11 @@ struct AppStateSnapshot: Sendable {
     // MARK: - Meter State
 
     var metersEnabled: Bool
+    var rtaEnabled: Bool
+    var goniometerEnabled: Bool
+    var analyticsMetersEnabled: Bool
+    var gainStructureEnabled: Bool
+    var levelMetersEnabled: Bool
 
     // MARK: - Defaults
 
@@ -55,7 +60,12 @@ struct AppStateSnapshot: Sendable {
             manualModeEnabled: false,
             captureMode: CaptureMode.sharedMemory.rawValue,
             dynamicsConfig: .default,
-            metersEnabled: true
+            metersEnabled: true,
+            rtaEnabled: true,
+            goniometerEnabled: true,
+            analyticsMetersEnabled: true,
+            gainStructureEnabled: true,
+            levelMetersEnabled: true
         )
     }
 }
@@ -78,6 +88,11 @@ extension AppStateSnapshot: Codable {
         case captureMode
         case dynamicsConfig
         case metersEnabled
+        case rtaEnabled
+        case goniometerEnabled
+        case analyticsMetersEnabled
+        case gainStructureEnabled
+        case levelMetersEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +116,11 @@ extension AppStateSnapshot: Codable {
         captureMode = try container.decodeIfPresent(Int.self, forKey: .captureMode)
             ?? CaptureMode.sharedMemory.rawValue
         metersEnabled = try container.decodeIfPresent(Bool.self, forKey: .metersEnabled) ?? true
+        rtaEnabled = try container.decodeIfPresent(Bool.self, forKey: .rtaEnabled) ?? true
+        goniometerEnabled = try container.decodeIfPresent(Bool.self, forKey: .goniometerEnabled) ?? true
+        analyticsMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .analyticsMetersEnabled) ?? true
+        gainStructureEnabled = try container.decodeIfPresent(Bool.self, forKey: .gainStructureEnabled) ?? true
+        levelMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .levelMetersEnabled) ?? true
         dynamicsConfig = try container.decodeIfPresent(DynamicsConfig.self, forKey: .dynamicsConfig) ?? .default
     }
 
@@ -124,6 +144,11 @@ extension AppStateSnapshot: Codable {
         try container.encode(captureMode, forKey: .captureMode)
         try container.encode(dynamicsConfig, forKey: .dynamicsConfig)
         try container.encode(metersEnabled, forKey: .metersEnabled)
+        try container.encode(rtaEnabled, forKey: .rtaEnabled)
+        try container.encode(goniometerEnabled, forKey: .goniometerEnabled)
+        try container.encode(analyticsMetersEnabled, forKey: .analyticsMetersEnabled)
+        try container.encode(gainStructureEnabled, forKey: .gainStructureEnabled)
+        try container.encode(levelMetersEnabled, forKey: .levelMetersEnabled)
     }
 }
 
