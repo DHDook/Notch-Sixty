@@ -108,14 +108,48 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     let maxDb: Float =   0.0   // 0 dBFS = full bar height
 
     // MARK: Ring buffers — written by the audio thread
-    let inputRingBuffer  = LockFreeAudioRingBuffer(bufferSize: 16384)
-    let outputRingBuffer = LockFreeAudioRingBuffer(bufferSize: 16384)
+    let inputRingBuffer  = LockFreeAudioRingBuffer(bufferSize: 524_288)
+    let outputRingBuffer = LockFreeAudioRingBuffer(bufferSize: 524_288)
 
-    // MARK: FFT state
-    private let fftSize:  Int
+    // MARK: Multi-resolution FFT lane state
+
+    private final class FFTLane {
+        let fftSize: Int
+        let log2n: vDSP_Length
+        var window: [Float]
+        var tickInputSamples: [Float]
+        var tickOutputSamples: [Float]
+        var scratchWindowed: [Float]
+        var scratchReal: [Float]
+        var scratchImag: [Float]
+        var scratchMags: [Float]
+        var scratchAmps: [Float]
+        var scratchResultDb: [Float]
+        var lastInputDb: [Float]?
+        var lastOutputDb: [Float]?
+        var tickSkipCounter: Int = 0
+
+        init(fftSize: Int) {
+            self.fftSize = fftSize
+            self.log2n = vDSP_Length(log2(Float(fftSize)))
+            let half = fftSize / 2
+            window = [Float](repeating: 0, count: fftSize)
+            tickInputSamples = [Float](repeating: 0, count: fftSize)
+            tickOutputSamples = [Float](repeating: 0, count: fftSize)
+            scratchWindowed = [Float](repeating: 0, count: fftSize)
+            scratchReal = [Float](repeating: 0, count: half)
+            scratchImag = [Float](repeating: 0, count: half)
+            scratchMags = [Float](repeating: 0, count: half)
+            scratchAmps = [Float](repeating: 0, count: half)
+            scratchResultDb = [Float](repeating: 0, count: half)
+            vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+        }
+    }
+
+    private var lanes: [FFTLane] = []
+
+    // One shared FFTSetup, created once at the maximum size needed (log2n = 18 for 262144)
     nonisolated(unsafe) private var fftSetup: FFTSetup
-    private var log2n:    vDSP_Length
-    private var window:   [Float]
 
     // MARK: Analysis rate
     private let analysisRateHz: Double = 30.0
@@ -160,33 +194,68 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     @Published var currentFps:       Int  = 0
 
     // Assumed sample rate when no pipeline info is available.
-    var assumedSampleRate: Float = 48000
+    var assumedSampleRate: Float = 48000 {
+        didSet {
+            rebuildLanes(for: assumedSampleRate)
+        }
+    }
 
-    // MARK: Band range cache for mapBinsToBands optimization
-    private struct BandRange {
+    // MARK: Multi-resolution FFT lane configuration
+
+    /// Reference lane sizes at 48kHz. Each is the smallest power of two whose window
+    /// (size/sampleRate) satisfies window >= 2 / (bandwidth of the narrowest band in that lane),
+    /// the standard Hann-window frequency-resolution rule of thumb.
+    private static let laneReferenceSizes: [Int] = [32768, 8192, 2048, 512, 128]
+    private static let laneReferenceSampleRate: Float = 48000
+
+    /// Fixed assignment of each of the 31 ISO 1/3-octave bands (in `centerFrequencies` order) to a
+    /// lane index. This assignment does NOT depend on sample rate — only each lane's *size* does.
+    ///   Lane 0: 20, 25, 31.5, 40, 50 Hz          (window ≈ 683ms @48kHz)
+    ///   Lane 1: 63, 80, 100, 125, 160, 200 Hz    (window ≈ 171ms @48kHz)
+    ///   Lane 2: 250, 315, 400, 500, 630, 800 Hz  (window ≈ 43ms  @48kHz)
+    ///   Lane 3: 1000–3150 Hz (6 bands)           (window ≈ 11ms  @48kHz)
+    ///   Lane 4: 4000–20000 Hz (8 bands)          (window ≈ 2.7ms @48kHz)
+    private static let bandLaneIndex: [Int] = [
+        0, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 1,
+        2, 2, 2, 2, 2, 2,
+        3, 3, 3, 3, 3, 3,
+        4, 4, 4, 4, 4, 4, 4, 4,
+    ]
+
+    /// How many ticks to wait between recomputing each lane, to skip redundant work on lanes whose
+    /// content physically cannot change faster than their own window duration. Lane 0's window is
+    /// ~680ms, so recomputing it every tick (e.g. every 33ms @30Hz) is wasted work; every 4th tick
+    /// (still ~130ms @30Hz, well under its 680ms window) loses nothing perceptible. Lanes 1–4 are
+    /// cheap enough, and change fast enough, to recompute every tick.
+    private static let laneUpdateDivisor: [Int] = [4, 1, 1, 1, 1]
+
+    /// Computes each lane's actual FFT size for a given sample rate, preserving each lane's
+    /// reference window duration (and therefore its frequency resolution) at every sample rate.
+    private func laneSizes(for sampleRate: Float) -> [Int] {
+        Self.laneReferenceSizes.map { refSize in
+            let scaled = Double(refSize) * Double(sampleRate) / Double(Self.laneReferenceSampleRate)
+            return nextPowerOfTwo(Int(scaled.rounded(.up)))
+        }
+    }
+
+    private func nextPowerOfTwo(_ x: Int) -> Int {
+        guard x > 1 else { return 1 }
+        return 1 << (Int.bitWidth - (x - 1).leadingZeroBitCount)
+    }
+
+    // MARK: Band route cache for multi-lane band routing
+    private struct BandRoute {
+        let laneIndex: Int
         let loBinIndex: Int
         let hiBinIndex: Int
         let fallbackBinIndex: Int
     }
-    private var bandRangeCache: [Float: [BandRange]] = [:]
+    private var bandRouteCache: [Float: [BandRoute]] = [:]
 
     // MARK: FPS tracking
     private var frameCount: Int  = 0
     private var lastFpsTick: Date = Date()
-
-    // MARK: Pre-allocated tick buffers (avoids per-frame heap allocation)
-    private var tickInputSamples:  [Float]
-    private var tickOutputSamples: [Float]
-
-    // Reusable FFT scratch buffers — avoids per-tick heap allocation.
-    // Safe to share between input/output calls because executeFFT is only
-    // ever invoked synchronously and sequentially from tick() on the main actor.
-    private var scratchWindowed: [Float]
-    private var scratchReal:     [Float]
-    private var scratchImag:     [Float]
-    private var scratchMags:     [Float]
-    private var scratchAmps:     [Float]
-    private var scratchResultDb: [Float]
 
     // MARK: Timer
     private var updateTimer: AnyCancellable?
@@ -199,29 +268,35 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // MARK: - Init / deinit
 
-    init(fftSize: Int = 8192) {
-        precondition(fftSize > 0 && (fftSize & (fftSize - 1)) == 0,
-                     "fftSize must be a power of two")
-        self.fftSize = fftSize
-        self.log2n   = vDSP_Length(log2(Float(fftSize)))
-        self.fftSetup = vDSP_create_fftsetup(vDSP_Length(log2(Float(fftSize))),
-                                              FFTRadix(kFFTRadix2))!
-        self.window = [Float](repeating: 0, count: fftSize)
-        self.tickInputSamples  = [Float](repeating: 0, count: fftSize)
-        self.tickOutputSamples = [Float](repeating: 0, count: fftSize)
-        let half = fftSize / 2
-        self.scratchWindowed = [Float](repeating: 0, count: fftSize)
-        self.scratchReal     = [Float](repeating: 0, count: half)
-        self.scratchImag     = [Float](repeating: 0, count: half)
-        self.scratchMags     = [Float](repeating: 0, count: half)
-        self.scratchAmps     = [Float](repeating: 0, count: half)
-        self.scratchResultDb = [Float](repeating: 0, count: half)
-        vDSP_hann_window(&self.window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+    init() {
+        // Create shared FFTSetup at max size needed (log2n = 18 for 262144 at 384kHz)
+        let maxLog2n = vDSP_Length(18)
+        self.fftSetup = vDSP_create_fftsetup(maxLog2n, FFTRadix(kFFTRadix2))!
+
+        // Build initial lanes from current assumed sample rate
+        rebuildLanes(for: assumedSampleRate)
+
         updateRunState()
     }
 
     deinit {
         vDSP_destroy_fftsetup(fftSetup)
+    }
+
+    // MARK: - Lane rebuilding on sample-rate change
+
+    private func rebuildLanes(for sampleRate: Float) {
+        let sizes = laneSizes(for: sampleRate)
+        let newLanes = sizes.map { FFTLane(fftSize: $0) }
+
+        // Skip rebuild if sizes are unchanged (avoids redundant work when assumedSampleRate
+        // is set to the same value it already was)
+        if lanes.count == newLanes.count,
+           zip(lanes, newLanes).allSatisfy({ $0.fftSize == $1.fftSize }) {
+            return
+        }
+
+        lanes = newLanes
     }
 
     // MARK: - Timer
@@ -293,13 +368,31 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     }
 
     private func tick() {
-        inputRingBuffer.readLatestChunkInto(&tickInputSamples)
-        outputRingBuffer.readLatestChunkInto(&tickOutputSamples)
-        updateSmearedSpectrums(
-            inputSamples:  tickInputSamples,  inputGainDb:  0,
-            outputSamples: tickOutputSamples, outputGainDb: 0,
-            sampleRate: assumedSampleRate
-        )
+        let sr = assumedSampleRate
+        var laneInputDb:  [[Float]] = []
+        var laneOutputDb: [[Float]] = []
+
+        for laneIdx in lanes.indices {
+            let lane = lanes[laneIdx]
+            lane.tickSkipCounter += 1
+            let divisor = Self.laneUpdateDivisor[laneIdx]
+
+            if lane.tickSkipCounter >= divisor || lane.lastInputDb == nil {
+                inputRingBuffer.readLatestChunkInto(&lane.tickInputSamples)
+                outputRingBuffer.readLatestChunkInto(&lane.tickOutputSamples)
+                lane.lastInputDb  = executeLaneFFT(lane, samples: lane.tickInputSamples)
+                lane.lastOutputDb = executeLaneFFT(lane, samples: lane.tickOutputSamples)
+                lane.tickSkipCounter = 0
+            }
+            laneInputDb.append(lane.lastInputDb!)
+            laneOutputDb.append(lane.lastOutputDb!)
+        }
+
+        let tgtIn  = mapBandsFromLanes(laneMagnitudes: laneInputDb,  sampleRate: sr)
+        let tgtOut = mapBandsFromLanes(laneMagnitudes: laneOutputDb, sampleRate: sr)
+        applyBallistics(bands: &inputBands,  targets: tgtIn)
+        applyBallistics(bands: &outputBands, targets: tgtOut)
+
         // FPS counter
         frameCount += 1
         let now = Date()
@@ -354,24 +447,46 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         outputSamples: [Float], outputGainDb: Float,
         sampleRate: Float
     ) {
-        var rawIn  = executeFFT(samples: inputSamples)
-        var rawOut = executeFFT(samples: outputSamples)
-
-        if inputGainDb != 0 {
-            var g = inputGainDb
-            var result = rawIn
-            vDSP_vsadd(&rawIn, 1, &g, &result, 1, vDSP_Length(rawIn.count))
-            rawIn = result
-        }
-        if outputGainDb != 0 {
-            var g = outputGainDb
-            var result = rawOut
-            vDSP_vsadd(&rawOut, 1, &g, &result, 1, vDSP_Length(rawOut.count))
-            rawOut = result
+        // Ensure lanes are built for this sample rate
+        if assumedSampleRate != sampleRate {
+            assumedSampleRate = sampleRate
         }
 
-        let tgtIn  = mapBinsToBands(dbMagnitudes: rawIn,  sampleRate: sampleRate)
-        let tgtOut = mapBinsToBands(dbMagnitudes: rawOut, sampleRate: sampleRate)
+        // Execute FFT on all lanes for input and output
+        var laneInputDb:  [[Float]] = []
+        var laneOutputDb: [[Float]] = []
+
+        for lane in lanes {
+            var rawIn  = executeLaneFFT(lane, samples: inputSamples)
+            var rawOut = executeLaneFFT(lane, samples: outputSamples)
+
+            if inputGainDb != 0 {
+                var g = inputGainDb
+                var result = [Float](repeating: 0, count: rawIn.count)
+                rawIn.withUnsafeBufferPointer { src in
+                    result.withUnsafeMutableBufferPointer { dst in
+                        vDSP_vsadd(src.baseAddress!, 1, &g, dst.baseAddress!, 1, vDSP_Length(rawIn.count))
+                    }
+                }
+                rawIn = result
+            }
+            if outputGainDb != 0 {
+                var g = outputGainDb
+                var result = [Float](repeating: 0, count: rawOut.count)
+                rawOut.withUnsafeBufferPointer { src in
+                    result.withUnsafeMutableBufferPointer { dst in
+                        vDSP_vsadd(src.baseAddress!, 1, &g, dst.baseAddress!, 1, vDSP_Length(rawOut.count))
+                    }
+                }
+                rawOut = result
+            }
+
+            laneInputDb.append(rawIn)
+            laneOutputDb.append(rawOut)
+        }
+
+        let tgtIn  = mapBandsFromLanes(laneMagnitudes: laneInputDb,  sampleRate: sampleRate)
+        let tgtOut = mapBandsFromLanes(laneMagnitudes: laneOutputDb, sampleRate: sampleRate)
 
         applyBallistics(bands: &inputBands,  targets: tgtIn)
         applyBallistics(bands: &outputBands, targets: tgtOut)
@@ -379,16 +494,15 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // MARK: - Private DSP
 
-    private func executeFFT(samples: [Float]) -> [Float] {
-        let half = fftSize / 2
-        guard samples.count >= fftSize else { return [Float](repeating: minDb, count: half) }
+    private func executeLaneFFT(_ lane: FFTLane, samples: [Float]) -> [Float] {
+        let half = lane.fftSize / 2
+        guard samples.count >= lane.fftSize else { return [Float](repeating: minDb, count: half) }
 
-        vDSP_vmul(samples, 1, window, 1, &scratchWindowed, 1, vDSP_Length(fftSize))
+        vDSP_vmul(samples, 1, lane.window, 1, &lane.scratchWindowed, 1, vDSP_Length(lane.fftSize))
 
-        // Perform FFT using interleaved buffer approach to avoid compiler issues
-        scratchWindowed.withUnsafeBytes { windowBytes in
-            scratchReal.withUnsafeMutableBytes { realBytes in
-                scratchImag.withUnsafeMutableBytes { imagBytes in
+        lane.scratchWindowed.withUnsafeBytes { windowBytes in
+            lane.scratchReal.withUnsafeMutableBytes { realBytes in
+                lane.scratchImag.withUnsafeMutableBytes { imagBytes in
                     let complexPtr = windowBytes.bindMemory(to: DSPComplex.self)
                     let realPtr = realBytes.bindMemory(to: Float.self).baseAddress!
                     let imagPtr = imagBytes.bindMemory(to: Float.self).baseAddress!
@@ -398,94 +512,84 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
             }
         }
 
-        // Perform FFT
-        scratchReal.withUnsafeMutableBytes { realBytes in
-            scratchImag.withUnsafeMutableBytes { imagBytes in
+        lane.scratchReal.withUnsafeMutableBytes { realBytes in
+            lane.scratchImag.withUnsafeMutableBytes { imagBytes in
                 let realPtr = realBytes.bindMemory(to: Float.self).baseAddress!
                 let imagPtr = imagBytes.bindMemory(to: Float.self).baseAddress!
                 var split = DSPSplitComplex(realp: realPtr, imagp: imagPtr)
-                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
-                vDSP_zvmags(&split, 1, &scratchMags, 1, vDSP_Length(half))
+                // Shared fftSetup, but THIS lane's log2n — this is what makes one setup work for all lanes.
+                vDSP_fft_zrip(fftSetup, &split, 1, lane.log2n, FFTDirection(FFT_FORWARD))
+                vDSP_zvmags(&split, 1, &lane.scratchMags, 1, vDSP_Length(half))
             }
         }
 
-        // Post-processing: magnitude to dB
         var n = Int32(half)
-        vvsqrtf(&scratchAmps, &scratchMags, &n)
+        vvsqrtf(&lane.scratchAmps, &lane.scratchMags, &n)
 
-        var norm: Float = 4.0 / Float(fftSize)
-        vDSP_vsmul(scratchAmps, 1, &norm, &scratchAmps, 1, vDSP_Length(half))
+        var norm: Float = 4.0 / Float(lane.fftSize)
+        vDSP_vsmul(lane.scratchAmps, 1, &norm, &lane.scratchAmps, 1, vDSP_Length(half))
 
         var ref: Float = 1.0
-        vDSP_vdbcon(scratchAmps, 1, &ref, &scratchResultDb, 1, vDSP_Length(half), 1)
+        vDSP_vdbcon(lane.scratchAmps, 1, &ref, &lane.scratchResultDb, 1, vDSP_Length(half), 1)
 
-        var clipped = scratchResultDb
-        var floorVal = self.minDb
-        var ceilVal  = self.maxDb
-        vDSP_vclip(&clipped, 1, &floorVal, &ceilVal, &scratchResultDb, 1, vDSP_Length(half))
+        var clipped = lane.scratchResultDb
+        var floorVal = minDb
+        var ceilVal  = maxDb
+        vDSP_vclip(&clipped, 1, &floorVal, &ceilVal, &lane.scratchResultDb, 1, vDSP_Length(half))
 
-        return Array(scratchResultDb)
+        return lane.scratchResultDb
     }
 
-    private func mapBinsToBands(dbMagnitudes: [Float], sampleRate: Float) -> [Float] {
+    private func mapBandsFromLanes(laneMagnitudes: [[Float]], sampleRate: Float) -> [Float] {
         var out = [Float](repeating: minDb, count: 31)
 
-        // Get or compute band ranges for this sample rate
-        let ranges: [BandRange]
-        if let cached = bandRangeCache[sampleRate] {
-            ranges = cached
+        let sizes = laneSizes(for: sampleRate)
+        let routes: [BandRoute]
+        if let cached = bandRouteCache[sampleRate] {
+            routes = cached
         } else {
-            ranges = computeBandRanges(sampleRate: sampleRate)
-            bandRangeCache[sampleRate] = ranges
+            routes = computeBandRoutes(sampleRate: sampleRate, laneSizes: sizes)
+            bandRouteCache[sampleRate] = routes
         }
 
         for k in 0..<31 {
-            let range = ranges[k]
+            let route = routes[k]
+            let dbMagnitudes = laneMagnitudes[route.laneIndex]
 
-            // Use MAX within the 1/3-octave band.
-            // This gives correct amplitude for pure tones (one dominant bin)
-            // and a representative level for broadband signals.
-            // Guard required: for narrow low-frequency bands (e.g. the 20Hz band at
-            // typical FFT sizes/sample rates), loBinIndex can exceed hiBinIndex when
-            // no bin center falls inside the band — constructing loBinIndex...hiBinIndex
-            // directly in that case traps (ClosedRange requires lowerBound <= upperBound).
-            if range.loBinIndex <= range.hiBinIndex {
-                for i in range.loBinIndex...range.hiBinIndex {
+            // Guard required (same reason as the single-FFT version): a band can be narrower than
+            // one bin even within its own dedicated lane, at the high end of that lane's supported
+            // sample-rate range. Constructing loBinIndex...hiBinIndex directly when empty traps.
+            if route.loBinIndex <= route.hiBinIndex {
+                for i in route.loBinIndex...route.hiBinIndex {
                     if dbMagnitudes[i] > out[k] {
                         out[k] = dbMagnitudes[i]
                     }
                 }
             }
-            // Fallback: if no bin falls in range, use nearest bin
             if out[k] == minDb {
-                out[k] = dbMagnitudes[range.fallbackBinIndex]
+                out[k] = dbMagnitudes[route.fallbackBinIndex]
             }
         }
         return out
     }
 
-    private func computeBandRanges(sampleRate: Float) -> [BandRange] {
-        var ranges: [BandRange] = []
-        let binWidth = sampleRate / Float(fftSize)
-        let half = fftSize / 2
-
+    private func computeBandRoutes(sampleRate: Float, laneSizes: [Int]) -> [BandRoute] {
+        var routes: [BandRoute] = []
         for k in 0..<31 {
+            let laneIndex = Self.bandLaneIndex[k]
+            let laneFftSize = laneSizes[laneIndex]
+            let binWidth = sampleRate / Float(laneFftSize)
+            let half = laneFftSize / 2
             let fc = centerFrequencies[k]
             let lo = fc * pow(2.0, -1.0 / 6.0)
             let hi = fc * pow(2.0,  1.0 / 6.0)
-
-            // Find bin indices that span the 1/3-octave band
             let loBinIndex = max(0, Int(ceil(lo / binWidth)))
             let hiBinIndex = min(half - 1, Int(floor(hi / binWidth)))
             let fallbackBinIndex = max(0, min(Int(round(fc / binWidth)), half - 1))
-
-            ranges.append(BandRange(
-                loBinIndex: loBinIndex,
-                hiBinIndex: hiBinIndex,
-                fallbackBinIndex: fallbackBinIndex
-            ))
+            routes.append(BandRoute(laneIndex: laneIndex, loBinIndex: loBinIndex,
+                                     hiBinIndex: hiBinIndex, fallbackBinIndex: fallbackBinIndex))
         }
-        return ranges
+        return routes
     }
 
     private func applyBallistics(bands: inout [BandData], targets: [Float]) {

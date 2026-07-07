@@ -5,11 +5,11 @@ import XCTest
 final class RTAAnalyzerTests: XCTestCase {
 
     func testFullScaleSineNear0dBFS() {
-        let analyzer = AdvancedDualSpectrumAnalyzer(fftSize: 2048)
+        let analyzer = AdvancedDualSpectrumAnalyzer()
         let sr: Float = 48_000
         let freq: Float = 1000
-        var samples = [Float](repeating: 0, count: 2048)
-        for i in 0..<2048 {
+        var samples = [Float](repeating: 0, count: 262144) // Use largest lane size
+        for i in 0..<262144 {
             samples[i] = sin(2 * Float.pi * freq * Float(i) / sr)
         }
         analyzer.updateSmearedSpectrums(
@@ -23,8 +23,8 @@ final class RTAAnalyzerTests: XCTestCase {
     }
 
     func testSilenceNearFloor() {
-        let analyzer = AdvancedDualSpectrumAnalyzer(fftSize: 2048)
-        let silence = [Float](repeating: 0, count: 2048)
+        let analyzer = AdvancedDualSpectrumAnalyzer()
+        let silence = [Float](repeating: 0, count: 262144) // Use largest lane size
         analyzer.updateSmearedSpectrums(
             inputSamples: silence, inputGainDb: 0,
             outputSamples: silence, outputGainDb: 0,
@@ -58,9 +58,9 @@ final class RTAAnalyzerTests: XCTestCase {
         // mapBinsToBands constructed loBinIndex...hiBinIndex directly. The app is
         // designed to support every sample rate up to 384kHz, so every tier needs
         // to be exercised here, not just the common 44.1/48kHz ones.
-        let analyzer = AdvancedDualSpectrumAnalyzer(fftSize: 8192)
+        let analyzer = AdvancedDualSpectrumAnalyzer()
         let supportedSampleRates: [Float] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000]
-        let silence = [Float](repeating: 0, count: 8192)
+        let silence = [Float](repeating: 0, count: 262144) // Use largest lane size
 
         for sr in supportedSampleRates {
             analyzer.updateSmearedSpectrums(
@@ -75,6 +75,29 @@ final class RTAAnalyzerTests: XCTestCase {
                 XCTAssertTrue(band.currentValue.isFinite, "sampleRate \(sr): band value should be finite")
                 XCTAssertGreaterThanOrEqual(band.currentValue, analyzer.minDb, "sampleRate \(sr): band value should not be below the floor")
                 XCTAssertLessThanOrEqual(band.currentValue, analyzer.maxDb, "sampleRate \(sr): band value should not exceed 0 dBFS")
+            }
+        }
+    }
+
+    func testMultiLaneBandRoutingAcrossAllSupportedSampleRatesUpTo384kHz() {
+        let analyzer = AdvancedDualSpectrumAnalyzer()
+        let supportedSampleRates: [Float] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000]
+
+        for sr in supportedSampleRates {
+            analyzer.assumedSampleRate = sr
+            // Use white noise as full-spectrum test signal
+            var signal = [Float](repeating: 0, count: 262144)
+            for i in 0..<262144 {
+                signal[i] = Float.random(in: -0.5...0.5)
+            }
+            analyzer.updateSmearedSpectrums(
+                inputSamples: signal, inputGainDb: 0,
+                outputSamples: signal, outputGainDb: 0,
+                sampleRate: sr
+            )
+            for band in analyzer.inputBands {
+                XCTAssertTrue(band.currentValue.isFinite, "sampleRate \(sr): band value should be finite")
+                XCTAssertGreaterThan(band.currentValue, analyzer.minDb, "sampleRate \(sr): white noise should register above the floor on every band")
             }
         }
     }
