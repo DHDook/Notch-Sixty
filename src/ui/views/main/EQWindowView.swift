@@ -193,13 +193,12 @@ struct EQWindowView: View {
     /// Meters and EQ curve column.
     private var metersAndCurveColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HostedContent {
-                LevelMetersView(meterStore: store.meterStore)
-            }
-            .frame(width: 40, height: 200)
-            .opacity(metersEnabledUI ? 1.0 : 0.35)
-            .saturation(metersEnabledUI ? 1.0 : 0.0)
-            .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+            LevelMetersView(meterStore: store.meterStore)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
+                .opacity(metersEnabledUI ? 1.0 : 0.35)
+                .saturation(metersEnabledUI ? 1.0 : 0.0)
+                .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
 
             EQCurveView(metersEnabled: metersEnabledUI)
                 .frame(width: 333, alignment: .leading)
@@ -251,12 +250,8 @@ struct EQWindowView: View {
             }
 
             // Dual 31-band real-time spectrum analyser
-            HostedContent {
-                RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
-                    .environmentObject(store)
-            }
-            .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 200)
-            .padding(.top, -8)
+            RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
+                .padding(.top, -8)
 
             Divider()
 
