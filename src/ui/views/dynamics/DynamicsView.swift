@@ -6,6 +6,7 @@
 // Layout: six-column inline view with per-control settings popovers.
 
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - Slider Row
@@ -2076,6 +2077,9 @@ final class InlineMeterBridge: ObservableObject {
     // Store reference for gain reduction metrics
     private weak var store: EqualiserStore?
 
+    // Combine cancellables for subscriptions
+    private var cancellables = Set<AnyCancellable>()
+
     // MARK: - Computed Metrics
 
     /// Input peak-to-RMS crest factor in dB. Higher = more dynamic.
@@ -2122,29 +2126,41 @@ final class InlineMeterBridge: ObservableObject {
     func register(with store: MeterStore, equaliserStore: EqualiserStore?) {
         self.store = equaliserStore
         obsPeakL.onUpdate = { [weak self] v in
-            guard let self else { return }
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
             self.snapshot.peakL = v
             if v > 0.99 { self.snapshot.ispInputLatched = true }
         }
         obsPeakR.onUpdate = { [weak self] v in
-            guard let self else { return }
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
             self.snapshot.peakR = v
             if v > 0.99 { self.snapshot.ispInputLatched = true }
         }
-        obsRmsL.onUpdate  = { [weak self] v in self?.snapshot.rmsL  = v }
-        obsRmsR.onUpdate  = { [weak self] v in self?.snapshot.rmsR  = v }
+        obsRmsL.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsL = v
+        }
+        obsRmsR.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsR = v
+        }
         obsPeakOutL.onUpdate = { [weak self] v in
-            guard let self else { return }
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
             self.snapshot.peakOutL = v
             if v > 0.99 { self.snapshot.ispOutputLatched = true }
         }
         obsPeakOutR.onUpdate = { [weak self] v in
-            guard let self else { return }
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
             self.snapshot.peakOutR = v
             if v > 0.99 { self.snapshot.ispOutputLatched = true }
         }
-        obsRmsOutL.onUpdate = { [weak self] v in self?.snapshot.rmsOutL = v }
-        obsRmsOutR.onUpdate = { [weak self] v in self?.snapshot.rmsOutR = v }
+        obsRmsOutL.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsOutL = v
+        }
+        obsRmsOutR.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsOutR = v
+        }
 
         store.addObserver(obsPeakL,    for: .inputPeakLeft)
         store.addObserver(obsPeakR,    for: .inputPeakRight)
@@ -2154,6 +2170,13 @@ final class InlineMeterBridge: ObservableObject {
         store.addObserver(obsPeakOutR, for: .outputPeakRight)
         store.addObserver(obsRmsOutL,  for: .outputRMSLeft)
         store.addObserver(obsRmsOutR,  for: .outputRMSRight)
+
+        // Reset snapshot to idle state when analytics meters are disabled
+        store.$analyticsMetersEnabled
+            .sink { [weak self] enabled in
+                if !enabled { self?.snapshot = InlineMeterSnapshot() }
+            }
+            .store(in: &cancellables)
     }
 }
 
