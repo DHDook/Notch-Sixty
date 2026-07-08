@@ -11,7 +11,6 @@ struct EQWindowView: View {
     @State private var showChannelHelp = false
     @State private var showMetersHelp = false
     @State private var metersEnabledUI = true
-    @State private var levelMetersEnabledUI = true
     @State private var showSnapshotCompare = false
     @State private var localVolume: Float = 1.0
     @State private var localIsMuted: Bool = false
@@ -104,16 +103,6 @@ struct EQWindowView: View {
                     .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
 
                 Text("Meters")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Toggle("", isOn: $levelMetersEnabledUI)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help("Toggle level meter visibility.")
-
-                Text("Levels")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -554,7 +543,6 @@ struct EQWindowView: View {
         .onAppear {
             store.meterStore.windowBecameVisible()
             metersEnabledUI = store.meterStore.metersEnabled
-            levelMetersEnabledUI = store.meterStore.levelMetersEnabled
             showStateResetAlert = store.didResetStateOnLaunch
         }
         .onChange(of: metersEnabledUI) { _, newValue in
@@ -562,12 +550,6 @@ struct EQWindowView: View {
         }
         .onReceive(store.meterStore.$metersEnabled.removeDuplicates()) { value in
             if metersEnabledUI != value { metersEnabledUI = value }
-        }
-        .onChange(of: levelMetersEnabledUI) { _, newValue in
-            store.meterStore.levelMetersEnabled = newValue
-        }
-        .onReceive(store.meterStore.$levelMetersEnabled.removeDuplicates()) { value in
-            if levelMetersEnabledUI != value { levelMetersEnabledUI = value }
         }
         .onDisappear {
             // Temporary diagnostic — remove after confirming.

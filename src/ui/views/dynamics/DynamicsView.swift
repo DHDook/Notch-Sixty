@@ -147,8 +147,11 @@ struct DynamicsInlineView: View {
 
     @State private var showDefinitions   = false
     @StateObject private var inlineMeterBridge = InlineMeterBridge()
+    @State private var rtaEnabledUI = true
     @State private var goniometerEnabledUI = true
     @State private var analyticsEnabledUI = true
+    @State private var gainStructureEnabledUI = true
+    @State private var levelMetersEnabledUI = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1654,18 +1657,6 @@ struct DynamicsInlineView: View {
 
     private var column5: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Analytics")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Toggle("", isOn: $analyticsEnabledUI)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.mini)
-                    .onChange(of: analyticsEnabledUI) { newValue in
-                        store.meterStore.analyticsMetersEnabled = newValue
-                    }
-            }
             InlinePhaseCorrelationView()
             InlineCrestFactorView(bridge: inlineMeterBridge)
             InlineIspLatchView(bridge: inlineMeterBridge)
@@ -1676,43 +1667,57 @@ struct DynamicsInlineView: View {
             InlineTruePeakMeterView()
         }
         .frame(minWidth: 110)
-        .onAppear {
-            analyticsEnabledUI = store.meterStore.analyticsMetersEnabled
-        }
-        .onChange(of: store.meterStore.analyticsMetersEnabled) { newValue in
-            analyticsEnabledUI = newValue
-        }
     }
 
     // MARK: - Column 6: Stereo Goniometer
 
     private var column6: some View {
         VStack(spacing: 8) {
-            HStack {
-                Text("Goniometer")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Toggle("", isOn: $goniometerEnabledUI)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.mini)
-                    .onChange(of: goniometerEnabledUI) { newValue in
-                        store.meterStore.goniometerEnabled = newValue
-                    }
-            }
             StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-                .opacity(goniometerEnabledUI ? 1.0 : 0.35)
             LatencyReadoutView(
                 totalLatencyMs: store.totalLatencyMs,
                 alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
                 sampleRate: store.streamSampleRate
             )
+            meterVisibilityMenu
         }
+    }
+
+    private var meterVisibilityMenu: some View {
+        Menu {
+            Toggle("RTA", isOn: $rtaEnabledUI)
+                .onChange(of: rtaEnabledUI) { newValue in
+                    store.meterStore.rtaEnabled = newValue
+                }
+            Toggle("Goniometer", isOn: $goniometerEnabledUI)
+                .onChange(of: goniometerEnabledUI) { newValue in
+                    store.meterStore.goniometerEnabled = newValue
+                }
+            Toggle("Analytics Meters", isOn: $analyticsEnabledUI)
+                .onChange(of: analyticsEnabledUI) { newValue in
+                    store.meterStore.analyticsMetersEnabled = newValue
+                }
+            Toggle("Gain Structure", isOn: $gainStructureEnabledUI)
+                .onChange(of: gainStructureEnabledUI) { newValue in
+                    store.meterStore.gainStructureEnabled = newValue
+                }
+            Toggle("Level Meters", isOn: $levelMetersEnabledUI)
+                .onChange(of: levelMetersEnabledUI) { newValue in
+                    store.meterStore.levelMetersEnabled = newValue
+                }
+        } label: {
+            Label("Meters", systemImage: "slider.horizontal.3")
+                .font(.caption2)
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.mini)
+        .frame(maxWidth: 130)
         .onAppear {
+            rtaEnabledUI = store.meterStore.rtaEnabled
             goniometerEnabledUI = store.meterStore.goniometerEnabled
-        }
-        .onChange(of: store.meterStore.goniometerEnabled) { newValue in
-            goniometerEnabledUI = newValue
+            analyticsEnabledUI = store.meterStore.analyticsMetersEnabled
+            gainStructureEnabledUI = store.meterStore.gainStructureEnabled
+            levelMetersEnabledUI = store.meterStore.levelMetersEnabled
         }
     }
 

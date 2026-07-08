@@ -6,22 +6,12 @@ import SwiftUI
 /// in a compact vertical stack.
 struct GainStructureMeterView: View {
     @EnvironmentObject private var store: EqualiserStore
-    @State private var gainStructureEnabledUI = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text("Gain Structure")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Toggle("", isOn: $gainStructureEnabledUI)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.mini)
-                    .onChange(of: gainStructureEnabledUI) { newValue in
-                        store.meterStore.gainStructureEnabled = newValue
-                    }
-            }
+            Text("Gain Structure")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
 
             if store.meterStore.metersEnabled && store.meterStore.gainStructureEnabled {
                 TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
@@ -42,12 +32,6 @@ struct GainStructureMeterView: View {
                     gainRow("Comp", 0); gainRow("Exp", 0); gainRow("Clip", 0); gainRow("Lim", 0)
                 }
             }
-        }
-        .onAppear {
-            gainStructureEnabledUI = store.meterStore.gainStructureEnabled
-        }
-        .onChange(of: store.meterStore.gainStructureEnabled) { newValue in
-            gainStructureEnabledUI = newValue
         }
     }
 
