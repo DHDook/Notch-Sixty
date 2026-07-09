@@ -365,23 +365,35 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                                copyCount * MemoryLayout<Float>.size)
                     }
                 }
-                // FFT the kernel to get its frequency-domain representation.
-                paddedKernel.withUnsafeMutableBufferPointer { realBuf in
-                    paddedImag.withUnsafeMutableBufferPointer { imagBuf in
-                        var kernelSC = DSPSplitComplex(
-                            realp: realBuf.baseAddress!,
-                            imagp: imagBuf.baseAddress!
-                        )
+                // Pack real kernel samples into halfN complex pairs for vDSP_fft_zrip
+                var packedReal = [Float](repeating: 0, count: halfN)
+                var packedImag = [Float](repeating: 0, count: halfN)
+                paddedKernel.withUnsafeMutableBufferPointer { kernelBuf in
+                    kernelBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
+                        packedReal.withUnsafeMutableBufferPointer { realBuf in
+                            packedImag.withUnsafeMutableBufferPointer { imagBuf in
+                                var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                                vDSP_ctoz(cBuf, 2, &kernelSC, 1, vDSP_Length(halfN))
+                            }
+                        }
+                    }
+                }
+
+                // Forward FFT on packed halfN buffer
+                packedReal.withUnsafeMutableBufferPointer { realBuf in
+                    packedImag.withUnsafeMutableBufferPointer { imagBuf in
+                        var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
                         vDSP_fft_zrip(setup, &kernelSC, 1, log2n, Int32(FFT_FORWARD))
                     }
                 }
+
                 // vDSP_fft_zrip applies a 2× scale on forward pass; normalise it out.
                 var invScale = Float(1.0 / Float(N))
                 // Use separate source/dest buffers to satisfy exclusivity.
-                var scaledKernel = [Float](repeating: 0, count: N)
-                var scaledImag   = [Float](repeating: 0, count: N)
-                vDSP_vsmul(&paddedKernel, 1, &invScale, &scaledKernel, 1, vDSP_Length(halfN + 1))
-                vDSP_vsmul(&paddedImag,   1, &invScale, &scaledImag,   1, vDSP_Length(halfN + 1))
+                var scaledKernel = [Float](repeating: 0, count: halfN)
+                var scaledImag   = [Float](repeating: 0, count: halfN)
+                vDSP_vsmul(&packedReal, 1, &invScale, &scaledKernel, 1, vDSP_Length(halfN))
+                vDSP_vsmul(&packedImag, 1, &invScale, &scaledImag,   1, vDSP_Length(halfN))
                 // Multiply the kernel magnitude into the accumulator.
                 for k in 0...halfN {
                     let re = Double(scaledKernel[k])
@@ -422,35 +434,78 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             }
         }
 
-        var irReal = [Float](repeating: 0, count: N)
-        for k in 0...halfN { irReal[k] = Float(mag[k]) }
-        for k in 1..<halfN { irReal[N - k] = irReal[k] }
-
-        var irImag = [Float](repeating: 0, count: N)
-        var sc = DSPSplitComplex(realp: &irReal, imagp: &irImag)
-        vDSP_fft_zrip(setup, &sc, 1, log2n, Int32(FFT_INVERSE))
-        var scaled = [Float](repeating: 0, count: N)
-        var invN = Float(1.0 / Float(N))
-        vDSP_vsmul(&irReal, 1, &invN, &scaled, 1, vDSP_Length(N))
-
-        var window = [Float](repeating: 0, count: N)
-        for i in 0..<N {
-            let x = 2.0 * Double.pi * Double(i) / Double(N - 1)
-            window[i] = Float(0.355768 - 0.487396 * cos(x) + 0.144232 * cos(2*x) - 0.012604 * cos(3*x))
+        // Build halfN-length packed target spectrum per vDSP convention:
+        // specReal[0] = DC, specImag[0] = Nyquist (packed together)
+        // specReal[1..halfN-1], specImag[1..halfN-1] = remaining complex bins
+        var specReal = [Float](repeating: 0, count: halfN)
+        var specImag = [Float](repeating: 0, count: halfN)
+        specReal[0] = Float(mag[0])        // DC
+        specImag[0] = Float(mag[halfN])    // Nyquist, packed per vDSP convention
+        for k in 1..<halfN {
+            specReal[k] = Float(mag[k])
+            specImag[k] = 0
         }
-        var windowed = [Float](repeating: 0, count: N)
-        vDSP_vmul(&scaled, 1, &window, 1, &windowed, 1, vDSP_Length(N))
 
-        var shifted = [Float](repeating: 0, count: N)
-        let h = N / 2
-        for i in 0..<N { shifted[(i + h) % N] = windowed[i] }
+        // Inverse FFT on packed halfN spectrum
+        specReal.withUnsafeMutableBufferPointer { realBuf in
+            specImag.withUnsafeMutableBufferPointer { imagBuf in
+                var sc = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                vDSP_fft_zrip(setup, &sc, 1, log2n, Int32(FFT_INVERSE))
 
-        var shiftedImag = [Float](repeating: 0, count: N)
-        var sc2 = DSPSplitComplex(realp: &shifted, imagp: &shiftedImag)
-        vDSP_fft_zrip(setup, &sc2, 1, log2n, Int32(FFT_FORWARD))
+                // Unpack halfN complex pairs into N real time-domain samples
+                var timeDomain = [Float](repeating: 0, count: N)
+                timeDomain.withUnsafeMutableBufferPointer { tdBuf in
+                    tdBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
+                        vDSP_ztoc(&sc, 1, cBuf, 2, vDSP_Length(halfN))
+                    }
+                }
 
-        memcpy(outReal, &shifted,      halfN * MemoryLayout<Float>.size)
-        memcpy(outImag, &shiftedImag,  halfN * MemoryLayout<Float>.size)
+                // Scale by 1/N on the correctly-unpacked N-length buffer
+                var invN = Float(1.0 / Float(N))
+                var scaled = [Float](repeating: 0, count: N)
+                vDSP_vsmul(&timeDomain, 1, &invN, &scaled, 1, vDSP_Length(N))
+
+                // Apply Blackman-Harris window
+                var window = [Float](repeating: 0, count: N)
+                for i in 0..<N {
+                    let x = 2.0 * Double.pi * Double(i) / Double(N - 1)
+                    window[i] = Float(0.355768 - 0.487396 * cos(x) + 0.144232 * cos(2*x) - 0.012604 * cos(3*x))
+                }
+                var windowed = [Float](repeating: 0, count: N)
+                vDSP_vmul(&scaled, 1, &window, 1, &windowed, 1, vDSP_Length(N))
+
+                // Circular shift by N/2
+                var shifted = [Float](repeating: 0, count: N)
+                let h = N / 2
+                for i in 0..<N { shifted[(i + h) % N] = windowed[i] }
+
+                // Re-pack shifted N-length buffer into halfN split-complex form before forward FFT
+                var shiftedReal = [Float](repeating: 0, count: halfN)
+                var shiftedImag = [Float](repeating: 0, count: halfN)
+                shifted.withUnsafeMutableBufferPointer { shiftBuf in
+                    shiftBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
+                        shiftedReal.withUnsafeMutableBufferPointer { realBuf in
+                            shiftedImag.withUnsafeMutableBufferPointer { imagBuf in
+                                var sc2 = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                                vDSP_ctoz(cBuf, 2, &sc2, 1, vDSP_Length(halfN))
+                            }
+                        }
+                    }
+                }
+
+                // Forward FFT on packed halfN buffer
+                shiftedReal.withUnsafeMutableBufferPointer { realBuf in
+                    shiftedImag.withUnsafeMutableBufferPointer { imagBuf in
+                        var sc2 = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                        vDSP_fft_zrip(setup, &sc2, 1, log2n, Int32(FFT_FORWARD))
+                    }
+                }
+
+                // Copy resulting halfN realp/imagp into output
+                memcpy(outReal, realBuf.baseAddress!, halfN * MemoryLayout<Float>.size)
+                memcpy(outImag, imagBuf.baseAddress!, halfN * MemoryLayout<Float>.size)
+            }
+        }
     }
 
     private static func alloc(_ count: Int) -> UnsafeMutablePointer<Float> {

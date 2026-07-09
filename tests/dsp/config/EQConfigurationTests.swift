@@ -1,4 +1,4 @@
-import XCTest
+ import XCTest
 @testable import Equaliser
 
 final class EQConfigurationTests: XCTestCase {

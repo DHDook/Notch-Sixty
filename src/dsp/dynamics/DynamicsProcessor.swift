@@ -1773,10 +1773,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
     }
     func setBassManagementCrossoverHz(_ hz: Float) {
-        _bassManagementCrossoverHzBits.store(floatBits(max(20.0, min(200.0, hz))), ordering: .relaxed)
+        let clamped = max(20.0, min(200.0, hz))
+        stageBassManagementCrossover(crossoverHz: clamped, slope: lastBassCrossoverSlope, crossoverType: lastBassCrossoverType)
+        lastBassCrossoverHz = clamped
     }
     func setBassManagementSlope(_ slope: BassCrossoverSlope) {
-        _bassManagementSlopeBits.store(Int32(slope.rawValue), ordering: .relaxed)
+        stageBassManagementCrossover(crossoverHz: lastBassCrossoverHz, slope: slope, crossoverType: lastBassCrossoverType)
+        lastBassCrossoverSlope = slope
     }
     func setLowBandGainDB(_ db: Float) {
         _lowBandGainDBBits.store(floatBits(max(-12.0, min(12.0, db))), ordering: .relaxed)
@@ -2126,7 +2129,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         return result
     }
     /// Called from the main thread when bass management parameters change.
-    private func stageBassManagementCrossover(crossoverHz: Float, slope: BassCrossoverSlope, crossoverType: CrossoverType) {
+    internal func stageBassManagementCrossover(crossoverHz: Float, slope: BassCrossoverSlope, crossoverType: CrossoverType) {
         let newCrossover = BassManagementCrossover(
             crossoverHz: crossoverHz,
             slope: slope,
@@ -2708,6 +2711,10 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Bass Management (before limiter, replaces mains high-pass and mono bass)
         processBassManagement(abl: abl, numCh: numCh, count: count)
+        // Defensive: if the crossover cascade ever diverges, zero NaN/Inf before it
+        // reaches the limiter or propagates further downstream — mirrors the safety
+        // net already used after processInfrasonicFilter / processSubBassPhaseAlignment.
+        DSPSafety.sanitizeAudioBufferList(abl.unsafeMutablePointer)
 
         // Stage 5: Soft Clipper + Brickwall Limiter.
         let oversampleOn = _oversamplingEnabled.load(ordering: .relaxed) != 0
@@ -3645,9 +3652,36 @@ final class DynamicsProcessor: @unchecked Sendable {
             bassManagementCrossover.processHighPass(bmHighR, count: count, state: bassManagementStateBuf, channelIndex: 1)
         }
 
-        // Sum low bands to get mono low
+        // Defense-in-depth: if crossover state becomes non-finite, reset it to prevent
+        // persistent corruption that would re-poison every future block.
+        let stateSize = bassManagementStateSize
+        var needsReset = false
+        for i in 0..<stateSize {
+            if !bassManagementStateBuf[i].isFinite {
+                needsReset = true
+                break
+            }
+        }
+        if needsReset {
+            bassManagementStateBuf.initialize(repeating: 0, count: stateSize)
+        }
+        if asymmetricEnabled {
+            let hpStateSize = mainsHighPassStateSize
+            var hpNeedsReset = false
+            for i in 0..<hpStateSize {
+                if !mainsHighPassStateBuf[i].isFinite {
+                    hpNeedsReset = true
+                    break
+                }
+            }
+            if hpNeedsReset {
+                mainsHighPassStateBuf.initialize(repeating: 0, count: hpStateSize)
+            }
+        }
+
+        // Sum low bands to get mono low (average to prevent +6 dB level bump)
         for i in 0..<count {
-            bmMonoLow[i] = bmLowL[i] + bmLowR[i]
+            bmMonoLow[i] = (bmLowL[i] + bmLowR[i]) * 0.5
         }
 
         // Apply infrasonic filter to sub path if target is .subOutputOnly or .both
@@ -3816,6 +3850,21 @@ final class DynamicsProcessor: @unchecked Sendable {
         guard softOn || limOn else { return }
         processSoftClipperAndLimiter(abl: abl, numCh: numCh, count: count,
                                       softOn: softOn, limOn: limOn)
+    }
+
+    /// Copies the current mono-low bass signal to an output buffer.
+    /// Called by RenderCallbackContext to populate monoLowOutputBuffer for .subMono output channels.
+    /// - Parameters:
+    ///   - dest: Destination buffer to copy the mono-low signal to.
+    ///   - frameCount: Number of frames to copy.
+    func copyMonoLowSignal(to dest: UnsafeMutablePointer<Float>, frameCount: Int) {
+        guard _bassManagementEnabled.load(ordering: .relaxed) != 0 else {
+            // If bass management is disabled, zero the output
+            dest.initialize(repeating: 0, count: frameCount)
+            return
+        }
+        let count = min(frameCount, storedMaxFrameCount)
+        memcpy(dest, bmMonoLow, count * MemoryLayout<Float>.size)
     }
 
     // MARK: - Module 1: De-Esser

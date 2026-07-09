@@ -1187,6 +1187,9 @@ final class RenderCallbackContext: @unchecked Sendable {
 
         dynamicsProcessor.process(bufferList: bufferList, frameCount: frameCount)
 
+        // Copy mono-low bass signal to output buffer for .subMono output channels
+        dynamicsProcessor.copyMonoLowSignal(to: monoLowOutputBuffer, frameCount: Int(frameCount))
+
         if oversamplingOn {
             processWithOversampling(bufferList: bufferList, frameCount: frameCount)
 
