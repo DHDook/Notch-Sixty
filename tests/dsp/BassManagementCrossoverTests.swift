@@ -188,4 +188,69 @@ final class BassManagementCrossoverTests: XCTestCase {
         XCTAssertNotEqual(coeffs48k, coeffs384k,
             "Changing sample rate from 48 kHz to 384 kHz must produce different crossover coefficients")
     }
+
+    // MARK: - Stability test with real signal
+
+    /// All crossover configurations must produce bounded, finite output when fed
+    /// a real, sustained signal. Silence cannot excite instability, so this test
+    /// uses a non-zero sine wave to catch unstable filter coefficients.
+    func testAllCrossoverConfigurations_RealSignal_ProducesBoundedOutput() {
+        let sampleRate = 48000.0
+        let frameCount = 4096
+
+        // A real, sustained signal — NOT silence. Silence cannot excite instability.
+        var testSignal = [Float](repeating: 0, count: frameCount)
+        for i in 0..<frameCount {
+            testSignal[i] = 0.5 * Float(sin(2.0 * .pi * 1000.0 * Double(i) / sampleRate))
+        }
+
+        let types: [CrossoverType] = [.linkwitzRiley, .butterworth, .bessel]
+        let slopes: [BassCrossoverSlope] = [.lr2, .lr4, .lr8]
+
+        for crossoverType in types {
+            for slope in slopes {
+                var crossover = BassManagementCrossover(
+                    crossoverHz: 80,
+                    slope: slope,
+                    sampleRate: sampleRate,
+                    crossoverType: crossoverType,
+                    coefficientDecouplingEnabled: true   // matches the real applyConfig() path
+                )
+
+                // Test processLowPass
+                var buf = testSignal
+                var state = [Float](repeating: 0, count: crossover.stateSizePerChannel)
+                state.withUnsafeMutableBufferPointer { statePtr in
+                    buf.withUnsafeMutableBufferPointer { bufPtr in
+                        crossover.processLowPass(bufPtr.baseAddress!, count: frameCount,
+                                                  state: statePtr.baseAddress!, channelIndex: 0)
+                    }
+                }
+
+                for sample in buf {
+                    XCTAssertTrue(sample.isFinite,
+                        "\(crossoverType)/\(slope) LP produced non-finite output")
+                    XCTAssertLessThan(abs(sample), 10.0,
+                        "\(crossoverType)/\(slope) LP output diverged: \(sample)")
+                }
+
+                // Test processHighPass with fresh buffer/state
+                buf = testSignal
+                state = [Float](repeating: 0, count: crossover.stateSizePerChannel)
+                state.withUnsafeMutableBufferPointer { statePtr in
+                    buf.withUnsafeMutableBufferPointer { bufPtr in
+                        crossover.processHighPass(bufPtr.baseAddress!, count: frameCount,
+                                                   state: statePtr.baseAddress!, channelIndex: 0)
+                    }
+                }
+
+                for sample in buf {
+                    XCTAssertTrue(sample.isFinite,
+                        "\(crossoverType)/\(slope) HP produced non-finite output")
+                    XCTAssertLessThan(abs(sample), 10.0,
+                        "\(crossoverType)/\(slope) HP output diverged: \(sample)")
+                }
+            }
+        }
+    }
 }

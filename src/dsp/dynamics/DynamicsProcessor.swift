@@ -2118,13 +2118,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         )
 
         // Convert BiquadCoefficients (Double) to the engine's Float tuple format
+        // BiquadCoefficients.a1/a2 are NOT pre-negated — must negate for DF2T recursion
         var result = Array(repeating: identity, count: maxSections)
         for (i, c) in biquadSections.prefix(maxSections).enumerated() {
             result[i] = (b0:  Float(c.b0),
                          b1:  Float(c.b1),
                          b2:  Float(c.b2),
-                         na1: Float(c.a1),
-                         na2: Float(c.a2))
+                         na1: Float(-c.a1),
+                         na2: Float(-c.a2))
         }
         return result
     }
@@ -3655,27 +3656,29 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Defense-in-depth: if crossover state becomes non-finite, reset it to prevent
         // persistent corruption that would re-poison every future block.
         let stateSize = bassManagementStateSize
+        let totalStateSize = stateSize * 2   // both channels
         var needsReset = false
-        for i in 0..<stateSize {
+        for i in 0..<totalStateSize {
             if !bassManagementStateBuf[i].isFinite {
                 needsReset = true
                 break
             }
         }
         if needsReset {
-            bassManagementStateBuf.initialize(repeating: 0, count: stateSize)
+            bassManagementStateBuf.initialize(repeating: 0, count: totalStateSize)
         }
         if asymmetricEnabled {
             let hpStateSize = mainsHighPassStateSize
+            let hpTotalStateSize = hpStateSize * 2   // both channels
             var hpNeedsReset = false
-            for i in 0..<hpStateSize {
+            for i in 0..<hpTotalStateSize {
                 if !mainsHighPassStateBuf[i].isFinite {
                     hpNeedsReset = true
                     break
                 }
             }
             if hpNeedsReset {
-                mainsHighPassStateBuf.initialize(repeating: 0, count: hpStateSize)
+                mainsHighPassStateBuf.initialize(repeating: 0, count: hpTotalStateSize)
             }
         }
 

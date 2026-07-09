@@ -36,9 +36,11 @@ enum CrossoverGroupDelayEngine {
 
         if let sections = crossoverSections {
             for section in sections {
+                // SectionArray stores negated a1/a2 (na1/na2) for DF2T recursion.
+                // Phase calculation expects standard non-negated coefficients, so negate back.
                 let sectionDelay = biquadGroupDelayPublic(
                     b0: section.b0, b1: section.b1, b2: section.b2,
-                    a1: section.na1, a2: section.na2,
+                    a1: -section.na1, a2: -section.na2,
                     frequencies: frequencies, sampleRate: sampleRate
                 )
                 for i in 0..<groupDelay.count { groupDelay[i] += sectionDelay[i] }

@@ -69,11 +69,11 @@ struct BassManagementCrossover {
                         frequency: warpedCrossoverHz)     // ← pre-warped frequency
                     lowPassSections.append((
                         b0: Float(lpCoeffs.b0), b1: Float(lpCoeffs.b1), b2: Float(lpCoeffs.b2),
-                        na1: Float(lpCoeffs.a1), na2: Float(lpCoeffs.a2)
+                        na1: Float(-lpCoeffs.a1), na2: Float(-lpCoeffs.a2)
                     ))
                     highPassSections.append((
                         b0: Float(hpCoeffs.b0), b1: Float(hpCoeffs.b1), b2: Float(hpCoeffs.b2),
-                        na1: Float(hpCoeffs.a1), na2: Float(hpCoeffs.a2)
+                        na1: Float(-hpCoeffs.a1), na2: Float(-hpCoeffs.a2)
                     ))
                 }
             case .lr4:
@@ -114,21 +114,21 @@ struct BassManagementCrossover {
                 b0: Float(lpCoeffs.b0),
                 b1: Float(lpCoeffs.b1),
                 b2: Float(lpCoeffs.b2),
-                na1: Float(lpCoeffs.a1),  // a1 is already negated in BiquadCoefficients
-                na2: Float(lpCoeffs.a2)   // a2 is already negated in BiquadCoefficients
+                na1: Float(-lpCoeffs.a1),  // BiquadCoefficients.a1 is NOT pre-negated — see BiquadMath.normalise()
+                na2: Float(-lpCoeffs.a2)
             ))
             highPassSections.append((
                 b0: Float(hpCoeffs.b0),
                 b1: Float(hpCoeffs.b1),
                 b2: Float(hpCoeffs.b2),
-                na1: Float(hpCoeffs.a1),
-                na2: Float(hpCoeffs.a2)
+                na1: Float(-hpCoeffs.a1),
+                na2: Float(-hpCoeffs.a2)
             ))
         }
     }
 
     /// Direct Form II Transposed biquad processing.
-    /// na1 and na2 are pre-negated (as returned by BiquadMath).
+    /// na1 and na2 must be negated BiquadCoefficients.a1/a2 values (caller is responsible for negation).
     @inline(__always)
     private static func processBiquad(
         _ x: Float,
