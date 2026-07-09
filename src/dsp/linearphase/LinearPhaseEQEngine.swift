@@ -447,9 +447,9 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
         }
 
         // Inverse FFT on packed halfN spectrum
-        specReal.withUnsafeMutableBufferPointer { realBuf in
-            specImag.withUnsafeMutableBufferPointer { imagBuf in
-                var sc = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+        specReal.withUnsafeMutableBufferPointer { specRealBuf in
+            specImag.withUnsafeMutableBufferPointer { specImagBuf in
+                var sc = DSPSplitComplex(realp: specRealBuf.baseAddress!, imagp: specImagBuf.baseAddress!)
                 vDSP_fft_zrip(setup, &sc, 1, log2n, Int32(FFT_INVERSE))
 
                 // Unpack halfN complex pairs into N real time-domain samples
@@ -484,26 +484,27 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                 var shiftedImag = [Float](repeating: 0, count: halfN)
                 shifted.withUnsafeMutableBufferPointer { shiftBuf in
                     shiftBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
-                        shiftedReal.withUnsafeMutableBufferPointer { realBuf in
-                            shiftedImag.withUnsafeMutableBufferPointer { imagBuf in
-                                var sc2 = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
-                                vDSP_ctoz(cBuf, 2, &sc2, 1, vDSP_Length(halfN))
+                        shiftedReal.withUnsafeMutableBufferPointer { shiftedRealBuf in
+                            shiftedImag.withUnsafeMutableBufferPointer { shiftedImagBuf in
+                                var packSC = DSPSplitComplex(realp: shiftedRealBuf.baseAddress!, imagp: shiftedImagBuf.baseAddress!)
+                                vDSP_ctoz(cBuf, 2, &packSC, 1, vDSP_Length(halfN))
                             }
                         }
                     }
                 }
 
-                // Forward FFT on packed halfN buffer
-                shiftedReal.withUnsafeMutableBufferPointer { realBuf in
-                    shiftedImag.withUnsafeMutableBufferPointer { imagBuf in
-                        var sc2 = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
-                        vDSP_fft_zrip(setup, &sc2, 1, log2n, Int32(FFT_FORWARD))
+                // Forward FFT on packed halfN buffer, and copy the result to outReal/outImag —
+                // both happen inside this same closure so the pointers are guaranteed to refer
+                // to shiftedReal/shiftedImag (the actual final result), not an outer shadowed name.
+                shiftedReal.withUnsafeMutableBufferPointer { shiftedRealBuf in
+                    shiftedImag.withUnsafeMutableBufferPointer { shiftedImagBuf in
+                        var fwdSC = DSPSplitComplex(realp: shiftedRealBuf.baseAddress!, imagp: shiftedImagBuf.baseAddress!)
+                        vDSP_fft_zrip(setup, &fwdSC, 1, log2n, Int32(FFT_FORWARD))
+
+                        memcpy(outReal, shiftedRealBuf.baseAddress!, halfN * MemoryLayout<Float>.size)
+                        memcpy(outImag, shiftedImagBuf.baseAddress!, halfN * MemoryLayout<Float>.size)
                     }
                 }
-
-                // Copy resulting halfN realp/imagp into output
-                memcpy(outReal, realBuf.baseAddress!, halfN * MemoryLayout<Float>.size)
-                memcpy(outImag, imagBuf.baseAddress!, halfN * MemoryLayout<Float>.size)
             }
         }
     }

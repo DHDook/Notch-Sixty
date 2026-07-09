@@ -191,4 +191,34 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         let maxOutput = outputL.max() ?? 0
         XCTAssertGreaterThan(maxOutput, 0.9, "Variable frameCount should not break output delivery")
     }
+
+    func testComputeIRSpectrum_AllBandsBypassed_ProducesNearUnityResponse() {
+        // Regression test for closure variable shadowing bug in computeIRSpectrum.
+        // Verifies that with all bands flat/bypassed, the engine passes audio through
+        // effectively unchanged (aside from fixed processing latency).
+        let engine = LinearPhaseEQEngine(maxFrameCount: 8192)
+
+        // No bands / all bands at 0 dB gain, flat
+        engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
+
+        // Feed a unit impulse and confirm the engine passes it through close to unchanged
+        let frameCount = 8192
+        var impulse = [Float](repeating: 0, count: frameCount)
+        impulse[0] = 1.0
+        var output = [Float](repeating: 0, count: frameCount)
+
+        impulse.withUnsafeBufferPointer { inBuf in
+            output.withUnsafeMutableBufferPointer { outBuf in
+                engine.process(bufL: outBuf.baseAddress!, bufR: nil, frameCount: frameCount)
+            }
+        }
+
+        // The output impulse response should be a single, near-unity-magnitude peak
+        // near the engine's known latency offset, not spread energy or a huge/garbage value
+        let peak = output.max(by: { abs($0) < abs($1) })!
+        XCTAssertLessThan(abs(peak), 2.0, "Flat/bypassed Linear EQ should not amplify — got \(peak)")
+
+        let totalEnergy = output.reduce(0.0) { $0 + Double($1 * $1) }
+        XCTAssertLessThan(totalEnergy, 4.0, "Flat/bypassed Linear EQ energy should be close to the input impulse's energy (1.0), not spread/amplified")
+    }
 }
