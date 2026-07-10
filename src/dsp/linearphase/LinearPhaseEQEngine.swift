@@ -264,7 +264,20 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
 
                 var irSC = DSPSplitComplex(realp: UnsafeMutablePointer(mutating: specReal),
                                            imagp: UnsafeMutablePointer(mutating: specImag))
+
+                // Index 0 is special in vDSP's packed real-FFT format: realp[0] is the DC bin,
+                // imagp[0] is the Nyquist bin — two independent real values, not one complex
+                // number. A plain complex multiply at this index is mathematically wrong (it
+                // mixes DC and Nyquist energy together). Handle it as two real multiplies.
+                let sigNyquist = sc.imagp[0]
+                let irNyquist  = irSC.imagp[0]
+                sc.imagp[0]    = 0
+                irSC.imagp[0]  = 0
+
                 vDSP_zvmul(&sc, 1, &irSC, 1, &sc, 1, vDSP_Length(halfN), 1)
+
+                sc.imagp[0]   = sigNyquist * irNyquist   // correct Nyquist product
+                irSC.imagp[0] = irNyquist                // MUST restore — irSC points to persistent IR spectrum
 
                 vDSP_fft_zrip(setup, &sc, 1, log2n, Int32(FFT_INVERSE))
 

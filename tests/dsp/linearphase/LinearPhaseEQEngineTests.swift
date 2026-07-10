@@ -221,4 +221,52 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         let totalEnergy = output.reduce(0.0) { $0 + Double($1 * $1) }
         XCTAssertLessThan(totalEnergy, 4.0, "Flat/bypassed Linear EQ energy should be close to the input impulse's energy (1.0), not spread/amplified")
     }
+
+    func testProcessChannel_FlatIR_UnityGain() {
+        // Regression test for DC/Nyquist bin mishandling and gain scaling.
+        // Tests pure DC, pure Nyquist, and overall gain ratio.
+        let engine = LinearPhaseEQEngine(maxFrameCount: 8192)
+        engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
+
+        // Test 1 — pure DC signal: exercises the DC bin specifically.
+        // Before Fix 1, sigNyquist·irNyquist gets subtracted into this bin every block.
+        var dcSignal = [Float](repeating: 0.5, count: 8192)
+        engine.process(bufL: &dcSignal, bufR: nil, frameCount: 8192)
+        // After the engine's inherent processing latency settles, samples should be
+        // close to 0.5 — not decayed, offset, or drifting from block to block.
+        let dcSettled = Array(dcSignal[2048..<8192])  // skip latency
+        let dcAvg = dcSettled.reduce(0.0, +) / Float(dcSettled.count)
+        XCTAssertEqual(dcAvg, 0.5, accuracy: 0.1, "DC signal should pass through at ~0.5 level")
+
+        // Test 2 — alternating +1/-1 (pure Nyquist-frequency signal): exercises the
+        // Nyquist bin specifically. Before Fix 1, this bin gets contaminated with
+        // DC-derived energy every block.
+        var nyquistSignal = (0..<8192).map { $0 % 2 == 0 ? Float(1.0) : Float(-1.0) }
+        engine.process(bufL: &nyquistSignal, bufR: nil, frameCount: 8192)
+        // Should remain a clean alternating +1/-1 pattern after settling, not decay
+        // or grow noisy over successive blocks.
+        let nyquistSettled = Array(nyquistSignal[2048..<8192])
+        var nyquistDeviations = 0
+        for i in 0..<nyquistSettled.count {
+            let expected: Float = (i + 2048) % 2 == 0 ? 1.0 : -1.0
+            if abs(nyquistSettled[i] - expected) > 0.2 {
+                nyquistDeviations += 1
+            }
+        }
+        XCTAssertLessThan(nyquistDeviations, nyquistSettled.count / 4, "Nyquist signal should maintain alternating pattern")
+
+        // Test 3 — moderate sine wave: checks overall gain is ~1.0x, not ~2.0x (Fix 2).
+        var sine = (0..<8192).map { Float(0.5 * sin(2.0 * Double.pi * 1000.0 * Double($0) / 48000.0)) }
+        var sineOutput = sine
+        engine.process(bufL: &sineOutput, bufR: nil, frameCount: 8192)
+        // Compare RMS of a settled region (skip the first ~fftSize samples of latency)
+        // of sineOutput against the same region of the original sine. Ratio should be
+        // close to 1.0. If it's close to 2.0, Fix 2 is confirmed necessary.
+        let sineInputSettled = Array(sine[2048..<8192])
+        let sineOutputSettled = Array(sineOutput[2048..<8192])
+        let inputRMS = sqrt(sineInputSettled.map { $0 * $0 }.reduce(0, +) / Float(sineInputSettled.count))
+        let outputRMS = sqrt(sineOutputSettled.map { $0 * $0 }.reduce(0, +) / Float(sineOutputSettled.count))
+        let gainRatio = outputRMS / inputRMS
+        XCTAssertEqual(gainRatio, 1.0, accuracy: 0.5, "Overall gain should be ~1.0x, got \(gainRatio)")
+    }
 }
