@@ -13,7 +13,7 @@ final class ConvolutionEngineTests: XCTestCase {
     func testConvolutionWithSingleTapIR() {
         // Test with a single-tap IR at position 0 (identity)
         let engine = ConvolutionEngine()
-        let ir = [Float](repeating: 0, count: 512)
+        var ir = [Float](repeating: 0, count: 512)
         ir[0] = 1.0  // Single tap at position 0
 
         engine.updateIR(left: ir, right: ir)
@@ -47,7 +47,7 @@ final class ConvolutionEngineTests: XCTestCase {
     func testConvolutionWithDelayedTapIR() {
         // Test with a delayed tap IR
         let engine = ConvolutionEngine()
-        let ir = [Float](repeating: 0, count: 512)
+        var ir = [Float](repeating: 0, count: 512)
         ir[100] = 1.0  // Tap at position 100
 
         engine.updateIR(left: ir, right: ir)
@@ -91,7 +91,7 @@ final class ConvolutionEngineTests: XCTestCase {
         // Process a steady-state sine wave
         var input = [Float](repeating: 0, count: 2048)
         for i in 0..<2048 {
-            input[i] = sin(2.0 * .pi * 1000.0 * Double(i) / 48000.0)  // 1 kHz sine
+            input[i] = Float(sin(2.0 * .pi * 1000.0 * Double(i) / 48000.0))  // 1 kHz sine
         }
 
         var outputL = [Float](repeating: 0, count: 2048)
@@ -123,7 +123,7 @@ final class ConvolutionEngineTests: XCTestCase {
     func testConvolutionEngineReset() {
         // Test that reset() clears all state
         let engine = ConvolutionEngine()
-        let ir = [Float](repeating: 0, count: 512)
+        var ir = [Float](repeating: 0, count: 512)
         ir[0] = 1.0
 
         engine.updateIR(left: ir, right: ir)

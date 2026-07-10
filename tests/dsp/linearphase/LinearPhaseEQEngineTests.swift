@@ -86,7 +86,7 @@ final class LinearPhaseEQEngineTests: XCTestCase {
             frequency: 1000.0,
             q: 1.0,
             gain: 6.0,
-            filterType: .peaking,
+            filterType: .parametric,
             bypass: false
         )
 
@@ -95,7 +95,7 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         // Process a sine wave through the engine
         var input = [Float](repeating: 0, count: 4096)
         for i in 0..<4096 {
-            input[i] = sin(2.0 * .pi * 1000.0 * Double(i) / 48000.0)
+            input[i] = Float(sin(2.0 * .pi * 1000.0 * Double(i) / 48000.0))
         }
 
         var outputL = [Float](repeating: 0, count: 4096)
