@@ -1,4 +1,6 @@
 import XCTest
+import CoreAudio
+import AudioToolbox
 @testable import Equaliser
 
 /// Tests for the infrasonic filter stability.
@@ -15,8 +17,8 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         // Enable the infrasonic filter at default settings
@@ -28,47 +30,28 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
         )
         processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
-        var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-        var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-        var abl = AudioBufferList()
-        abl.mNumberBuffers = 2
+        var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+        defer { freeTestBufferList(bufferList: bufferList) }
 
-        var buffers = [AudioBuffer](
-            count: 2,
-            repeating: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: 512 * MemoryLayout<Float>.size,
-                mData: nil
-            )
-        )
-        buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-        buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-        abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
+        let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
 
         // Process several thousand frames with unit impulse
         for i in 0..<10000 {
-            // Set first sample to 1.0 (unit impulse) for first frame only
-            bufferL[0] = (i == 0) ? 1.0 : 0.0
-            bufferR[0] = (i == 0) ? 1.0 : 0.0
+            if let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+                bufL[0] = (i == 0) ? 1.0 : 0.0
+                bufR[0] = (i == 0) ? 1.0 : 0.0
+            }
 
-            processor.process(
-                abl: ablPtr,
-                inputMeterStorage: nil,
-                inputRmsStorage: nil,
-                outputMeterStorage: nil,
-                outputRmsStorage: nil,
-                numCh: 2,
-                count: 512
-            )
+            processor.process(bufferList: &bufferList, frameCount: 512)
 
-            // Verify all output samples are finite and bounded
             for j in 0..<512 {
-                XCTAssertTrue(bufferL[j].isFinite, "Output sample L[\(j)] is not finite at frame \(i)")
-                XCTAssertTrue(bufferR[j].isFinite, "Output sample R[\(j)] is not finite at frame \(i)")
-                XCTAssertTrue(abs(bufferL[j]) < 2.0, "Output sample L[\(j)] exceeds bound at frame \(i)")
-                XCTAssertTrue(abs(bufferR[j]) < 2.0, "Output sample R[\(j)] exceeds bound at frame \(i)")
+                guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                      let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                XCTAssertTrue(bufL[j].isFinite, "Output sample L[\(j)] is not finite at frame \(i)")
+                XCTAssertTrue(bufR[j].isFinite, "Output sample R[\(j)] is not finite at frame \(i)")
+                XCTAssertTrue(abs(bufL[j]) < 2.0, "Output sample L[\(j)] exceeds bound at frame \(i)")
+                XCTAssertTrue(abs(bufR[j]) < 2.0, "Output sample R[\(j)] exceeds bound at frame \(i)")
             }
         }
     }
@@ -78,8 +61,8 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         let config = InfrasonicFilterConfig(
@@ -90,49 +73,31 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
         )
         processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
-        var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-        var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-        var abl = AudioBufferList()
-        abl.mNumberBuffers = 2
+        var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+        defer { freeTestBufferList(bufferList: bufferList) }
 
-        var buffers = [AudioBuffer](
-            count: 2,
-            repeating: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: 512 * MemoryLayout<Float>.size,
-                mData: nil
-            )
-        )
-        buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-        buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-        abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
+        let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
 
         // Process several thousand frames with white noise
         for i in 0..<5000 {
-            // Fill with white noise at -6 dBFS
-            for j in 0..<512 {
-                bufferL[j] = Float.random(in: -0.5...0.5)
-                bufferR[j] = Float.random(in: -0.5...0.5)
+            if let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+                // Fill with white noise at -6 dBFS
+                for j in 0..<512 {
+                    bufL[j] = Float.random(in: -0.5...0.5)
+                    bufR[j] = Float.random(in: -0.5...0.5)
+                }
             }
 
-            processor.process(
-                abl: ablPtr,
-                inputMeterStorage: nil,
-                inputRmsStorage: nil,
-                outputMeterStorage: nil,
-                outputRmsStorage: nil,
-                numCh: 2,
-                count: 512
-            )
+            processor.process(bufferList: &bufferList, frameCount: 512)
 
-            // Verify all output samples are finite and bounded
             for j in 0..<512 {
-                XCTAssertTrue(bufferL[j].isFinite, "Output sample L[\(j)] is not finite at frame \(i)")
-                XCTAssertTrue(bufferR[j].isFinite, "Output sample R[\(j)] is not finite at frame \(i)")
-                XCTAssertTrue(abs(bufferL[j]) < 2.0, "Output sample L[\(j)] exceeds bound at frame \(i)")
-                XCTAssertTrue(abs(bufferR[j]) < 2.0, "Output sample R[\(j)] exceeds bound at frame \(i)")
+                guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                      let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                XCTAssertTrue(bufL[j].isFinite, "Output sample L[\(j)] is not finite at frame \(i)")
+                XCTAssertTrue(bufR[j].isFinite, "Output sample R[\(j)] is not finite at frame \(i)")
+                XCTAssertTrue(abs(bufL[j]) < 2.0, "Output sample L[\(j)] exceeds bound at frame \(i)")
+                XCTAssertTrue(abs(bufR[j]) < 2.0, "Output sample R[\(j)] exceeds bound at frame \(i)")
             }
         }
     }
@@ -144,30 +109,16 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         let slopes: [InfrasonicFilterConfig.InfrasonicSlope] = [.db24, .db48, .db96]
 
-        var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-        var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-        var abl = AudioBufferList()
-        abl.mNumberBuffers = 2
+        var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+        defer { freeTestBufferList(bufferList: bufferList) }
 
-        var buffers = [AudioBuffer](
-            count: 2,
-            repeating: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: 512 * MemoryLayout<Float>.size,
-                mData: nil
-            )
-        )
-        buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-        buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-        abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
+        let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
 
         // Switch slope every callback for several hundred callbacks
         for i in 0..<500 {
@@ -180,33 +131,34 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
             )
             processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
-            // Fill with white noise
-            for j in 0..<512 {
-                bufferL[j] = Float.random(in: -0.5...0.5)
-                bufferR[j] = Float.random(in: -0.5...0.5)
+            if let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+                // Fill with white noise
+                for j in 0..<512 {
+                    bufL[j] = Float.random(in: -0.5...0.5)
+                    bufR[j] = Float.random(in: -0.5...0.5)
+                }
             }
 
-            processor.process(
-                abl: ablPtr,
-                inputMeterStorage: nil,
-                inputRmsStorage: nil,
-                outputMeterStorage: nil,
-                outputRmsStorage: nil,
-                numCh: 2,
-                count: 512
-            )
+            processor.process(bufferList: &bufferList, frameCount: 512)
 
-            // Verify all output samples are finite and bounded
+            var bufferLValues: [Float] = []
+            var bufferRValues: [Float] = []
+
             for j in 0..<512 {
-                XCTAssertTrue(bufferL[j].isFinite, "Output sample L[\(j)] is not finite at frame \(i)")
-                XCTAssertTrue(bufferR[j].isFinite, "Output sample R[\(j)] is not finite at frame \(i)")
-                XCTAssertTrue(abs(bufferL[j]) < 2.0, "Output sample L[\(j)] exceeds bound at frame \(i)")
-                XCTAssertTrue(abs(bufferR[j]) < 2.0, "Output sample R[\(j)] exceeds bound at frame \(i)")
+                guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                      let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                XCTAssertTrue(bufL[j].isFinite, "Output sample L[\(j)] is not finite at frame \(i)")
+                XCTAssertTrue(bufR[j].isFinite, "Output sample R[\(j)] is not finite at frame \(i)")
+                XCTAssertTrue(abs(bufL[j]) < 2.0, "Output sample L[\(j)] exceeds bound at frame \(i)")
+                XCTAssertTrue(abs(bufR[j]) < 2.0, "Output sample R[\(j)] exceeds bound at frame \(i)")
+                bufferLValues.append(bufL[j])
+                bufferRValues.append(bufR[j])
             }
 
             // Verify channels aren't swapped/corrupted (they should be similar for identical input)
             // Allow some tolerance due to different filter states, but they should be correlated
-            let correlation = zip(bufferL, bufferR).map { abs($0 - $1) }.reduce(0, +) / Float(512)
+            let correlation = zip(bufferLValues, bufferRValues).map { abs($0 - $1) }.reduce(0, +) / Float(512)
             XCTAssertTrue(correlation < 1.0, "Channels appear swapped/corrupted at frame \(i)")
         }
     }
@@ -219,8 +171,8 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
         for slope in slopes {
             let processor = DynamicsProcessor(
                 channelCount: 2,
-                maxFrameCount: 512,
-                sampleRate: 48000.0
+                sampleRate: 48000.0,
+                maxFrameCount: 512
             )
 
             let config = InfrasonicFilterConfig(
@@ -231,43 +183,26 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
             )
             processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
-            var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-            var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-            var abl = AudioBufferList()
-            abl.mNumberBuffers = 2
+            var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+            defer { freeTestBufferList(bufferList: bufferList) }
 
-            var buffers = [AudioBuffer](
-                count: 2,
-                repeating: AudioBuffer(
-                    mNumberChannels: 1,
-                    mDataByteSize: 512 * MemoryLayout<Float>.size,
-                    mData: nil
-                )
-            )
-            buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-            buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-            abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-            let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
+            let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
 
             // Process several frames
             for i in 0..<1000 {
-                bufferL[0] = (i == 0) ? 1.0 : 0.0
-                bufferR[0] = (i == 0) ? 1.0 : 0.0
+                if let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                   let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+                    bufL[0] = (i == 0) ? 1.0 : 0.0
+                    bufR[0] = (i == 0) ? 1.0 : 0.0
+                }
 
-                processor.process(
-                    abl: ablPtr,
-                    inputMeterStorage: nil,
-                    inputRmsStorage: nil,
-                    outputMeterStorage: nil,
-                    outputRmsStorage: nil,
-                    numCh: 2,
-                    count: 512
-                )
+                processor.process(bufferList: &bufferList, frameCount: 512)
 
                 for j in 0..<512 {
-                    XCTAssertTrue(bufferL[j].isFinite, "Slope \(slope): Output sample L[\(j)] is not finite at frame \(i)")
-                    XCTAssertTrue(bufferR[j].isFinite, "Slope \(slope): Output sample R[\(j)] is not finite at frame \(i)")
+                    guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+                          let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    XCTAssertTrue(bufL[j].isFinite, "Slope \(slope): Output sample L[\(j)] is not finite at frame \(i)")
+                    XCTAssertTrue(bufR[j].isFinite, "Slope \(slope): Output sample R[\(j)] is not finite at frame \(i)")
                 }
             }
         }

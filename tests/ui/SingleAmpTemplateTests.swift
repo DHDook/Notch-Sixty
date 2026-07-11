@@ -2,7 +2,7 @@ import XCTest
 @testable import Equaliser
 import SwiftUI
 
-/// Tests for the Single Amp template in OutputChannelMatrixView.
+@MainActor
 final class SingleAmpTemplateTests: XCTestCase {
 
     func testApplySingleAmpTemplateSetsFullRangeBandCount() throws {
