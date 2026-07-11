@@ -271,7 +271,7 @@ struct OutputChannelMatrixView: View {
 
     // MARK: - Topology Templates
 
-    private func applySingleAmpTemplate() {
+    func applySingleAmpTemplate() {
         store.activeCrossoverConfig.bandCount = .fullRange
         store.outputChannelMatrix.channels = [
             OutputChannelConfig(label: "Left", source: .mainsLeft, target: nil, isEnabled: true),
@@ -279,7 +279,7 @@ struct OutputChannelMatrixView: View {
         ]
     }
 
-    private func applyVerticalBiAmpTemplate() {
+    func applyVerticalBiAmpTemplate() {
         store.activeCrossoverConfig.bandCount = .biAmp
         store.outputChannelMatrix.channels = [
             OutputChannelConfig(label: "Left High", source: .mainsLeftHigh, target: nil, isEnabled: true),
@@ -289,7 +289,7 @@ struct OutputChannelMatrixView: View {
         ]
     }
 
-    private func applyHorizontalBiAmpTemplate() {
+    func applyHorizontalBiAmpTemplate() {
         store.activeCrossoverConfig.bandCount = .biAmp
         store.outputChannelMatrix.channels = [
             OutputChannelConfig(label: "Left High", source: .mainsLeftHigh, target: nil, isEnabled: true),
@@ -299,7 +299,7 @@ struct OutputChannelMatrixView: View {
         ]
     }
 
-    private func applyVerticalTriAmpTemplate() {
+    func applyVerticalTriAmpTemplate() {
         store.activeCrossoverConfig.bandCount = .triAmp
         store.outputChannelMatrix.channels = [
             OutputChannelConfig(label: "Left High", source: .mainsLeftHigh, target: nil, isEnabled: true),
@@ -311,7 +311,7 @@ struct OutputChannelMatrixView: View {
         ]
     }
 
-    private func applyHorizontalTriAmpTemplate() {
+    func applyHorizontalTriAmpTemplate() {
         store.activeCrossoverConfig.bandCount = .triAmp
         store.outputChannelMatrix.channels = [
             OutputChannelConfig(label: "Left High", source: .mainsLeftHigh, target: nil, isEnabled: true),
