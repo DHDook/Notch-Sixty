@@ -97,7 +97,7 @@ final class LoudnessContourTests: XCTestCase {
     func testSetSystemVolume_AffectsContourProcessing() {
         let sampleRate: Double = 48000
         let processor = DynamicsProcessor(
-            maxFrameCount: 512, channelCount: 2, sampleRate: sampleRate)
+            channelCount: 2, sampleRate: sampleRate, maxFrameCount: 512)
 
         var config = DynamicsConfig.default
         config.advanced.loudnessContourEnabled = true
@@ -156,24 +156,27 @@ final class LoudnessContourTests: XCTestCase {
             .allocate(byteCount: bufferListSize, alignment: MemoryLayout<AudioBufferList>.alignment)
             .assumingMemoryBound(to: AudioBufferList.self)
         ptr.pointee.mNumberBuffers = UInt32(channelCount)
+        let abl = UnsafeMutableAudioBufferListPointer(ptr)
         for ch in 0..<channelCount {
             let buf = UnsafeMutablePointer<Float>.allocate(capacity: frameCount)
             for i in 0..<frameCount { buf[i] = amplitude }
-            ptr.pointee.mBuffers[ch].mNumberChannels = 1
-            ptr.pointee.mBuffers[ch].mDataByteSize   = UInt32(frameCount * MemoryLayout<Float>.size)
-            ptr.pointee.mBuffers[ch].mData           = UnsafeMutableRawPointer(buf)
+            abl[ch].mNumberChannels = 1
+            abl[ch].mDataByteSize   = UInt32(frameCount * MemoryLayout<Float>.size)
+            abl[ch].mData           = UnsafeMutableRawPointer(buf)
         }
         return ptr.pointee
     }
 
     private func freeTestABL(_ abl: inout AudioBufferList) {
+        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
         for i in 0..<Int(abl.mNumberBuffers) {
-            abl.mBuffers[i].mData?.deallocate()
+            ablPtr[i].mData?.deallocate()
         }
     }
 
     private func readABLSample(_ abl: inout AudioBufferList, channel: Int, frame: Int) -> Float {
-        guard let data = abl.mBuffers[channel].mData else { return 0 }
+        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
+        guard let data = ablPtr[channel].mData else { return 0 }
         return data.assumingMemoryBound(to: Float.self)[frame]
     }
 

@@ -202,8 +202,8 @@ final class MeterStore: ObservableObject {
     }
     
     // MARK: - Update Cycle
-    
-    private func refreshMeterSnapshot() {
+
+    func refreshMeterSnapshot() {
         guard metersEnabled else {
             notifyAllObserversSilent()
             return

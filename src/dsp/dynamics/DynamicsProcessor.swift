@@ -348,7 +348,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // FIR Impulse Response — runs on full-band signal
     // Uses ConvolutionEngine for FFT-based partitioned convolution
-    private let firConvolutionEngine: ConvolutionEngine
+    let firConvolutionEngine: ConvolutionEngine
     private let _firEnabled: ManagedAtomic<Int32>
 
     // Speaker IR alignment per-channel ring buffers (same pattern as timeDelayBufs)

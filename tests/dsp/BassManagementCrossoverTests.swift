@@ -169,7 +169,7 @@ final class BassManagementCrossoverTests: XCTestCase {
     /// the lastBassCrossoverSampleRate guard added in Part C.
     func testDynamicsProcessor_SampleRateChange_TriggersCrossoverRestage() {
         let processor = DynamicsProcessor(
-            maxFrameCount: 512, channelCount: 2, sampleRate: 48000)
+            channelCount: 2, sampleRate: 48000, maxFrameCount: 512)
 
         var config = DynamicsConfig.default
         config.advanced.bassManagement.enabled = true

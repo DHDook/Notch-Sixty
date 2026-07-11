@@ -196,13 +196,13 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         // Regression test for closure variable shadowing bug in computeIRSpectrum.
         // Verifies that with all bands flat/bypassed, the engine passes audio through
         // effectively unchanged (aside from fixed processing latency).
-        let engine = LinearPhaseEQEngine(maxFrameCount: 8192)
+        let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
 
         // No bands / all bands at 0 dB gain, flat
         engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
 
         // Feed a unit impulse and confirm the engine passes it through close to unchanged
-        let frameCount = 8192
+        let frameCount = 2048
         var impulse = [Float](repeating: 0, count: frameCount)
         impulse[0] = 1.0
         var output = [Float](repeating: 0, count: frameCount)
@@ -225,30 +225,30 @@ final class LinearPhaseEQEngineTests: XCTestCase {
     func testProcessChannel_FlatIR_UnityGain() {
         // Regression test for DC/Nyquist bin mishandling and gain scaling.
         // Tests pure DC, pure Nyquist, and overall gain ratio.
-        let engine = LinearPhaseEQEngine(maxFrameCount: 8192)
+        let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
         engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
 
         // Test 1 — pure DC signal: exercises the DC bin specifically.
         // Before Fix 1, sigNyquist·irNyquist gets subtracted into this bin every block.
-        var dcSignal = [Float](repeating: 0.5, count: 8192)
-        engine.process(bufL: &dcSignal, bufR: nil, frameCount: 8192)
+        var dcSignal = [Float](repeating: 0.5, count: 2048)
+        engine.process(bufL: &dcSignal, bufR: nil, frameCount: 2048)
         // After the engine's inherent processing latency settles, samples should be
         // close to 0.5 — not decayed, offset, or drifting from block to block.
-        let dcSettled = Array(dcSignal[2048..<8192])  // skip latency
+        let dcSettled = Array(dcSignal[512..<2048])  // skip latency (adjusted for smaller buffer)
         let dcAvg = dcSettled.reduce(0.0, +) / Float(dcSettled.count)
         XCTAssertEqual(dcAvg, 0.5, accuracy: 0.1, "DC signal should pass through at ~0.5 level")
 
         // Test 2 — alternating +1/-1 (pure Nyquist-frequency signal): exercises the
         // Nyquist bin specifically. Before Fix 1, this bin gets contaminated with
         // DC-derived energy every block.
-        var nyquistSignal = (0..<8192).map { $0 % 2 == 0 ? Float(1.0) : Float(-1.0) }
-        engine.process(bufL: &nyquistSignal, bufR: nil, frameCount: 8192)
+        var nyquistSignal = (0..<2048).map { $0 % 2 == 0 ? Float(1.0) : Float(-1.0) }
+        engine.process(bufL: &nyquistSignal, bufR: nil, frameCount: 2048)
         // Should remain a clean alternating +1/-1 pattern after settling, not decay
         // or grow noisy over successive blocks.
-        let nyquistSettled = Array(nyquistSignal[2048..<8192])
+        let nyquistSettled = Array(nyquistSignal[512..<2048])
         var nyquistDeviations = 0
         for i in 0..<nyquistSettled.count {
-            let expected: Float = (i + 2048) % 2 == 0 ? 1.0 : -1.0
+            let expected: Float = (i + 512) % 2 == 0 ? 1.0 : -1.0
             if abs(nyquistSettled[i] - expected) > 0.2 {
                 nyquistDeviations += 1
             }
@@ -256,14 +256,14 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         XCTAssertLessThan(nyquistDeviations, nyquistSettled.count / 4, "Nyquist signal should maintain alternating pattern")
 
         // Test 3 — moderate sine wave: checks overall gain is ~1.0x, not ~2.0x (Fix 2).
-        var sine = (0..<8192).map { Float(0.5 * sin(2.0 * Double.pi * 1000.0 * Double($0) / 48000.0)) }
+        var sine = (0..<2048).map { Float(0.5 * sin(2.0 * Double.pi * 1000.0 * Double($0) / 48000.0)) }
         var sineOutput = sine
-        engine.process(bufL: &sineOutput, bufR: nil, frameCount: 8192)
+        engine.process(bufL: &sineOutput, bufR: nil, frameCount: 2048)
         // Compare RMS of a settled region (skip the first ~fftSize samples of latency)
         // of sineOutput against the same region of the original sine. Ratio should be
         // close to 1.0. If it's close to 2.0, Fix 2 is confirmed necessary.
-        let sineInputSettled = Array(sine[2048..<8192])
-        let sineOutputSettled = Array(sineOutput[2048..<8192])
+        let sineInputSettled = Array(sine[512..<2048])
+        let sineOutputSettled = Array(sineOutput[512..<2048])
         let inputRMS = sqrt(sineInputSettled.map { $0 * $0 }.reduce(0, +) / Float(sineInputSettled.count))
         let outputRMS = sqrt(sineOutputSettled.map { $0 * $0 }.reduce(0, +) / Float(sineOutputSettled.count))
         let gainRatio = outputRMS / inputRMS

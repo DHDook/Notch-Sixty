@@ -1,7 +1,9 @@
 // MicCaptureSessionTests.swift
 import XCTest
+import CoreAudio
 @testable import Equaliser
 
+@MainActor
 final class MicCaptureSessionTests: XCTestCase {
 
     // MARK: - Unit tests (no real audio hardware required)

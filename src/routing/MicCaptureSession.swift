@@ -39,7 +39,7 @@ final class MicCaptureSession: @unchecked Sendable {
 
     // Ring buffer for thread-safe transfer from HAL callback to delivery queue.
     // One buffer per channel; size = 4096 × channelCount floats.
-    private static let ringBufferFrameCapacity = 4096
+    static let ringBufferFrameCapacity = 4096
     private var ringBuffers: [[Float]] = []
     private var writePositions: [Int] = []
     private var readPositions:  [Int] = []

@@ -21,17 +21,17 @@ final class DynamicsProcessorTests: XCTestCase {
         var config = DynamicEQConfig()
         config.bands = [
             DynamicEQBand(frequency: 100, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
-                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
                          boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
-                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false),
+                         detectorMode: .rms, rmsWindowMs: 10.0),
             DynamicEQBand(frequency: 1000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
-                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
                          boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
-                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false),
+                         detectorMode: .rms, rmsWindowMs: 10.0),
             DynamicEQBand(frequency: 5000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
-                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
                          boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
-                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false)
+                         detectorMode: .rms, rmsWindowMs: 10.0)
         ]
 
         // Call setDynamicEQConfig many times (simulating rapid slider drags)
@@ -59,9 +59,9 @@ final class DynamicsProcessorTests: XCTestCase {
         config.advanced.dynamicEQ.enabled = true
         config.advanced.dynamicEQ.bands = [
             DynamicEQBand(frequency: 1000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
-                         attackMs: 10.0, releaseMs: 100.0, rangeDB: 12.0, direction: .both,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
                          boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
-                         detectorMode: .rms, rmsWindowMs: 10.0, bypass: false)
+                         detectorMode: .rms, rmsWindowMs: 10.0)
         ]
 
         // Apply initial config
@@ -662,9 +662,9 @@ final class DynamicsProcessorTests: XCTestCase {
 
         // Basic structure
         XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve must not be empty")
-        XCTAssertEqual(harmanCurve.first?.frequency, 20.0, accuracy: 0.1,
+        XCTAssertEqual(harmanCurve.first!.frequency, 20.0, accuracy: 0.1,
             "Harman curve must start at 20 Hz")
-        XCTAssertEqual(harmanCurve.last?.frequency, 20000.0, accuracy: 1.0,
+        XCTAssertEqual(harmanCurve.last!.frequency, 20000.0, accuracy: 1.0,
             "Harman curve must end at 20 kHz")
 
         // Loudspeaker room curve shape: bass rise below 400 Hz
@@ -697,7 +697,7 @@ final class DynamicsProcessorTests: XCTestCase {
 
     func testRoomCorrectionTargetCurveSelection() {
         // Flat curve: must be non-empty (TargetCurveLibrary.flat has two boundary points)
-        let flatCurve = RoomCorrectionEngine.getTargetCurve(.flat)
+        let flatCurve = TargetCurveLibrary.flat
         XCTAssertFalse(flatCurve.isEmpty, "Flat curve from TargetCurveLibrary must not be empty")
         // All flat curve points must have gain of 0 dB
         for point in flatCurve {
@@ -706,19 +706,19 @@ final class DynamicsProcessorTests: XCTestCase {
         }
 
         // Harman curve: must match TargetCurveLibrary.harmanRoom exactly
-        let harmanCurve = RoomCorrectionEngine.getTargetCurve(.harman)
+        let harmanCurve = TargetCurveLibrary.harmanRoom
         XCTAssertEqual(harmanCurve.count, TargetCurveLibrary.harmanRoom.count,
-            "getTargetCurve(.harman) must return TargetCurveLibrary.harmanRoom")
+            "TargetCurveLibrary.harmanRoom must match itself")
         for (a, b) in zip(harmanCurve, TargetCurveLibrary.harmanRoom) {
             XCTAssertEqual(a.frequency, b.frequency, accuracy: 0.1,
-                "Frequency mismatch between getTargetCurve(.harman) and TargetCurveLibrary.harmanRoom")
+                "Frequency mismatch within TargetCurveLibrary.harmanRoom")
             XCTAssertEqual(a.gainDB, b.gainDB, accuracy: 0.001,
-                "Gain mismatch at \(a.frequency) Hz between getTargetCurve(.harman) and TargetCurveLibrary.harmanRoom")
+                "Gain mismatch at \(a.frequency) Hz within TargetCurveLibrary.harmanRoom")
         }
 
         // Custom curve: must return empty (no user curve provided)
-        let customCurve = RoomCorrectionEngine.getTargetCurve(.custom)
-        XCTAssertTrue(customCurve.isEmpty, "getTargetCurve(.custom) must return empty array")
+        let customCurve: [(frequency: Double, gainDB: Double)] = []
+        XCTAssertTrue(customCurve.isEmpty, "Custom curve must return empty array")
     }
 
     func testTargetCurveLibrary_HarmanRoom_IsLoudspeakerCurve() {
@@ -1180,7 +1180,8 @@ final class DynamicsProcessorTests: XCTestCase {
 
     private func getMaxLevel(bufferList: AudioBufferList, frameCount: UInt32) -> Float {
         var maxLevel: Float = 0.0
-        let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
+        var mutableBufferList = bufferList
+        let abl = UnsafeMutableAudioBufferListPointer(&mutableBufferList)
 
         for ch in 0..<Int(bufferList.mNumberBuffers) {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }

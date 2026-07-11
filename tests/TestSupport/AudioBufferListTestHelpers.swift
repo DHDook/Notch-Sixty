@@ -18,14 +18,16 @@ func createTestBufferList(channelCount: Int, frameCount: Int, amplitude: Float) 
 
     bufferList.pointee.mNumberBuffers = UInt32(channelCount)
 
+    let abl = UnsafeMutableAudioBufferListPointer(bufferList)
+
     for ch in 0..<channelCount {
         let buffer = UnsafeMutablePointer<Float>.allocate(capacity: frameCount)
         for i in 0..<frameCount {
             buffer[i] = amplitude
         }
-        bufferList.pointee.mBuffers[ch].mNumberChannels = 1
-        bufferList.pointee.mBuffers[ch].mDataByteSize = UInt32(frameCount * MemoryLayout<Float>.size)
-        bufferList.pointee.mBuffers[ch].mData = UnsafeMutableRawPointer(buffer)
+        abl[ch].mNumberChannels = 1
+        abl[ch].mDataByteSize = UInt32(frameCount * MemoryLayout<Float>.size)
+        abl[ch].mData = UnsafeMutableRawPointer(buffer)
     }
 
     return bufferList.pointee
@@ -34,8 +36,10 @@ func createTestBufferList(channelCount: Int, frameCount: Int, amplitude: Float) 
 /// Frees the buffers allocated by createTestBufferList.
 /// - Parameter bufferList: The AudioBufferList to free
 func freeTestBufferList(bufferList: AudioBufferList) {
+    var mutableBufferList = bufferList
+    let abl = UnsafeMutableAudioBufferListPointer(&mutableBufferList)
     for i in 0..<Int(bufferList.mNumberBuffers) {
-        if let mData = bufferList.mBuffers[i].mData {
+        if let mData = abl[i].mData {
             mData.deallocate()
         }
     }
