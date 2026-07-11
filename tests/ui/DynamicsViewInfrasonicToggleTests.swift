@@ -2,10 +2,7 @@ import XCTest
 @testable import Equaliser
 import SwiftUI
 
-/// Tests for the infrasonic filter master toggle in DynamicsView.
-/// These tests verify that the master toggle in the top-level Dynamics
-/// summary is visible, reflects the correct state, and stays in sync
-/// with the subsection toggle.
+@MainActor
 final class DynamicsViewInfrasonicToggleTests: XCTestCase {
 
     func testMasterToggleVisibleInTopLevelDynamicsSummary() throws {
@@ -13,8 +10,6 @@ final class DynamicsViewInfrasonicToggleTests: XCTestCase {
         // Dynamics summary section.
 
         let store = EqualiserStore()
-        let view = DynamicsView()
-            .environmentObject(store)
 
         // In a real UI test, we'd verify the toggle exists in the view hierarchy
         // For now, we verify the binding exists

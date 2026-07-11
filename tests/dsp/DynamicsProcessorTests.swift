@@ -2,6 +2,8 @@
 // Tests for dynamics processor expander behavior
 
 import XCTest
+import CoreAudio
+import AudioToolbox
 @testable import Equaliser
 
 final class DynamicsProcessorTests: XCTestCase {

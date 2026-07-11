@@ -17,17 +17,16 @@ final class InfrasonicFilterChangeDetectionTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         // Set initial infrasonic filter config
-        let initialConfig = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 20.0,
-            slope: .db48,
-            target: .mainChain
-        )
+        var initialConfig = InfrasonicFilterConfig()
+        initialConfig.isEnabled = true
+        initialConfig.cutoffHz = 20.0
+        initialConfig.slope = .db48
+        initialConfig.target = .mainChain
         processor.setInfrasonicFilterConfig(initialConfig, sampleRate: 48000.0)
 
         // Create a full AdvancedProcessingConfig with the same infrasonic filter
@@ -57,18 +56,18 @@ final class InfrasonicFilterChangeDetectionTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         // Set initial config
         var adv = AdvancedProcessingConfig()
-        adv.infrasonicFilter = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 20.0,
-            slope: .db48,
-            target: .mainChain
-        )
+        var infrasonicConfig = InfrasonicFilterConfig()
+        infrasonicConfig.isEnabled = true
+        infrasonicConfig.cutoffHz = 20.0
+        infrasonicConfig.slope = .db48
+        infrasonicConfig.target = .mainChain
+        adv.infrasonicFilter = infrasonicConfig
         processor.applyConfig(adv, sampleRate: 48000.0)
 
         // Change the infrasonic filter config
@@ -87,17 +86,17 @@ final class InfrasonicFilterChangeDetectionTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         var adv = AdvancedProcessingConfig()
-        adv.infrasonicFilter = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 20.0,
-            slope: .db48,
-            target: .mainChain
-        )
+        var infrasonicConfig = InfrasonicFilterConfig()
+        infrasonicConfig.isEnabled = true
+        infrasonicConfig.cutoffHz = 20.0
+        infrasonicConfig.slope = .db48
+        infrasonicConfig.target = .mainChain
+        adv.infrasonicFilter = infrasonicConfig
 
         // Enable the filter
         processor.applyConfig(adv, sampleRate: 48000.0)

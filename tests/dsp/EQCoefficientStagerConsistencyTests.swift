@@ -13,6 +13,7 @@
 import XCTest
 @testable import Equaliser
 
+@MainActor
 final class EQCoefficientStagerConsistencyTests: XCTestCase {
 
     private let sampleRate: Double = 48000.0

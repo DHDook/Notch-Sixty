@@ -22,12 +22,11 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
         )
 
         // Enable the infrasonic filter at default settings
-        let config = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 18.0,
-            slope: .db48,
-            target: .mainChain
-        )
+        var config = InfrasonicFilterConfig()
+        config.isEnabled = true
+        config.cutoffHz = 18.0
+        config.slope = .db48
+        config.target = .mainChain
         processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
         var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
@@ -65,12 +64,11 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
             maxFrameCount: 512
         )
 
-        let config = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 18.0,
-            slope: .db48,
-            target: .mainChain
-        )
+        var config = InfrasonicFilterConfig()
+        config.isEnabled = true
+        config.cutoffHz = 18.0
+        config.slope = .db48
+        config.target = .mainChain
         processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
         var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
@@ -123,12 +121,11 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
         // Switch slope every callback for several hundred callbacks
         for i in 0..<500 {
             let slope = slopes[i % slopes.count]
-            let config = InfrasonicFilterConfig(
-                isEnabled: true,
-                cutoffHz: 20.0,
-                slope: slope,
-                target: .mainChain
-            )
+            var config = InfrasonicFilterConfig()
+            config.isEnabled = true
+            config.cutoffHz = 20.0
+            config.slope = slope
+            config.target = .mainChain
             processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
             if let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
@@ -175,12 +172,11 @@ final class InfrasonicFilterStabilityTests: XCTestCase {
                 maxFrameCount: 512
             )
 
-            let config = InfrasonicFilterConfig(
-                isEnabled: true,
-                cutoffHz: 20.0,
-                slope: slope,
-                target: .mainChain
-            )
+            var config = InfrasonicFilterConfig()
+            config.isEnabled = true
+            config.cutoffHz = 20.0
+            config.slope = slope
+            config.target = .mainChain
             processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
             var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)

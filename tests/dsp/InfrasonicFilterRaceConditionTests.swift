@@ -1,4 +1,6 @@
 import XCTest
+import CoreAudio
+import AudioToolbox
 @testable import Equaliser
 
 /// Tests for the infrasonic filter race condition fix.
@@ -18,70 +20,38 @@ final class InfrasonicFilterRaceConditionTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         let sampleRate = 48000.0
         let iterations = 10000
-        var config = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 20.0,
-            slope: .db48,
-            target: .mainChain
-        )
 
-        // Simulate rapid config updates on one thread
-        let configThread = Thread {
+        let group = DispatchGroup()
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
             for i in 0..<iterations {
+                var config = InfrasonicFilterConfig()
+                config.isEnabled = true
                 config.slope = (i % 2 == 0) ? .db48 : .db96
-                config.cutoffHz = Float(20 + (i % 10))  // Vary cutoff too
+                config.cutoffHz = Float(20 + (i % 10))
                 processor.setInfrasonicFilterConfig(config, sampleRate: sampleRate)
-                Thread.sleep(forTimeInterval: 0.000001)  // Tiny delay to allow audio thread to run
             }
         }
 
-        // Simulate audio thread processing on another thread
-        let audioThread = Thread {
-            var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-            var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-            var abl = AudioBufferList()
-            abl.mNumberBuffers = 2
-
-            var buffers = [AudioBuffer](
-                count: 2,
-                repeating: AudioBuffer(
-                    mNumberChannels: 1,
-                    mDataByteSize: 512 * MemoryLayout<Float>.size,
-                    mData: nil
-                )
-            )
-            buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-            buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-            abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-            let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
-
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+            defer { freeTestBufferList(bufferList: bufferList) }
             for _ in 0..<iterations {
-                // Call the internal processInfrasonicFilter method
-                // Note: This is a simplified test - in production this would be called
-                // from the actual audio render callback
-                processor.process(
-                    abl: ablPtr,
-                    inputMeterStorage: nil,
-                    inputRmsStorage: nil,
-                    outputMeterStorage: nil,
-                    outputRmsStorage: nil,
-                    numCh: 2,
-                    count: 512
-                )
+                processor.process(bufferList: &bufferList, frameCount: 512)
             }
         }
 
-        configThread.start()
-        audioThread.start()
-        configThread.join()
-        audioThread.join()
+        group.wait()
 
         // Verify no crashes occurred (test passes if we get here)
         XCTAssertTrue(true)
@@ -94,52 +64,27 @@ final class InfrasonicFilterRaceConditionTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         // Enable the infrasonic filter
-        let config = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 20.0,
-            slope: .db48,
-            target: .mainChain
-        )
+        var config = InfrasonicFilterConfig()
+        config.isEnabled = true
+        config.cutoffHz = 20.0
+        config.slope = .db48
+        config.target = .mainChain
         processor.setInfrasonicFilterConfig(config, sampleRate: 48000.0)
 
-        var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-        var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-        var abl = AudioBufferList()
-        abl.mNumberBuffers = 2
-
-        var buffers = [AudioBuffer](
-            count: 2,
-            repeating: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: 512 * MemoryLayout<Float>.size,
-                mData: nil
-            )
-        )
-        buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-        buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-        abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
+        var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+        defer { freeTestBufferList(bufferList: bufferList) }
 
         // Measure allocations before processing
         let allocationsBefore = getAllocationCount()
 
         // Process multiple buffers
         for _ in 0..<100 {
-            processor.process(
-                abl: ablPtr,
-                inputMeterStorage: nil,
-                inputRmsStorage: nil,
-                outputMeterStorage: nil,
-                outputRmsStorage: nil,
-                numCh: 2,
-                count: 512
-            )
+            processor.process(bufferList: &bufferList, frameCount: 512)
         }
 
         let allocationsAfter = getAllocationCount()
@@ -158,67 +103,48 @@ final class InfrasonicFilterRaceConditionTests: XCTestCase {
 
         let processor = DynamicsProcessor(
             channelCount: 2,
-            maxFrameCount: 512,
-            sampleRate: 48000.0
+            sampleRate: 48000.0,
+            maxFrameCount: 512
         )
 
         let sampleRate = 48000.0
 
         // Rapidly toggle and change slope
         for i in 0..<10 {
-            let config = InfrasonicFilterConfig(
-                isEnabled: (i % 2 == 0),
-                cutoffHz: 20.0,
-                slope: (i % 3 == 0) ? .db24 : ((i % 3 == 1) ? .db48 : .db96),
-                target: .mainChain
-            )
+            var config = InfrasonicFilterConfig()
+            config.isEnabled = (i % 2 == 0)
+            config.cutoffHz = 20.0
+            config.slope = (i % 3 == 0) ? .db24 : ((i % 3 == 1) ? .db48 : .db96)
+            config.target = .mainChain
             processor.setInfrasonicFilterConfig(config, sampleRate: sampleRate)
         }
 
         // Set final config
-        let finalConfig = InfrasonicFilterConfig(
-            isEnabled: true,
-            cutoffHz: 25.0,
-            slope: .db96,
-            target: .mainChain
-        )
+        var finalConfig = InfrasonicFilterConfig()
+        finalConfig.isEnabled = true
+        finalConfig.cutoffHz = 25.0
+        finalConfig.slope = .db96
+        finalConfig.target = .mainChain
         processor.setInfrasonicFilterConfig(finalConfig, sampleRate: sampleRate)
 
         // Process a buffer to trigger the update
-        var bufferL: [Float] = Array(repeating: 0.0, count: 512)
-        var bufferR: [Float] = Array(repeating: 0.0, count: 512)
-        var abl = AudioBufferList()
-        abl.mNumberBuffers = 2
+        var bufferList = createTestBufferList(channelCount: 2, frameCount: 512, amplitude: 0.0)
+        defer { freeTestBufferList(bufferList: bufferList) }
 
-        var buffers = [AudioBuffer](
-            count: 2,
-            repeating: AudioBuffer(
-                mNumberChannels: 1,
-                mDataByteSize: 512 * MemoryLayout<Float>.size,
-                mData: nil
-            )
-        )
-        buffers[0].mData = UnsafeMutableRawPointer(mutating: bufferL)
-        buffers[1].mData = UnsafeMutableRawPointer(mutating: bufferR)
-        abl.mBuffers = UnsafeMutablePointer<AudioBuffer>(mutating: &buffers)
-
-        let ablPtr = UnsafeMutableAudioBufferListPointer(&abl)
-
-        processor.process(
-            abl: ablPtr,
-            inputMeterStorage: nil,
-            inputRmsStorage: nil,
-            outputMeterStorage: nil,
-            outputRmsStorage: nil,
-            numCh: 2,
-            count: 512
-        )
+        processor.process(bufferList: &bufferList, frameCount: 512)
 
         // Verify the final state is consistent
         // For db96 slope, we expect 8 sections
         // Note: This is a basic sanity check - in a real test you'd verify
         // the actual coefficient values match the expected Butterworth response
-        XCTAssertTrue(true, "Final state should be consistent")
+        let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
+        if let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+           let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+            for j in 0..<512 {
+                XCTAssertTrue(bufL[j].isFinite, "Output sample L[\(j)] is not finite")
+                XCTAssertTrue(bufR[j].isFinite, "Output sample R[\(j)] is not finite")
+            }
+        }
     }
 
     // Helper for allocation counting (simplified)
