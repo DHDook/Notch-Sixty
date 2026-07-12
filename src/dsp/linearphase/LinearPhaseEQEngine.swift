@@ -289,8 +289,14 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                     vDSP_ztoc(&sc, 1, cBuf, 2, vDSP_Length(halfN))
                 }
 
-                // Normalise. For overlap-save, scale is 1/N (round-trip vDSP scale = N).
-                var scale = Float(1.0 / Float(fftSize))
+                // Normalise. Two forward vDSP_fft_zrip transforms are multiplied together here
+                // (the signal block's spectrum and the pre-computed kernel spectrum from
+                // computeIRSpectrum), and each forward zrip carries an implicit 2x scale
+                // (Apple's documented forward+inverse round-trip factor is 2N, split as
+                // forward=2x, inverse=Nx). Squaring that 2x from the two multiplied spectra
+                // gives a compounded 4x that a single inverse zrip + 1/N normalisation does not
+                // remove, so the correct scale is 1/(4N), not 1/N.
+                var scale = Float(1.0 / (4.0 * Float(fftSize)))
                 vDSP_vsmul(outputBuf, 1, &scale, outputBuf, 1, vDSP_Length(fftSize))
 
                 // The valid (alias-free) output is the SECOND half of the IFFT result,
@@ -478,19 +484,24 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                 var scaled = [Float](repeating: 0, count: N)
                 vDSP_vsmul(&timeDomain, 1, &invN, &scaled, 1, vDSP_Length(N))
 
-                // Apply Blackman-Harris window
+                // Circular shift by N/2 FIRST. The ideal (zero-phase) impulse response is
+                // concentrated at/near time-index 0 (and its circular wrap-around near N-1).
+                // The Blackman-Harris window below is ~0 at both buffer edges and ~1 at the
+                // center, so it must only be applied AFTER the response has been moved to the
+                // center — windowing before shifting multiplies the response's energy by the
+                // window's near-zero edge values and destroys it before the shift ever runs.
+                var preWindow = [Float](repeating: 0, count: N)
+                let h = N / 2
+                for i in 0..<N { preWindow[(i + h) % N] = scaled[i] }
+
+                // Apply Blackman-Harris window (now centered on the shifted response)
                 var window = [Float](repeating: 0, count: N)
                 for i in 0..<N {
                     let x = 2.0 * Double.pi * Double(i) / Double(N - 1)
                     window[i] = Float(0.355768 - 0.487396 * cos(x) + 0.144232 * cos(2*x) - 0.012604 * cos(3*x))
                 }
-                var windowed = [Float](repeating: 0, count: N)
-                vDSP_vmul(&scaled, 1, &window, 1, &windowed, 1, vDSP_Length(N))
-
-                // Circular shift by N/2
                 var shifted = [Float](repeating: 0, count: N)
-                let h = N / 2
-                for i in 0..<N { shifted[(i + h) % N] = windowed[i] }
+                vDSP_vmul(&preWindow, 1, &window, 1, &shifted, 1, vDSP_Length(N))
 
                 // Re-pack shifted N-length buffer into halfN split-complex form before forward FFT
                 var shiftedReal = [Float](repeating: 0, count: halfN)
