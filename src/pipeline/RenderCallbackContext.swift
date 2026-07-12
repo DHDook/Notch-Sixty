@@ -137,8 +137,14 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     // MARK: - Linear Phase EQ
 
-    private nonisolated(unsafe) var linearPhaseEngine: LinearPhaseEQEngine
+    private nonisolated(unsafe) var _linearPhaseEngine: LinearPhaseEQEngine
     private let _linearPhaseEnabled: ManagedAtomic<Int32>
+
+    /// Public accessor for the linear-phase engine (read-only).
+    /// Used by RenderPipeline to query kernel delay for latency computation.
+    var linearPhaseEngine: LinearPhaseEQEngine {
+        _linearPhaseEngine
+    }
 
     // MARK: - Mid/Side EQ
 
@@ -357,7 +363,7 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     func setLinearPhaseEnabled(_ enabled: Bool) {
         _linearPhaseEnabled.store(enabled ? 1 : 0, ordering: .relaxed)
-        if !enabled { linearPhaseEngine.reset() }
+        if !enabled { _linearPhaseEngine.reset() }
     }
 
     var isMidSideEnabled: Bool {
@@ -371,9 +377,9 @@ final class RenderCallbackContext: @unchecked Sendable {
     func updateLinearPhaseIR(leftBands: [EQBandConfiguration],
                               rightBands: [EQBandConfiguration],
                               sampleRate: Double) {
-        linearPhaseEngine.updateIR(leftBands: leftBands,
-                                    rightBands: rightBands,
-                                    sampleRate: sampleRate)
+        _linearPhaseEngine.updateIR(leftBands: leftBands,
+                                     rightBands: rightBands,
+                                     sampleRate: sampleRate)
     }
 
     var isMixedPhaseEnabled: Bool {
@@ -614,7 +620,7 @@ final class RenderCallbackContext: @unchecked Sendable {
 
         self.oversampler = OversamplingProcessor(maxFrameCount: Int(maxFrameCount))
         self._oversamplingEnabled = ManagedAtomic(0)
-        self.linearPhaseEngine = LinearPhaseEQEngine(maxFrameCount: Int(maxFrameCount))
+        self._linearPhaseEngine = LinearPhaseEQEngine(maxFrameCount: Int(maxFrameCount))
         self._linearPhaseEnabled = ManagedAtomic(0)
         self._midSideEnabled = ManagedAtomic(0)
         self.leftAllPassChain   = AllPassChain()
@@ -1372,7 +1378,7 @@ final class RenderCallbackContext: @unchecked Sendable {
             // --- Linear-phase FIR convolution path (unchanged) ---
             let bufL = processingBuffers[0]
             let bufR = channelCount > 1 ? processingBuffers[1] : nil
-            linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: Int(frameCount))
+            _linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: Int(frameCount))
 
         } else if _mixedPhaseEnabled.load(ordering: .relaxed) != 0 {
             // --- Mixed-phase path: biquad IIR + all-pass phase correction ---

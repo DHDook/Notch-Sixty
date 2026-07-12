@@ -948,10 +948,9 @@ final class RenderPipeline {
             ms += Double(ctx.dynamicsProcessor.irAlignmentDelayMs)
         }
 
-        // Linear-phase EQ delay (not yet measured - using conservative estimate)
-        // TODO: Measure actual delay per methodology in 05-latency-computation-scope.md
+        // Linear-phase EQ delay (kernel group delay)
         if ctx.isLinearPhaseEnabled {
-            ms += 2048.0 / sr * 1000.0  // Conservative estimate: one hopSize (2048 samples)
+            ms += Double(ctx.linearPhaseEngine.kernelDelaySamples) / sr * 1000.0
         }
 
         return ms

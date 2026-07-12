@@ -50,11 +50,19 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
     private var outputBuf: UnsafeMutablePointer<Float>
 
     private var halfN: Int
+    private var kernelLength: Int
+
+    /// The group delay introduced by the linear-phase kernel in samples.
+    /// Equal to kernelLength / 2 (the center of the causal kernel).
+    var kernelDelaySamples: Int {
+        kernelLength / 2
+    }
 
     init(maxFrameCount: Int) {
         _ = maxFrameCount
         fftSize = 4096
         hopSize = fftSize / 2
+        kernelLength = hopSize
         log2n   = vDSP_Length(12)
         halfN   = fftSize / 2
         fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
@@ -111,6 +119,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             fftSize = newFFTSize
             hopSize = fftSize / 2
             halfN   = fftSize / 2
+            kernelLength = hopSize
             log2n   = vDSP_Length(log2(Double(fftSize)).rounded())
             if let s = fftSetup { vDSP_destroy_fftsetup(s) }
             fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
@@ -484,29 +493,32 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                 var scaled = [Float](repeating: 0, count: N)
                 vDSP_vsmul(&timeDomain, 1, &invN, &scaled, 1, vDSP_Length(N))
 
-                // Circular shift by N/2 FIRST. The ideal (zero-phase) impulse response is
-                // concentrated at/near time-index 0 (and its circular wrap-around near N-1).
-                // The Blackman-Harris window below is ~0 at both buffer edges and ~1 at the
-                // center, so it must only be applied AFTER the response has been moved to the
-                // center — windowing before shifting multiplies the response's energy by the
-                // window's near-zero edge values and destroys it before the shift ever runs.
-                var preWindow = [Float](repeating: 0, count: N)
-                let h = N / 2
-                for i in 0..<N { preWindow[(i + h) % N] = scaled[i] }
+                // Build causal, zero-padded kernel of length kernelLength (hopSize).
+                // The kernel is centered within the shorter window to maintain linear phase,
+                // but the overall response is causal (support in [0, kernelLength)) to satisfy
+                // the overlap-save constraint. This eliminates circular-convolution aliasing.
+                let L = kernelLength
+                let center = L / 2
+                var causalKernel = [Float](repeating: 0, count: N)  // indices [L, N) stay 0
 
-                // Apply Blackman-Harris window (now centered on the shifted response)
-                var window = [Float](repeating: 0, count: N)
-                for i in 0..<N {
-                    let x = 2.0 * Double.pi * Double(i) / Double(N - 1)
+                var window = [Float](repeating: 0, count: L)
+                for i in 0..<L {
+                    let x = 2.0 * Double.pi * Double(i) / Double(L - 1)
                     window[i] = Float(0.355768 - 0.487396 * cos(x) + 0.144232 * cos(2*x) - 0.012604 * cos(3*x))
                 }
-                var shifted = [Float](repeating: 0, count: N)
-                vDSP_vmul(&preWindow, 1, &window, 1, &shifted, 1, vDSP_Length(N))
 
-                // Re-pack shifted N-length buffer into halfN split-complex form before forward FFT
+                for i in 0..<L {
+                    // Pull from `scaled` centered at index 0 (with wraparound), offset so the
+                    // response's peak lands at `center` instead of at N/2. `scaled` is the
+                    // already-normalized (1/N) true impulse response computed just above.
+                    let srcIndex = ((i - center) % N + N) % N
+                    causalKernel[i] = scaled[srcIndex] * window[i]
+                }
+
+                // Re-pack causal N-length buffer into halfN split-complex form before forward FFT
                 var shiftedReal = [Float](repeating: 0, count: halfN)
                 var shiftedImag = [Float](repeating: 0, count: halfN)
-                shifted.withUnsafeMutableBufferPointer { shiftBuf in
+                causalKernel.withUnsafeMutableBufferPointer { shiftBuf in
                     shiftBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
                         shiftedReal.withUnsafeMutableBufferPointer { shiftedRealBuf in
                             shiftedImag.withUnsafeMutableBufferPointer { shiftedImagBuf in
