@@ -30,6 +30,9 @@ final class LinearPhaseEQEngineTests: XCTestCase {
             input.withUnsafeBufferPointer { inputPtr in
                 outputL.withUnsafeMutableBufferPointer { outLPtr in
                     outputR.withUnsafeMutableBufferPointer { outRPtr in
+                        let srcOffset = inputPtr.baseAddress!.advanced(by: i * chunkSize)
+                        memcpy(outLPtr.baseAddress!.advanced(by: i * chunkSize), srcOffset, chunkSize * MemoryLayout<Float>.size)
+                        memcpy(outRPtr.baseAddress!.advanced(by: i * chunkSize), srcOffset, chunkSize * MemoryLayout<Float>.size)
                         engine.process(
                             bufL: outLPtr.baseAddress!.advanced(by: i * chunkSize),
                             bufR: outRPtr.baseAddress!.advanced(by: i * chunkSize),
@@ -64,6 +67,9 @@ final class LinearPhaseEQEngineTests: XCTestCase {
             input.withUnsafeBufferPointer { inputPtr in
                 outputL.withUnsafeMutableBufferPointer { outLPtr in
                     outputR.withUnsafeMutableBufferPointer { outRPtr in
+                        let srcOffset = inputPtr.baseAddress!.advanced(by: i * chunkSize)
+                        memcpy(outLPtr.baseAddress!.advanced(by: i * chunkSize), srcOffset, chunkSize * MemoryLayout<Float>.size)
+                        memcpy(outRPtr.baseAddress!.advanced(by: i * chunkSize), srcOffset, chunkSize * MemoryLayout<Float>.size)
                         engine.process(
                             bufL: outLPtr.baseAddress!.advanced(by: i * chunkSize),
                             bufR: outRPtr.baseAddress!.advanced(by: i * chunkSize),
@@ -107,6 +113,9 @@ final class LinearPhaseEQEngineTests: XCTestCase {
             input.withUnsafeBufferPointer { inputPtr in
                 outputL.withUnsafeMutableBufferPointer { outLPtr in
                     outputR.withUnsafeMutableBufferPointer { outRPtr in
+                        let srcOffset = inputPtr.baseAddress!.advanced(by: i * chunkSize)
+                        memcpy(outLPtr.baseAddress!.advanced(by: i * chunkSize), srcOffset, chunkSize * MemoryLayout<Float>.size)
+                        memcpy(outRPtr.baseAddress!.advanced(by: i * chunkSize), srcOffset, chunkSize * MemoryLayout<Float>.size)
                         engine.process(
                             bufL: outLPtr.baseAddress!.advanced(by: i * chunkSize),
                             bufR: outRPtr.baseAddress!.advanced(by: i * chunkSize),
@@ -139,6 +148,7 @@ final class LinearPhaseEQEngineTests: XCTestCase {
 
         input.withUnsafeBufferPointer { inputPtr in
             output.withUnsafeMutableBufferPointer { outPtr in
+                memcpy(outPtr.baseAddress!, inputPtr.baseAddress!, 512 * MemoryLayout<Float>.size)
                 engine.process(bufL: outPtr.baseAddress!, bufR: nil, frameCount: 512)
             }
         }
@@ -178,6 +188,8 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         for chunkSize in chunkSizes {
             input.withUnsafeBufferPointer { inputPtr in
                 outputL.withUnsafeMutableBufferPointer { outPtr in
+                    let srcOffset = inputPtr.baseAddress!.advanced(by: offset)
+                    memcpy(outPtr.baseAddress!.advanced(by: offset), srcOffset, chunkSize * MemoryLayout<Float>.size)
                     engine.process(
                         bufL: outPtr.baseAddress!.advanced(by: offset),
                         bufR: nil,
@@ -192,35 +204,11 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         XCTAssertGreaterThan(maxOutput, 0.9, "Variable frameCount should not break output delivery")
     }
 
-    func testComputeIRSpectrum_AllBandsBypassed_ProducesNearUnityResponse() {
-        // Regression test for closure variable shadowing bug in computeIRSpectrum.
-        // Verifies that with all bands flat/bypassed, the engine passes audio through
-        // effectively unchanged (aside from fixed processing latency).
-        let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
-
-        // No bands / all bands at 0 dB gain, flat
-        engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
-
-        // Feed a unit impulse and confirm the engine passes it through close to unchanged
-        let frameCount = 2048
-        var impulse = [Float](repeating: 0, count: frameCount)
-        impulse[0] = 1.0
-        var output = [Float](repeating: 0, count: frameCount)
-
-        impulse.withUnsafeBufferPointer { inBuf in
-            output.withUnsafeMutableBufferPointer { outBuf in
-                engine.process(bufL: outBuf.baseAddress!, bufR: nil, frameCount: frameCount)
-            }
-        }
-
-        // The output impulse response should be a single, near-unity-magnitude peak
-        // near the engine's known latency offset, not spread energy or a huge/garbage value
-        let peak = output.max(by: { abs($0) < abs($1) })!
-        XCTAssertLessThan(abs(peak), 2.0, "Flat/bypassed Linear EQ should not amplify — got \(peak)")
-
-        let totalEnergy = output.reduce(0.0) { $0 + Double($1 * $1) }
-        XCTAssertLessThan(totalEnergy, 4.0, "Flat/bypassed Linear EQ energy should be close to the input impulse's energy (1.0), not spread/amplified")
-    }
+    // testComputeIRSpectrum_AllBandsBypassed_ProducesNearUnityResponse removed
+    // This test was redundant with testProcessChannel_FlatIR_UnityGain's DC case,
+    // which more meaningfully verifies that flat IR passes signal through correctly.
+    // The original test's loose upper bounds (abs(peak) < 2.0, totalEnergy < 4.0)
+    // were trivially true for all-zero output, so it passed for the wrong reason.
 
     func testProcessChannel_FlatIR_UnityGain() {
         // Regression test for DC/Nyquist bin mishandling and gain scaling.
@@ -228,45 +216,51 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
         engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
 
-        // Test 1 — pure DC signal: exercises the DC bin specifically.
-        // Before Fix 1, sigNyquist·irNyquist gets subtracted into this bin every block.
-        var dcSignal = [Float](repeating: 0.5, count: 2048)
-        engine.process(bufL: &dcSignal, bufR: nil, frameCount: 2048)
-        // After the engine's inherent processing latency settles, samples should be
-        // close to 0.5 — not decayed, offset, or drifting from block to block.
-        let dcSettled = Array(dcSignal[512..<2048])  // skip latency (adjusted for smaller buffer)
-        let dcAvg = dcSettled.reduce(0.0, +) / Float(dcSettled.count)
-        XCTAssertEqual(dcAvg, 0.5, accuracy: 0.1, "DC signal should pass through at ~0.5 level")
+        // Linear-phase group delay is ~fftSize/2 (2048 samples here). Run several hops
+        // of a steady signal and only check the LAST hop, well past that settling time.
+        let hopCount = 6
+        let hopSize = 2048
 
-        // Test 2 — alternating +1/-1 (pure Nyquist-frequency signal): exercises the
-        // Nyquist bin specifically. Before Fix 1, this bin gets contaminated with
-        // DC-derived energy every block.
-        var nyquistSignal = (0..<2048).map { $0 % 2 == 0 ? Float(1.0) : Float(-1.0) }
-        engine.process(bufL: &nyquistSignal, bufR: nil, frameCount: 2048)
-        // Should remain a clean alternating +1/-1 pattern after settling, not decay
-        // or grow noisy over successive blocks.
-        let nyquistSettled = Array(nyquistSignal[512..<2048])
-        var nyquistDeviations = 0
-        for i in 0..<nyquistSettled.count {
-            let expected: Float = (i + 512) % 2 == 0 ? 1.0 : -1.0
-            if abs(nyquistSettled[i] - expected) > 0.2 {
-                nyquistDeviations += 1
+        // Test 1 — DC
+        var dcAvgLast: Float = 0
+        for hop in 0..<hopCount {
+            var dcBlock = [Float](repeating: 0.5, count: hopSize)
+            engine.process(bufL: &dcBlock, bufR: nil, frameCount: hopSize)
+            if hop == hopCount - 1 {
+                dcAvgLast = dcBlock.reduce(0, +) / Float(dcBlock.count)
             }
         }
-        XCTAssertLessThan(nyquistDeviations, nyquistSettled.count / 4, "Nyquist signal should maintain alternating pattern")
+        XCTAssertEqual(dcAvgLast, 0.5, accuracy: 0.1, "DC signal should pass through at ~0.5 level once settled")
 
-        // Test 3 — moderate sine wave: checks overall gain is ~1.0x, not ~2.0x (Fix 2).
-        var sine = (0..<2048).map { Float(0.5 * sin(2.0 * Double.pi * 1000.0 * Double($0) / 48000.0)) }
-        var sineOutput = sine
-        engine.process(bufL: &sineOutput, bufR: nil, frameCount: 2048)
-        // Compare RMS of a settled region (skip the first ~fftSize samples of latency)
-        // of sineOutput against the same region of the original sine. Ratio should be
-        // close to 1.0. If it's close to 2.0, Fix 2 is confirmed necessary.
-        let sineInputSettled = Array(sine[512..<2048])
-        let sineOutputSettled = Array(sineOutput[512..<2048])
-        let inputRMS = sqrt(sineInputSettled.map { $0 * $0 }.reduce(0, +) / Float(sineInputSettled.count))
-        let outputRMS = sqrt(sineOutputSettled.map { $0 * $0 }.reduce(0, +) / Float(sineOutputSettled.count))
-        let gainRatio = outputRMS / inputRMS
-        XCTAssertEqual(gainRatio, 1.0, accuracy: 0.5, "Overall gain should be ~1.0x, got \(gainRatio)")
+        // Test 2 — Nyquist (alternating ±1)
+        var lastNyquistBlock: [Float] = []
+        for hop in 0..<hopCount {
+            var nyquistBlock = (0..<hopSize).map { (hop * hopSize + $0) % 2 == 0 ? Float(1.0) : Float(-1.0) }
+            engine.process(bufL: &nyquistBlock, bufR: nil, frameCount: hopSize)
+            if hop == hopCount - 1 { lastNyquistBlock = nyquistBlock }
+        }
+        var nyquistDeviations = 0
+        for i in 0..<lastNyquistBlock.count {
+            let globalIndex = (hopCount - 1) * hopSize + i
+            let expected: Float = globalIndex % 2 == 0 ? 1.0 : -1.0
+            if abs(lastNyquistBlock[i] - expected) > 0.2 { nyquistDeviations += 1 }
+        }
+        XCTAssertLessThan(nyquistDeviations, lastNyquistBlock.count / 4, "Nyquist signal should maintain alternating pattern once settled")
+
+        // Test 3 — sine gain ratio
+        var lastSineInput: [Float] = []
+        var lastSineOutput: [Float] = []
+        for hop in 0..<hopCount {
+            let sineBlock = (0..<hopSize).map { i -> Float in
+                let t = Double(hop * hopSize + i)
+                return Float(0.5 * sin(2.0 * Double.pi * 1000.0 * t / sampleRate))
+            }
+            var sineOutput = sineBlock
+            engine.process(bufL: &sineOutput, bufR: nil, frameCount: hopSize)
+            if hop == hopCount - 1 { lastSineInput = sineBlock; lastSineOutput = sineOutput }
+        }
+        let inputRMS = sqrt(lastSineInput.map { $0 * $0 }.reduce(0, +) / Float(lastSineInput.count))
+        let outputRMS = sqrt(lastSineOutput.map { $0 * $0 }.reduce(0, +) / Float(lastSineOutput.count))
+        XCTAssertEqual(outputRMS / inputRMS, 1.0, accuracy: 0.5, "Overall gain should be ~1.0x once settled")
     }
 }
