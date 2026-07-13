@@ -114,8 +114,8 @@ final class OutputChannelProcessor {
         limiter.setLookAheadMs(config.lookAheadMs, sampleRate: sampleRate)
     }
 
-    func setGroupDelayAllPassCoefficients(_ coefficients: [BiquadCoefficients]) {
-        groupDelayAllPassChain.stageSections(from: [coefficients])
+    func setGroupDelayAllPassCoefficients(_ coefficients: [BiquadCoefficients], sampleRate: Double) {
+        groupDelayAllPassChain.stageSections(from: [coefficients], sampleRate: sampleRate)
     }
 
     func setEQOversamplingEnabled(_ enabled: Bool, sampleRate: Double) {

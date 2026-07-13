@@ -396,12 +396,14 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     /// Stages new all-pass sections derived from the current biquad band coefficients.
     /// Called from the main thread when band parameters change while in mixed-phase mode.
+    /// Phase 1 guard: only stages all-pass sections that measurably improve group delay.
     func updateMixedPhaseSections(
-        leftSections:  [[BiquadCoefficients]],
+        leftSections: [[BiquadCoefficients]],
         rightSections: [[BiquadCoefficients]]
     ) {
-        leftAllPassChain.stageSections(from: leftSections)
-        rightAllPassChain.stageSections(from: rightSections)
+        let sampleRate = dynamicsProcessor.storedSampleRate
+        leftAllPassChain.stageSections(from: leftSections, sampleRate: sampleRate)
+        rightAllPassChain.stageSections(from: rightSections, sampleRate: sampleRate)
     }
 
     // MARK: - Sweep Playback API
