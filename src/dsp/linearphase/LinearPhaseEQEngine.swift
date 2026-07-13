@@ -6,9 +6,10 @@ import Foundation
 
 final class LinearPhaseEQEngine: @unchecked Sendable {
 
-    private var fftSize: Int
-    private var hopSize: Int
-    private var log2n:   vDSP_Length
+    private var designSize: Int  // Resolution for mag[] sampling and FFT_INVERSE (also kernelLength)
+    private var fftSize: Int      // Size for block-convolution machinery (2 × designSize)
+    private var hopSize: Int      // fftSize / 2 = designSize
+    private var log2n:   vDSP_Length  // log2(fftSize) for the FFTSetup
 
     private var fftSetup: FFTSetup?
 
@@ -60,10 +61,11 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
 
     init(maxFrameCount: Int) {
         _ = maxFrameCount
-        fftSize = 4096
+        designSize = 4096
+        fftSize = 2 * designSize
         hopSize = fftSize / 2
-        kernelLength = hopSize
-        log2n   = vDSP_Length(12)
+        kernelLength = designSize
+        log2n   = vDSP_Length(log2(Double(fftSize)).rounded())
         halfN   = fftSize / 2
         fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
 
@@ -108,18 +110,19 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
     func updateIR(leftBands:  [EQBandConfiguration],
                   rightBands: [EQBandConfiguration],
                   sampleRate: Double) {
-        let newFFTSize: Int
+        let newDesignSize: Int
         switch sampleRate {
-        case ...48_000:  newFFTSize = 4096
-        case ...96_000:  newFFTSize = 8192
-        case ...192_000: newFFTSize = 16384
-        default:         newFFTSize = 32768   // 384 kHz: ~85 ms, ~11.7 Hz/bin
+        case ...48_000:  newDesignSize = 4096
+        case ...96_000:  newDesignSize = 8192
+        case ...192_000: newDesignSize = 16384
+        default:         newDesignSize = 32768   // 384 kHz: ~85 ms, ~11.7 Hz/bin
         }
-        if newFFTSize != fftSize {
-            fftSize = newFFTSize
+        if newDesignSize != designSize {
+            designSize = newDesignSize
+            fftSize = 2 * designSize
             hopSize = fftSize / 2
+            kernelLength = designSize
             halfN   = fftSize / 2
-            kernelLength = hopSize
             log2n   = vDSP_Length(log2(Double(fftSize)).rounded())
             if let s = fftSetup { vDSP_destroy_fftsetup(s) }
             fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
@@ -375,9 +378,11 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
         ///   `firKernelRight` into the right-channel band array when the two channels
         ///   differ (see `EQCoefficientStager.refreshLinearPhaseIRIfNeeded`).
         guard let setup = fftSetup else { return }
-        let N = fftSize
+        let N = designSize  // Use designSize for mag[] sampling and FFT_INVERSE
+        let halfNDesign = N / 2  // Half of designSize for the design FFT
+        let log2nDesign = vDSP_Length(log2(Double(N)).rounded())  // log2 of designSize
 
-        var mag = [Double](repeating: 1.0, count: halfN + 1)
+        var mag = [Double](repeating: 1.0, count: halfNDesign + 1)
         for band in bands where !band.bypass && !band.isDynamic {
             if band.filterType == .fir {
                 // FIR band: fold the user kernel spectrum into the magnitude accumulator.
@@ -393,37 +398,37 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                                copyCount * MemoryLayout<Float>.size)
                     }
                 }
-                // Pack real kernel samples into halfN complex pairs for vDSP_fft_zrip
-                var packedReal = [Float](repeating: 0, count: halfN)
-                var packedImag = [Float](repeating: 0, count: halfN)
+                // Pack real kernel samples into halfNDesign complex pairs for vDSP_fft_zrip
+                var packedReal = [Float](repeating: 0, count: halfNDesign)
+                var packedImag = [Float](repeating: 0, count: halfNDesign)
                 paddedKernel.withUnsafeMutableBufferPointer { kernelBuf in
-                    kernelBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
+                    kernelBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfNDesign) { cBuf in
                         packedReal.withUnsafeMutableBufferPointer { realBuf in
                             packedImag.withUnsafeMutableBufferPointer { imagBuf in
                                 var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
-                                vDSP_ctoz(cBuf, 2, &kernelSC, 1, vDSP_Length(halfN))
+                                vDSP_ctoz(cBuf, 2, &kernelSC, 1, vDSP_Length(halfNDesign))
                             }
                         }
                     }
                 }
 
-                // Forward FFT on packed halfN buffer
+                // Forward FFT on packed halfNDesign buffer (use designSize log2n)
                 packedReal.withUnsafeMutableBufferPointer { realBuf in
                     packedImag.withUnsafeMutableBufferPointer { imagBuf in
                         var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
-                        vDSP_fft_zrip(setup, &kernelSC, 1, log2n, Int32(FFT_FORWARD))
+                        vDSP_fft_zrip(setup, &kernelSC, 1, log2nDesign, Int32(FFT_FORWARD))
                     }
                 }
 
                 // vDSP_fft_zrip applies a 2× scale on forward pass; normalise it out.
                 var invScale = Float(1.0 / Float(N))
                 // Use separate source/dest buffers to satisfy exclusivity.
-                var scaledKernel = [Float](repeating: 0, count: halfN)
-                var scaledImag   = [Float](repeating: 0, count: halfN)
-                vDSP_vsmul(&packedReal, 1, &invScale, &scaledKernel, 1, vDSP_Length(halfN))
-                vDSP_vsmul(&packedImag, 1, &invScale, &scaledImag,   1, vDSP_Length(halfN))
+                var scaledKernel = [Float](repeating: 0, count: halfNDesign)
+                var scaledImag   = [Float](repeating: 0, count: halfNDesign)
+                vDSP_vsmul(&packedReal, 1, &invScale, &scaledKernel, 1, vDSP_Length(halfNDesign))
+                vDSP_vsmul(&packedImag, 1, &invScale, &scaledImag,   1, vDSP_Length(halfNDesign))
                 // Multiply the kernel magnitude into the accumulator.
-                for k in 0...halfN {
+                for k in 0...halfNDesign {
                     let re = Double(scaledKernel[k])
                     let im = Double(scaledImag[k])
                     mag[k] *= sqrt(re * re + im * im)
@@ -442,7 +447,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                 type: band.filterType, sampleRate: designRate,
                 frequency: freq, q: Double(band.q),
                 gain: Double(band.gain), slope: band.slope)
-            for k in 0...halfN {
+            for k in 0...halfNDesign {
                 let f = Double(k) * sampleRate / Double(N)
                 var bandMag = 1.0
                 for sec in sections {
@@ -462,29 +467,29 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             }
         }
 
-        // Build halfN-length packed target spectrum per vDSP convention:
+        // Build halfNDesign-length packed target spectrum per vDSP convention:
         // specReal[0] = DC, specImag[0] = Nyquist (packed together)
-        // specReal[1..halfN-1], specImag[1..halfN-1] = remaining complex bins
-        var specReal = [Float](repeating: 0, count: halfN)
-        var specImag = [Float](repeating: 0, count: halfN)
-        specReal[0] = Float(mag[0])        // DC
-        specImag[0] = Float(mag[halfN])    // Nyquist, packed per vDSP convention
-        for k in 1..<halfN {
+        // specReal[1..halfNDesign-1], specImag[1..halfNDesign-1] = remaining complex bins
+        var specReal = [Float](repeating: 0, count: halfNDesign)
+        var specImag = [Float](repeating: 0, count: halfNDesign)
+        specReal[0] = Float(mag[0])              // DC
+        specImag[0] = Float(mag[halfNDesign])    // Nyquist, packed per vDSP convention
+        for k in 1..<halfNDesign {
             specReal[k] = Float(mag[k])
             specImag[k] = 0
         }
 
-        // Inverse FFT on packed halfN spectrum
+        // Inverse FFT on packed halfNDesign spectrum (use designSize log2n)
         specReal.withUnsafeMutableBufferPointer { specRealBuf in
             specImag.withUnsafeMutableBufferPointer { specImagBuf in
                 var sc = DSPSplitComplex(realp: specRealBuf.baseAddress!, imagp: specImagBuf.baseAddress!)
-                vDSP_fft_zrip(setup, &sc, 1, log2n, Int32(FFT_INVERSE))
+                vDSP_fft_zrip(setup, &sc, 1, log2nDesign, Int32(FFT_INVERSE))
 
-                // Unpack halfN complex pairs into N real time-domain samples
+                // Unpack halfNDesign complex pairs into N real time-domain samples
                 var timeDomain = [Float](repeating: 0, count: N)
                 timeDomain.withUnsafeMutableBufferPointer { tdBuf in
-                    tdBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
-                        vDSP_ztoc(&sc, 1, cBuf, 2, vDSP_Length(halfN))
+                    tdBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfNDesign) { cBuf in
+                        vDSP_ztoc(&sc, 1, cBuf, 2, vDSP_Length(halfNDesign))
                     }
                 }
 
@@ -493,13 +498,15 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                 var scaled = [Float](repeating: 0, count: N)
                 vDSP_vsmul(&timeDomain, 1, &invN, &scaled, 1, vDSP_Length(N))
 
-                // Build causal, zero-padded kernel of length kernelLength (hopSize).
+                // Build causal, zero-padded kernel of length kernelLength (designSize).
                 // The kernel is centered within the shorter window to maintain linear phase,
                 // but the overall response is causal (support in [0, kernelLength)) to satisfy
                 // the overlap-save constraint. This eliminates circular-convolution aliasing.
+                // `scaled` is designSize samples long; `causalKernel` is fftSize samples long
+                // (designSize taps of real content + fftSize - designSize samples of zero padding).
                 let L = kernelLength
                 let center = L / 2
-                var causalKernel = [Float](repeating: 0, count: N)  // indices [L, N) stay 0
+                var causalKernel = [Float](repeating: 0, count: fftSize)  // indices [L, fftSize) stay 0
 
                 var window = [Float](repeating: 0, count: L)
                 for i in 0..<L {
@@ -515,7 +522,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                     causalKernel[i] = scaled[srcIndex] * window[i]
                 }
 
-                // Re-pack causal N-length buffer into halfN split-complex form before forward FFT
+                // Re-pack causal fftSize-length buffer into halfN split-complex form before forward FFT
                 var shiftedReal = [Float](repeating: 0, count: halfN)
                 var shiftedImag = [Float](repeating: 0, count: halfN)
                 causalKernel.withUnsafeMutableBufferPointer { shiftBuf in
@@ -529,7 +536,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                     }
                 }
 
-                // Forward FFT on packed halfN buffer, and copy the result to outReal/outImag —
+                // Forward FFT on packed halfN buffer (use fftSize log2n), and copy the result to outReal/outImag —
                 // both happen inside this same closure so the pointers are guaranteed to refer
                 // to shiftedReal/shiftedImag (the actual final result), not an outer shadowed name.
                 shiftedReal.withUnsafeMutableBufferPointer { shiftedRealBuf in
