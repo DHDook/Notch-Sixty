@@ -48,6 +48,12 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
     nonisolated(unsafe) private var outputCarryAvailableL: Int = 0
     nonisolated(unsafe) private var outputCarryAvailableR: Int = 0
 
+    /// Startup phase: accumulate output without draining until we have sufficient margin.
+    /// This prevents underfill when frameCount doesn't evenly divide hopSize.
+    nonisolated(unsafe) private var outputCarryHopsAccumulatedL: Int = 0
+    nonisolated(unsafe) private var outputCarryHopsAccumulatedR: Int = 0
+    private let startupHopsRequired: Int = 2  // Require 2 hops before draining begins
+
     /// Contiguous time-domain output buffer. Sized to fftSize.
     /// Filled by vDSP_ztoc after IFFT to unpack the split-complex result.
     private var outputBuf: UnsafeMutablePointer<Float>
@@ -156,6 +162,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             outputCarryReadPosL = 0; outputCarryReadPosR = 0
             outputCarryWritePosL = 0; outputCarryWritePosR = 0
             outputCarryAvailableL = 0; outputCarryAvailableR = 0
+            outputCarryHopsAccumulatedL = 0; outputCarryHopsAccumulatedR = 0
         }
         computeIRSpectrum(bands: leftBands,  sampleRate: sampleRate,
                           outReal: nextPendingReal, outImag: nextPendingImag)
@@ -207,6 +214,8 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
         outputCarryWritePosR = 0
         outputCarryAvailableL = 0
         outputCarryAvailableR = 0
+        outputCarryHopsAccumulatedL = 0
+        outputCarryHopsAccumulatedR = 0
     }
 
     @inline(__always)
@@ -225,51 +234,9 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             return
         }
 
+        // PHASE 1 — consume every sample of `src` for this call, running any
+        // hop completions along the way. This phase never writes to `dst`.
         var srcPos = 0
-        var dstPos = 0
-
-        // Drain any pending output from carry-over ring buffer first
-        var carryReadPos = 0
-        var carryAvailable = 0
-        if accum == accumL {
-            carryReadPos = outputCarryReadPosL
-            carryAvailable = outputCarryAvailableL
-        } else {
-            carryReadPos = outputCarryReadPosR
-            carryAvailable = outputCarryAvailableR
-        }
-
-        let carryCapacity = 8 * _hopSize
-        while carryAvailable > 0 && dstPos < frameCount {
-            let chunk = min(carryAvailable, frameCount - dstPos)
-            // Handle ring buffer wrap-around
-            let readEnd = min(carryReadPos + chunk, carryCapacity)
-            let firstPart = readEnd - carryReadPos
-            if accum == accumL {
-                memcpy(dst.advanced(by: dstPos), outputCarryL.advanced(by: carryReadPos), firstPart * MemoryLayout<Float>.size)
-                if chunk > firstPart {
-                    memcpy(dst.advanced(by: dstPos + firstPart), outputCarryL, (chunk - firstPart) * MemoryLayout<Float>.size)
-                }
-            } else {
-                memcpy(dst.advanced(by: dstPos), outputCarryR.advanced(by: carryReadPos), firstPart * MemoryLayout<Float>.size)
-                if chunk > firstPart {
-                    memcpy(dst.advanced(by: dstPos + firstPart), outputCarryR, (chunk - firstPart) * MemoryLayout<Float>.size)
-                }
-            }
-            dstPos += chunk
-            carryReadPos = (carryReadPos + chunk) % carryCapacity
-            carryAvailable -= chunk
-        }
-
-        // Update carry-over buffer state after draining
-        if accum == accumL {
-            outputCarryReadPosL = carryReadPos
-            outputCarryAvailableL = carryAvailable
-        } else {
-            outputCarryReadPosR = carryReadPos
-            outputCarryAvailableR = carryAvailable
-        }
-
         while srcPos < frameCount {
             let chunk = min(_hopSize - accumPos, frameCount - srcPos)
             memcpy(accum.advanced(by: _hopSize + accumPos), src.advanced(by: srcPos),
@@ -337,6 +304,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                     }
                     outputCarryWritePosL = (writePos + _hopSize) % carryCapacity
                     outputCarryAvailableL += _hopSize
+                    outputCarryHopsAccumulatedL += 1
                 } else {
                     let writePos = outputCarryWritePosR
                     let writeEnd = min(writePos + _hopSize, carryCapacity)
@@ -347,53 +315,62 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                     }
                     outputCarryWritePosR = (writePos + _hopSize) % carryCapacity
                     outputCarryAvailableR += _hopSize
-                }
-
-                // Drain from carry-over ring buffer into destination if there's space left
-                var drainReadPos = 0
-                var drainAvailable = 0
-                if accum == accumL {
-                    drainReadPos = outputCarryReadPosL
-                    drainAvailable = outputCarryAvailableL
-                } else {
-                    drainReadPos = outputCarryReadPosR
-                    drainAvailable = outputCarryAvailableR
-                }
-
-                while drainAvailable > 0 && dstPos < frameCount {
-                    let chunk = min(drainAvailable, frameCount - dstPos)
-                    // Handle ring buffer wrap-around
-                    let readEnd = min(drainReadPos + chunk, carryCapacity)
-                    let firstPart = readEnd - drainReadPos
-                    if accum == accumL {
-                        memcpy(dst.advanced(by: dstPos), outputCarryL.advanced(by: drainReadPos), firstPart * MemoryLayout<Float>.size)
-                        if chunk > firstPart {
-                            memcpy(dst.advanced(by: dstPos + firstPart), outputCarryL, (chunk - firstPart) * MemoryLayout<Float>.size)
-                        }
-                    } else {
-                        memcpy(dst.advanced(by: dstPos), outputCarryR.advanced(by: drainReadPos), firstPart * MemoryLayout<Float>.size)
-                        if chunk > firstPart {
-                            memcpy(dst.advanced(by: dstPos + firstPart), outputCarryR, (chunk - firstPart) * MemoryLayout<Float>.size)
-                        }
-                    }
-                    dstPos += chunk
-                    drainReadPos = (drainReadPos + chunk) % carryCapacity
-                    drainAvailable -= chunk
-                }
-
-                // Update carry-over buffer state after draining
-                if accum == accumL {
-                    outputCarryReadPosL = drainReadPos
-                    outputCarryAvailableL = drainAvailable
-                } else {
-                    outputCarryReadPosR = drainReadPos
-                    outputCarryAvailableR = drainAvailable
+                    outputCarryHopsAccumulatedR += 1
                 }
 
                 // Save second half of INPUT as the overlap for the next frame (overlap-save).
                 memcpy(overlap, accum.advanced(by: _hopSize), _hopSize * MemoryLayout<Float>.size)
                 accumPos = 0
             }
+        }
+
+        // PHASE 2 — now that every read of `src` is done, it's safe to overwrite
+        // dst (even if dst === src). Drain the carry ring buffer to fill dst.
+        // Only drain after startup phase (accumulate 2 hops first to prevent underfill).
+        var dstPos = 0
+        var readPos: Int
+        var available: Int
+        var hopsAccumulated: Int
+        if accum == accumL {
+            readPos = outputCarryReadPosL
+            available = outputCarryAvailableL
+            hopsAccumulated = outputCarryHopsAccumulatedL
+        } else {
+            readPos = outputCarryReadPosR
+            available = outputCarryAvailableR
+            hopsAccumulated = outputCarryHopsAccumulatedR
+        }
+
+        // Skip draining during startup phase
+        if hopsAccumulated >= startupHopsRequired {
+            let carryCapacity = 8 * _hopSize
+            while available > 0 && dstPos < frameCount {
+                let chunk = min(available, frameCount - dstPos)
+                let readEnd = min(readPos + chunk, carryCapacity)
+                let firstPart = readEnd - readPos
+                if accum == accumL {
+                    memcpy(dst.advanced(by: dstPos), outputCarryL.advanced(by: readPos), firstPart * MemoryLayout<Float>.size)
+                    if chunk > firstPart {
+                        memcpy(dst.advanced(by: dstPos + firstPart), outputCarryL, (chunk - firstPart) * MemoryLayout<Float>.size)
+                    }
+                } else {
+                    memcpy(dst.advanced(by: dstPos), outputCarryR.advanced(by: readPos), firstPart * MemoryLayout<Float>.size)
+                    if chunk > firstPart {
+                        memcpy(dst.advanced(by: dstPos + firstPart), outputCarryR, (chunk - firstPart) * MemoryLayout<Float>.size)
+                    }
+                }
+                dstPos += chunk
+                readPos = (readPos + chunk) % carryCapacity
+                available -= chunk
+            }
+        }
+
+        if accum == accumL {
+            outputCarryReadPosL = readPos
+            outputCarryAvailableL = available
+        } else {
+            outputCarryReadPosR = readPos
+            outputCarryAvailableR = available
         }
 
     }
