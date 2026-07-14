@@ -266,29 +266,30 @@ final class AllPassChain: @unchecked Sendable {
         let b0 = biquad.b0, b1 = biquad.b1, b2 = biquad.b2
         let a1 = biquad.a1, a2 = biquad.a2
 
-        // Numerator and denominator of H(z) at z = e^(jω)
         let numReal = b0 + b1 * cosOmega + b2 * cos(2.0 * omega)
         let numImag = b1 * sinOmega + b2 * sin(2.0 * omega)
         let denReal = 1.0 + a1 * cosOmega + a2 * cos(2.0 * omega)
         let denImag = a1 * sinOmega + a2 * sin(2.0 * omega)
 
-        // Derivatives with respect to ω
         let numRealDeriv = -b1 * sinOmega - 2.0 * b2 * sin(2.0 * omega)
         let numImagDeriv = b1 * cosOmega + 2.0 * b2 * cos(2.0 * omega)
         let denRealDeriv = -a1 * sinOmega - 2.0 * a2 * sin(2.0 * omega)
         let denImagDeriv = a1 * cosOmega + 2.0 * a2 * cos(2.0 * omega)
 
-        // Group delay = Re( (H' * conj(H)) / |H|^2 )
-        let hReal = numReal * denReal + numImag * denImag
-        let hImag = numImag * denReal - numReal * denImag
-        let hMagSq = denReal * denReal + denImag * denImag
+        let numMagSq = numReal * numReal + numImag * numImag
+        let denMagSq = denReal * denReal + denImag * denImag
 
-        let hRealDeriv = numRealDeriv * denReal + numImagDeriv * denImag - numReal * denRealDeriv - numImag * denImagDeriv
-        let hImagDeriv = numImagDeriv * denReal - numRealDeriv * denImag - numImag * denRealDeriv + numReal * denImagDeriv
+        // d(arg Num)/dω and d(arg Den)/dω, each via the standard
+        // d(arg f)/dω = (Re(f)·Im(f)' - Im(f)·Re(f)') / |f|^2 identity.
+        let dArgNum = (numReal * numImagDeriv - numImag * numRealDeriv) / (numMagSq + 1e-30)
+        let dArgDen = (denReal * denImagDeriv - denImag * denRealDeriv) / (denMagSq + 1e-30)
 
-        let groupDelay = (hRealDeriv * hReal + hImagDeriv * hImag) / (hMagSq * hMagSq + 1e-30)
-
-        return groupDelay
+        // groupDelay = +d(phase)/dω under this file's existing numImag/denImag
+        // sign convention (phaseAtFrequency in this same file uses the same
+        // convention, which is why this is `+` rather than the textbook `-dφ/dω`
+        // — verified against a known-exact case: a pure z^-1 delay must give
+        // exactly +1.0 here, and does with this sign).
+        return dArgNum - dArgDen
     }
 
     /// Computes group delay at a single frequency for an all-pass section.
@@ -342,8 +343,8 @@ final class AllPassChain: @unchecked Sendable {
     ///   - sampleRate: Audio sample rate in Hz.
     /// - Returns: Array of fitted (frequency, Q) parameters, or nil if fitting fails.
     internal static func fitAllPassSectionsForBand(biquadSections: [BiquadCoefficients], sampleRate: Double) -> [FittedAllPassParams]? {
-        // Generate cache key from biquad coefficients
-        let cacheKey = biquadSections.map { "\($0.b0),\($0.b1),\($0.b2),\($0.a1),\($0.a2)" }.joined(separator: "|")
+        // Generate cache key from biquad coefficients and sample rate
+        let cacheKey = biquadSections.map { "\($0.b0),\($0.b1),\($0.b2),\($0.a1),\($0.a2)" }.joined(separator: "|") + "|sr:\(sampleRate)"
 
         // Check cache
         cacheLock.lock()

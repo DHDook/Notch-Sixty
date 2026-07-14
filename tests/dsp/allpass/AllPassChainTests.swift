@@ -11,26 +11,20 @@ final class AllPassChainTests: XCTestCase {
 
     func testRegressionGate_NoWorseThanBiquadAlone() {
         // Regression gate: for a representative sweep of band configurations,
-        // the peak group delay deviation of the combined system (biquad + all-pass)
-        // must be <= the same quantity for the biquad alone.
-        // This ensures Mixed Phase is never worse than EQ mode for phase.
+        // the Phase 1 guard should correctly identify whether an all-pass section
+        // improves group delay. With the fixed formula, the guard now makes
+        // decisions based on correct group delay values.
 
         let frequencies = [100.0, 1000.0, 8000.0]
         let qs = [0.7, 1.0, 2.0, 4.0, 8.0]
         let gains = [-12.0, -6.0, -3.0, 3.0, 6.0, 12.0]
 
+        var sectionsRejected = 0
+        var sectionsAccepted = 0
+
         for freq in frequencies {
             for q in qs {
                 for gain in gains {
-                    let band = EQBandConfiguration(
-                        frequency: Float(freq),
-                        q: Float(q),
-                        gain: Float(gain),
-                        filterType: .parametric,
-                        bypass: false
-                    )
-
-                    // Get biquad coefficients for this band
                     let coefficients = BiquadMath.calculateCoefficients(
                         type: .parametric,
                         sampleRate: sampleRate,
@@ -39,25 +33,39 @@ final class AllPassChainTests: XCTestCase {
                         gain: gain
                     )
 
-                    // Compute group delay of biquad alone
-                    let gdBiquad = computeGroupDelay(biquad: coefficients, sampleRate: sampleRate)
-                    let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+                    // Use the Phase 1 guard to evaluate whether the all-pass section helps
+                    let improves = AllPassChain.allPassSectionImprovesGroupDelay(biquad: coefficients, sampleRate: sampleRate)
 
-                    // Compute group delay of biquad + all-pass (using current construction)
-                    let allPassSection = AllPassChain.allPassSection(from: coefficients)
-                    let gdCombined = computeGroupDelayCombined(biquad: coefficients, allPass: allPassSection, sampleRate: sampleRate)
-                    let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+                    if improves {
+                        sectionsAccepted += 1
+                    } else {
+                        sectionsRejected += 1
+                    }
 
-                    // Regression gate: combined must not be worse than biquad alone
-                    // With Phase 1 guard, this should always pass (sections that don't help are skipped)
-                    XCTAssertLessThanOrEqual(
-                        peakDeviationCombined,
-                        peakDeviationBiquad * 1.001,  // Allow 0.1% numerical tolerance
-                        "Band f=\(freq)Hz Q=\(q) gain=\(gain)dB: combined peak deviation (\(peakDeviationCombined)) exceeds biquad alone (\(peakDeviationBiquad))"
-                    )
+                    // Verify that when the guard accepts a section, it actually improves group delay
+                    if improves {
+                        let gdBiquad = computeGroupDelay(biquad: coefficients, sampleRate: sampleRate)
+                        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+                        let allPassSection = AllPassChain.allPassSection(from: coefficients)
+                        let gdCombined = computeGroupDelayCombined(biquad: coefficients, allPass: allPassSection, sampleRate: sampleRate)
+                        let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+                        XCTAssertLessThan(
+                            peakDeviationCombined,
+                            peakDeviationBiquad,
+                            "Guard accepted section but it doesn't improve: f=\(freq)Hz Q=\(q) gain=\(gain)dB"
+                        )
+                    }
                 }
             }
         }
+
+        // The guard should reject some sections (not all configurations benefit from all-pass correction)
+        XCTAssertGreaterThan(sectionsRejected, 0, "Phase 1 guard should reject at least some sections")
+        
+        // The guard should also accept some sections (the all-pass construction helps in some cases)
+        XCTAssertGreaterThan(sectionsAccepted, 0, "Phase 1 guard should accept at least some sections")
     }
 
     func testPhase1Guard_RejectsWorseningSections() {
@@ -65,7 +73,7 @@ final class AllPassChainTests: XCTestCase {
         // The guard should only accept all-pass sections that measurably reduce
         // peak group delay deviation compared to the biquad alone.
 
-        // Test with a high-Q boost where the current construction is known to be problematic
+        // Test with a high-Q boost where the simple construction typically doesn't help
         let coefficients = BiquadMath.calculateCoefficients(
             type: .parametric,
             sampleRate: sampleRate,
@@ -76,11 +84,10 @@ final class AllPassChainTests: XCTestCase {
 
         let improves = AllPassChain.allPassSectionImprovesGroupDelay(biquad: coefficients, sampleRate: sampleRate)
 
-        // The guard evaluates whether the all-pass helps or not.
-        // For this high-Q case, it may or may not help depending on the specific parameters.
-        // The important thing is that the guard makes the decision correctly.
-        // We just verify it runs without crashing and returns a boolean.
-        XCTAssertTrue(improves == true || improves == false, "Guard should return a boolean result")
+        // With the corrected group delay formula, this high-Q boost case should be rejected
+        // because the simple all-pass construction doesn't actually improve group delay for
+        // this configuration. The guard correctly identifies this and returns false.
+        XCTAssertFalse(improves, "Phase 1 guard should reject all-pass section for high-Q boost that doesn't improve group delay")
     }
 
     // MARK: - Magnitude Invariance Test
@@ -143,6 +150,100 @@ final class AllPassChainTests: XCTestCase {
             }
         }
         // If fitting returns nil, that's also valid (means no improvement was found)
+    }
+
+    // MARK: - Independent Reference Check Test
+
+    func testGroupDelayFormula_IndependentReferenceCheck() {
+        // Independent reference check for the group delay formula.
+        // This test validates groupDelayAtFrequency against a known-exact case
+        // that would have caught the original bug immediately.
+        
+        // Test 1: Pure one-sample delay (z^-1) must give exactly 1.0 at every frequency
+        // H(z) = z^-1 has coefficients: b0=0, b1=1, b2=0, a1=0, a2=0
+        let unitDelay = BiquadCoefficients(b0: 0.0, b1: 1.0, b2: 0.0, a1: 0.0, a2: 0.0)
+        
+        let testFrequencies = [20.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0, 20000.0]
+        for freq in testFrequencies {
+            let gd = groupDelayAtFrequency(biquad: unitDelay, frequency: freq, sampleRate: sampleRate)
+            XCTAssertEqual(gd, 1.0, accuracy: 1e-10, "Pure z^-1 delay must give exactly 1.0 at \(freq) Hz")
+        }
+        
+        // Test 2: Verify against finite-difference of phaseAtFrequency
+        // This provides an independent reference not derived from groupDelayAtFrequency itself
+        let coefficients = BiquadMath.calculateCoefficients(
+            type: .parametric,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 2.0,
+            gain: 6.0
+        )
+        
+        let deltaOmega = 1e-6  // Small step for finite difference
+        let testFreq = 1000.0
+        let omega = 2.0 * Double.pi * testFreq / sampleRate
+        
+        // Compute phase at omega ± deltaOmega
+        let phasePlus = phaseAtFrequency(biquad: coefficients, frequency: testFreq + deltaOmega * sampleRate / (2.0 * .pi), sampleRate: sampleRate)
+        let phaseMinus = phaseAtFrequency(biquad: coefficients, frequency: testFreq - deltaOmega * sampleRate / (2.0 * .pi), sampleRate: sampleRate)
+        
+        // Finite difference approximation: dφ/dω ≈ (φ(ω+Δ) - φ(ω-Δ)) / (2Δ)
+        let gdFiniteDiff = (phasePlus - phaseMinus) / (2.0 * deltaOmega)
+        
+        // Compare with groupDelayAtFrequency (should match within tolerance)
+        let gdFormula = groupDelayAtFrequency(biquad: coefficients, frequency: testFreq, sampleRate: sampleRate)
+        
+        // Allow 1% tolerance for finite-difference approximation error
+        let relativeError = abs(gdFormula - gdFiniteDiff) / max(abs(gdFiniteDiff), 1e-10)
+        XCTAssertLessThan(relativeError, 0.01, "Group delay formula should match finite-difference approximation within 1%")
+        
+        // Test 3: Sweep across frequency/Q/gain combinations to ensure formula is generally correct
+        let frequencies = [100.0, 1000.0, 8000.0]
+        let qs = [0.7, 2.0, 8.0]
+        let gains = [-12.0, 6.0, 12.0]
+        
+        for freq in frequencies {
+            for q in qs {
+                for gain in gains {
+                    let bandCoeffs = BiquadMath.calculateCoefficients(
+                        type: .parametric,
+                        sampleRate: sampleRate,
+                        frequency: freq,
+                        q: q,
+                        gain: gain
+                    )
+                    
+                    // Compute group delay via formula
+                    let gdFormula = groupDelayAtFrequency(biquad: bandCoeffs, frequency: freq, sampleRate: sampleRate)
+                    
+                    // Compute via finite difference at the band center
+                    let omegaBand = 2.0 * Double.pi * freq / sampleRate
+                    let phasePlusBand = phaseAtFrequency(biquad: bandCoeffs, frequency: freq + deltaOmega * sampleRate / (2.0 * .pi), sampleRate: sampleRate)
+                    let phaseMinusBand = phaseAtFrequency(biquad: bandCoeffs, frequency: freq - deltaOmega * sampleRate / (2.0 * .pi), sampleRate: sampleRate)
+                    let gdFiniteDiffBand = (phasePlusBand - phaseMinusBand) / (2.0 * deltaOmega)
+                    
+                    // Allow 1% tolerance
+                    let relativeErrorBand = abs(gdFormula - gdFiniteDiffBand) / max(abs(gdFiniteDiffBand), 1e-10)
+                    XCTAssertLessThan(relativeErrorBand, 0.01, "Group delay formula should match finite-difference for f=\(freq)Hz Q=\(q) gain=\(gain)dB")
+                }
+            }
+        }
+    }
+
+    private func phaseAtFrequency(biquad: BiquadCoefficients, frequency: Double, sampleRate: Double) -> Double {
+        let omega = 2.0 * Double.pi * frequency / sampleRate
+        let cosOmega = cos(omega)
+        let sinOmega = sin(omega)
+
+        let b0 = biquad.b0, b1 = biquad.b1, b2 = biquad.b2
+        let a1 = biquad.a1, a2 = biquad.a2
+
+        let numReal = b0 + b1 * cosOmega + b2 * cos(2.0 * omega)
+        let numImag = b1 * sinOmega + b2 * sin(2.0 * omega)
+        let denReal = 1.0 + a1 * cosOmega + a2 * cos(2.0 * omega)
+        let denImag = a1 * sinOmega + a2 * sin(2.0 * omega)
+
+        return atan2(numImag, numReal) - atan2(denImag, denReal)
     }
 
     // MARK: - Helper Functions
@@ -221,16 +322,20 @@ final class AllPassChainTests: XCTestCase {
         let denRealDeriv = -a1 * sinOmega - 2.0 * a2 * sin(2.0 * omega)
         let denImagDeriv = a1 * cosOmega + 2.0 * a2 * cos(2.0 * omega)
 
-        let hReal = numReal * denReal + numImag * denImag
-        let hImag = numImag * denReal - numReal * denImag
-        let hMagSq = denReal * denReal + denImag * denImag
+        let numMagSq = numReal * numReal + numImag * numImag
+        let denMagSq = denReal * denReal + denImag * denImag
 
-        let hRealDeriv = numRealDeriv * denReal + numImagDeriv * denImag - numReal * denRealDeriv - numImag * denImagDeriv
-        let hImagDeriv = numImagDeriv * denReal - numRealDeriv * denImag - numImag * denRealDeriv + numReal * denImagDeriv
+        // d(arg Num)/dω and d(arg Den)/dω, each via the standard
+        // d(arg f)/dω = (Re(f)·Im(f)' - Im(f)·Re(f)') / |f|^2 identity.
+        let dArgNum = (numReal * numImagDeriv - numImag * numRealDeriv) / (numMagSq + 1e-30)
+        let dArgDen = (denReal * denImagDeriv - denImag * denRealDeriv) / (denMagSq + 1e-30)
 
-        let groupDelay = (hRealDeriv * hReal + hImagDeriv * hImag) / (hMagSq * hMagSq + 1e-30)
-
-        return groupDelay
+        // groupDelay = +d(phase)/dω under this file's existing numImag/denImag
+        // sign convention (phaseAtFrequency in this same file uses the same
+        // convention, which is why this is `+` rather than the textbook `-dφ/dω`
+        // — verified against a known-exact case: a pure z^-1 delay must give
+        // exactly +1.0 here, and does with this sign).
+        return dArgNum - dArgDen
     }
 
     private func groupDelayAtFrequency(allPass: AllPassChain.AllPassSection, frequency: Double, sampleRate: Double) -> Double {
@@ -340,16 +445,20 @@ extension AllPassChain {
         let denRealDeriv = -a1 * sinOmega - 2.0 * a2 * sin(2.0 * omega)
         let denImagDeriv = a1 * cosOmega + 2.0 * a2 * cos(2.0 * omega)
 
-        let hReal = numReal * denReal + numImag * denImag
-        let hImag = numImag * denReal - numReal * denImag
-        let hMagSq = denReal * denReal + denImag * denImag
+        let numMagSq = numReal * numReal + numImag * numImag
+        let denMagSq = denReal * denReal + denImag * denImag
 
-        let hRealDeriv = numRealDeriv * denReal + numImagDeriv * denImag - numReal * denRealDeriv - numImag * denImagDeriv
-        let hImagDeriv = numImagDeriv * denReal - numRealDeriv * denImag - numImag * denRealDeriv + numReal * denImagDeriv
+        // d(arg Num)/dω and d(arg Den)/dω, each via the standard
+        // d(arg f)/dω = (Re(f)·Im(f)' - Im(f)·Re(f)') / |f|^2 identity.
+        let dArgNum = (numReal * numImagDeriv - numImag * numRealDeriv) / (numMagSq + 1e-30)
+        let dArgDen = (denReal * denImagDeriv - denImag * denRealDeriv) / (denMagSq + 1e-30)
 
-        let groupDelay = (hRealDeriv * hReal + hImagDeriv * hImag) / (hMagSq * hMagSq + 1e-30)
-
-        return groupDelay
+        // groupDelay = +d(phase)/dω under this file's existing numImag/denImag
+        // sign convention (phaseAtFrequency in this same file uses the same
+        // convention, which is why this is `+` rather than the textbook `-dφ/dω`
+        // — verified against a known-exact case: a pure z^-1 delay must give
+        // exactly +1.0 here, and does with this sign).
+        return dArgNum - dArgDen
     }
 
     static func groupDelayAtFrequency(allPass: AllPassSection, frequency: Double, sampleRate: Double) -> Double {
