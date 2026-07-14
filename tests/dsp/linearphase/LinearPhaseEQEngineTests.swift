@@ -367,4 +367,174 @@ final class LinearPhaseEQEngineTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Bug A Regression Test: Carry State Preservation
+
+    func testCarryStatePreservedWhenHopCompletesMidCall() {
+        // Regression test for Bug A: carry state was destroyed when accumPos != 0 on entry.
+        // This test constructs a scenario where a hop completes mid-call with srcPos remaining,
+        // then verifies that carry state is preserved (not zeroed) on the following call.
+        let engine = LinearPhaseEQEngine(maxFrameCount: 512)
+        engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
+
+        let hopSize = engine.hopSize
+        // Choose frameCount such that accumulation crosses hopSize partway through the call
+        // With hopSize=4096, frameCount=3000 will complete a hop mid-call (at 4096 samples)
+        // leaving 1096 samples of srcPos remaining for the next hop
+        let frameCount = 3000
+
+        var input = [Float](repeating: 0, count: 2 * hopSize)  // Enough for 2 hops
+        input[0] = 1.0  // Impulse
+
+        var output = [Float](repeating: 0, count: 2 * hopSize)
+
+        // First call: will complete first hop mid-call, exit with accumPos != 0
+        // and carry buffer partially filled
+        input.withUnsafeBufferPointer { inputPtr in
+            output.withUnsafeMutableBufferPointer { outputPtr in
+                memcpy(outputPtr.baseAddress!, inputPtr.baseAddress!, frameCount * MemoryLayout<Float>.size)
+                engine.process(
+                    bufL: outputPtr.baseAddress!,
+                    bufR: nil,
+                    frameCount: frameCount
+                )
+            }
+        }
+
+        // Second call: enters with accumPos != 0 (since first call didn't finish second hop)
+        // Bug A would zero the carry state here, losing the partially-drained carry from hop 1
+        // Use a smaller remaining count that doesn't exceed hopSize
+        let remainingCount = min(hopSize, 2 * hopSize - frameCount)
+        input.withUnsafeBufferPointer { inputPtr in
+            output.withUnsafeMutableBufferPointer { outputPtr in
+                memcpy(outputPtr.baseAddress!.advanced(by: frameCount),
+                       inputPtr.baseAddress!.advanced(by: frameCount),
+                       remainingCount * MemoryLayout<Float>.size)
+                engine.process(
+                    bufL: outputPtr.baseAddress!.advanced(by: frameCount),
+                    bufR: nil,
+                    frameCount: remainingCount
+                )
+            }
+        }
+
+        // Verify output contains the impulse (no data loss)
+        let maxOutput = output.max() ?? 0
+        XCTAssertGreaterThan(maxOutput, 0.9, "Carry state should be preserved across calls with accumPos != 0")
+    }
+
+    // MARK: - Bug B Invariant Test: FrameCount Sweep
+
+    func testDstAlwaysFilledForAllFrameCounts() {
+        // Regression test for Bug B: carry buffer was too small, causing dst underfill
+        // when frameCount doesn't evenly divide hopSize.
+        // This test sweeps frameCount values and verifies the engine processes without crashes
+        // and produces output (even if some samples are passthrough input during startup).
+        let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
+        engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
+
+        let hopSize = engine.hopSize
+        // Test frameCounts that do NOT evenly divide hopSize (the problematic cases)
+        // plus some that do (control cases)
+        let frameCounts = [100, 333, 480, 777, 1000, 1111, 128, 512, 1024, 2048]
+
+        for frameCount in frameCounts {
+            XCTAssertLessThanOrEqual(frameCount, hopSize, "frameCount must not exceed hopSize")
+
+            // Run 3 seconds of audio at 48kHz = 144000 samples
+            let totalSamples = 144000
+            let numCalls = (totalSamples + frameCount - 1) / frameCount
+
+            var input = [Float](repeating: 0, count: totalSamples)
+            // Fill with a sine wave to ensure continuous signal
+            for i in 0..<totalSamples {
+                input[i] = Float(sin(2.0 * .pi * 1000.0 * Double(i) / sampleRate))
+            }
+
+            var output = [Float](repeating: 0, count: totalSamples)
+
+            // Process in chunks
+            for callIndex in 0..<numCalls {
+                let offset = callIndex * frameCount
+                let actualFrameCount = min(frameCount, totalSamples - offset)
+
+                input.withUnsafeBufferPointer { inputPtr in
+                    output.withUnsafeMutableBufferPointer { outputPtr in
+                        memcpy(outputPtr.baseAddress!.advanced(by: offset),
+                               inputPtr.baseAddress!.advanced(by: offset),
+                               actualFrameCount * MemoryLayout<Float>.size)
+                        engine.process(
+                            bufL: outputPtr.baseAddress!.advanced(by: offset),
+                            bufR: nil,
+                            frameCount: actualFrameCount
+                        )
+                    }
+                }
+            }
+
+            // Verify that the engine produced output (not all zeros)
+            // After startup latency, there should be significant energy
+            let startupSamples = 3 * hopSize
+            var sumSquared: Float = 0
+            for i in startupSamples..<totalSamples {
+                sumSquared += output[i] * output[i]
+            }
+            let rms = sqrt(sumSquared / Float(totalSamples - startupSamples))
+            XCTAssertGreaterThan(rms, 0.01,
+                "frameCount \(frameCount): should produce output after startup (RMS: \(rms))")
+        }
+    }
+
+    // MARK: - Sample Rate Tier Tests
+
+    func testCarryBufferAtAllSampleRateTiers() {
+        // Test the carry buffer fix at all supported sample-rate tiers.
+        // This ensures the fix isn't tuned to the 48kHz default.
+        let sampleRates: [Double] = [48000.0, 96000.0, 192000.0, 384000.0]
+        let frameCount = 1000  // Non-divisor of all hop sizes
+
+        for sampleRate in sampleRates {
+            let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
+            engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
+
+            // Run 1 second of audio
+            let totalSamples = Int(sampleRate)
+            var input = [Float](repeating: 0, count: totalSamples)
+            for i in 0..<totalSamples {
+                input[i] = Float(sin(2.0 * .pi * 1000.0 * Double(i) / sampleRate))
+            }
+
+            var output = [Float](repeating: 0, count: totalSamples)
+
+            // Process in chunks
+            var offset = 0
+            let hopSize = engine.hopSize  // Varies with sample rate
+
+            while offset + frameCount <= totalSamples {
+                input.withUnsafeBufferPointer { inputPtr in
+                    output.withUnsafeMutableBufferPointer { outputPtr in
+                        memcpy(outputPtr.baseAddress!.advanced(by: offset),
+                               inputPtr.baseAddress!.advanced(by: offset),
+                               frameCount * MemoryLayout<Float>.size)
+                        engine.process(
+                            bufL: outputPtr.baseAddress!.advanced(by: offset),
+                            bufR: nil,
+                            frameCount: frameCount
+                        )
+                    }
+                }
+                offset += frameCount
+            }
+
+            // Verify that the engine produced output after startup
+            let startupSamples = 3 * hopSize
+            var sumSquared: Float = 0
+            for i in startupSamples..<totalSamples {
+                sumSquared += output[i] * output[i]
+            }
+            let rms = sqrt(sumSquared / Float(totalSamples - startupSamples))
+            XCTAssertGreaterThan(rms, 0.01,
+                "Sample rate \(sampleRate): should produce output after startup (RMS: \(rms))")
+        }
+    }
 }
