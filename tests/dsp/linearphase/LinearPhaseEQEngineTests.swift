@@ -491,39 +491,54 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         // Primary test for the in-place buffer feedback bug fix.
         // Process audio with src === dst (matching real calling convention)
         // and verify RMS stays flat with no exponential runaway.
+        // Uses a real boosted band to ensure the test would catch the bug if it regressed.
+        // Uses production-like methodology: generate continuous signal upfront, copy successive windows.
         let engine = LinearPhaseEQEngine(maxFrameCount: 2048)
-        engine.updateIR(leftBands: [], rightBands: [], sampleRate: sampleRate)
+        let band = EQBandConfiguration(
+            frequency: 1000.0,
+            q: 4.0,
+            gain: 6.0,
+            filterType: .parametric,
+            bypass: false
+        )
+        engine.updateIR(leftBands: [band], rightBands: [band], sampleRate: sampleRate)
 
-        let hopSize = engine.hopSize
         let frameCount = 512  // Typical HAL buffer size
         let durationSeconds = 5.0
         let totalSamples = Int(sampleRate * durationSeconds)
         let numCalls = (totalSamples + frameCount - 1) / frameCount
 
-        // Generate continuous sine wave input
-        var input = [Float](repeating: 0, count: frameCount)
-        for i in 0..<frameCount {
-            input[i] = Float(sin(2.0 * .pi * 1000.0 * Double(i) / sampleRate))
+        // Generate long continuous sine wave input upfront
+        var longInput = [Float](repeating: 0, count: totalSamples)
+        for i in 0..<totalSamples {
+            longInput[i] = Float(sin(2.0 * .pi * 1000.0 * Double(i) / sampleRate))
         }
 
-        // Process in-place (src === dst) for several seconds
-        var buffer = input  // This buffer is both input and output
+        // Reusable buffer for in-place processing (src === dst)
+        var buffer = [Float](repeating: 0, count: frameCount)
         var rmsValues: [Float] = []
 
         for callIndex in 0..<numCalls {
-            // Process in-place - buffer is both src and dst
-            engine.process(bufL: &buffer, bufR: nil, frameCount: frameCount)
+            let offset = callIndex * frameCount
+            if offset + frameCount <= totalSamples {
+                // Copy fresh input into buffer
+                buffer.withUnsafeMutableBufferPointer { bufferPtr in
+                    longInput.withUnsafeBufferPointer { inputPtr in
+                        memcpy(bufferPtr.baseAddress!, inputPtr.baseAddress!.advanced(by: offset), frameCount * MemoryLayout<Float>.size)
+                    }
+                }
 
-            // Calculate RMS of this chunk
-            var sumSquared: Float = 0
-            for i in 0..<frameCount {
-                sumSquared += buffer[i] * buffer[i]
+                // Process in-place - buffer is both src and dst
+                engine.process(bufL: &buffer, bufR: nil, frameCount: frameCount)
+
+                // Calculate RMS of this chunk
+                var sumSquared: Float = 0
+                for i in 0..<frameCount {
+                    sumSquared += buffer[i] * buffer[i]
+                }
+                let rms = sqrt(sumSquared / Float(frameCount))
+                rmsValues.append(rms)
             }
-            let rms = sqrt(sumSquared / Float(frameCount))
-            rmsValues.append(rms)
-
-            // The buffer now contains processed output, which becomes the next input
-            // (simulating continuous streaming through the same buffer)
         }
 
         // Verify RMS stays bounded - should not show exponential growth
@@ -532,9 +547,10 @@ final class LinearPhaseEQEngineTests: XCTestCase {
         let maxRMS = rmsValues.max() ?? 0
 
         // RMS should stay within reasonable bounds (not grow exponentially)
-        // Allow some variation due to startup latency, but final should be close to initial
+        // The 6dB gain will naturally double the RMS level (~2x), so allow for that
+        // plus some variation due to startup latency
         let growthRatio = finalRMS / (initialRMS + 0.0001)  // Avoid division by zero
-        XCTAssertLessThan(growthRatio, 2.0,
+        XCTAssertLessThan(growthRatio, 3.0,  // Allow for 6dB gain (2x) plus margin
             "RMS should not grow significantly over time (initial: \(initialRMS), final: \(finalRMS), ratio: \(growthRatio))")
 
         // Max RMS should not be orders of magnitude larger than initial

@@ -326,7 +326,7 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
 
         // PHASE 2 — now that every read of `src` is done, it's safe to overwrite
         // dst (even if dst === src). Drain the carry ring buffer to fill dst.
-        // Only drain after startup phase (accumulate 2 hops first to prevent underfill).
+        // During startup (first 2 hops), use passthrough if carry is exhausted.
         var dstPos = 0
         var readPos: Int
         var available: Int
@@ -341,10 +341,10 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             hopsAccumulated = outputCarryHopsAccumulatedR
         }
 
-        // Skip draining during startup phase
-        if hopsAccumulated >= startupHopsRequired {
-            let carryCapacity = 8 * _hopSize
-            while available > 0 && dstPos < frameCount {
+        let carryCapacity = 8 * _hopSize
+        while dstPos < frameCount {
+            if hopsAccumulated >= startupHopsRequired && available > 0 {
+                // Drain from carry buffer
                 let chunk = min(available, frameCount - dstPos)
                 let readEnd = min(readPos + chunk, carryCapacity)
                 let firstPart = readEnd - readPos
@@ -362,6 +362,11 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
                 dstPos += chunk
                 readPos = (readPos + chunk) % carryCapacity
                 available -= chunk
+            } else {
+                // Passthrough: copy src to dst (safe now because all src reads are done)
+                let remaining = frameCount - dstPos
+                memcpy(dst.advanced(by: dstPos), src.advanced(by: dstPos), remaining * MemoryLayout<Float>.size)
+                dstPos = frameCount
             }
         }
 

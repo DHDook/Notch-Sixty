@@ -336,13 +336,35 @@ final class AllPassChain: @unchecked Sendable {
 
     // MARK: - Phase 2 Fitted All-Pass Sections
 
+    /// Evaluates a candidate parameter set using peak group delay deviation as the objective.
+    private static func evaluateCandidate(
+        biquadSections: [BiquadCoefficients],
+        candidateParams: [(frequency: Double, q: Double)],
+        frequencies: [Double],
+        sampleRate: Double
+    ) -> Double {
+        var groupDelay = [Double](repeating: 0, count: frequencies.count)
+        for section in biquadSections {
+            for (i, f) in frequencies.enumerated() {
+                groupDelay[i] += groupDelayAtFrequency(biquad: section, frequency: f, sampleRate: sampleRate)
+            }
+        }
+        for (freq, q) in candidateParams {
+            let ap = allPassSectionFromParams(frequency: freq, q: q, sampleRate: sampleRate)
+            for (i, f) in frequencies.enumerated() {
+                groupDelay[i] += groupDelayAtFrequency(allPass: ap, frequency: f, sampleRate: sampleRate)
+            }
+        }
+        return peakGroupDelayDeviation(groupDelay: groupDelay)
+    }
+
     /// Fits optimized all-pass sections for a single band using numerical optimization.
     ///
     /// - Parameters:
     ///   - biquadSections: The biquad sections for this band.
     ///   - sampleRate: Audio sample rate in Hz.
     /// - Returns: Array of fitted (frequency, Q) parameters, or nil if fitting fails.
-    internal static func fitAllPassSectionsForBand(biquadSections: [BiquadCoefficients], sampleRate: Double) -> [FittedAllPassParams]? {
+    public static func fitAllPassSectionsForBand(biquadSections: [BiquadCoefficients], sampleRate: Double) -> [FittedAllPassParams]? {
         // Generate cache key from biquad coefficients and sample rate
         let cacheKey = biquadSections.map { "\($0.b0),\($0.b1),\($0.b2),\($0.a1),\($0.a2)" }.joined(separator: "|") + "|sr:\(sampleRate)"
 
@@ -354,16 +376,9 @@ final class AllPassChain: @unchecked Sendable {
         }
         cacheLock.unlock()
 
-        // Compute target phase: φ_target(ω) = -φ_bands(ω)
-        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
-        let targetPhase = computeCombinedPhase(biquadSections: biquadSections, frequencies: frequencies, sampleRate: sampleRate)
-            .map { -$0 }  // Target is negative of current phase
-
-        // Fit N sections using simple coordinate search (simplified Nelder-Mead)
+        // Fit N sections using multi-start coordinate search
         let fittedParams = fitAllPassSectionsWithCoordinateSearch(
             biquadSections: biquadSections,
-            targetPhase: targetPhase,
-            frequencies: frequencies,
             sampleRate: sampleRate,
             numSections: fittedSectionsPerBand
         )
@@ -406,22 +421,105 @@ final class AllPassChain: @unchecked Sendable {
         return atan2(numImag, numReal) - atan2(denImag, denReal)
     }
 
-    /// Fits all-pass sections using simplified coordinate search (gradient-free optimization).
+    /// Fits all-pass sections using multi-start coordinate search with peak group delay deviation objective.
     private static func fitAllPassSectionsWithCoordinateSearch(
         biquadSections: [BiquadCoefficients],
-        targetPhase: [Double],
+        sampleRate: Double,
+        numSections: Int
+    ) -> [FittedAllPassParams]? {
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute baseline peak deviation for biquad chain alone
+        let gdBiquad = computeGroupDelayForChain(biquadSections: biquadSections, allPassSections: [], frequencies: frequencies, sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Generate deterministic multi-start configurations
+        let seedMultipliers: [Double] = [0.5, 1.0, 2.0]
+        let seedQs: [Double] = [0.7, 2.0, 6.0]
+
+        // Estimate band frequency from biquad sections (use geometric mean of center frequencies)
+        let bandFrequency = estimateBandFrequency(biquadSections: biquadSections, sampleRate: sampleRate)
+
+        var candidateStarts: [[(frequency: Double, q: Double)]] = []
+        for freqMult in seedMultipliers {
+            for q in seedQs {
+                let seedFreq = max(20.0, min(bandFrequency * freqMult, sampleRate * 0.4))
+                candidateStarts.append(Array(repeating: (frequency: seedFreq, q: q), count: numSections))
+            }
+        }
+
+        // Run coordinate search from each starting point and keep the best result
+        var bestParams: [FittedAllPassParams]?
+        var bestDeviation = peakDeviationBiquad  // Initialize with baseline (no correction)
+
+        for startConfig in candidateStarts {
+            let params = runCoordinateSearch(
+                biquadSections: biquadSections,
+                startParams: startConfig,
+                frequencies: frequencies,
+                sampleRate: sampleRate,
+                numSections: numSections
+            )
+
+            if let params = params {
+                let candidateParams = params.map { (frequency: $0.frequency, q: $0.q) }
+                let deviation = evaluateCandidate(
+                    biquadSections: biquadSections,
+                    candidateParams: candidateParams,
+                    frequencies: frequencies,
+                    sampleRate: sampleRate
+                )
+
+                if deviation < bestDeviation {
+                    bestDeviation = deviation
+                    bestParams = params
+                }
+            }
+        }
+
+        // Only return if improvement is significant (> 5%)
+        if let bestParams = bestParams, bestDeviation < peakDeviationBiquad * 0.95 {
+            return bestParams
+        }
+
+        return nil  // Fitting didn't improve enough
+    }
+
+    /// Estimates the center frequency of a biquad band.
+    private static func estimateBandFrequency(biquadSections: [BiquadCoefficients], sampleRate: Double) -> Double {
+        // For a peaking EQ biquad, the center frequency can be estimated from the coefficients
+        // This is a simplified estimate - we use the geometric mean of estimated frequencies
+        var frequencies: [Double] = []
+        for sec in biquadSections {
+            // Estimate from the denominator: a1 = -2*cos(ω0)/Q, a2 = 1/Q^2 for peaking EQ
+            // This is approximate but works for our purpose of seeding the search
+            let omega0 = acos(-sec.a1 / (2 * sqrt(sec.a2)))
+            let freq = omega0 * sampleRate / (2 * .pi)
+            if freq > 20 && freq < sampleRate * 0.4 {
+                frequencies.append(freq)
+            }
+        }
+
+        if frequencies.isEmpty {
+            return 1000.0  // Fallback to 1 kHz if estimation fails
+        }
+
+        // Return geometric mean
+        let logSum = frequencies.map { log($0) }.reduce(0, +)
+        return exp(logSum / Double(frequencies.count))
+    }
+
+    /// Runs coordinate search from a given starting point.
+    private static func runCoordinateSearch(
+        biquadSections: [BiquadCoefficients],
+        startParams: [(frequency: Double, q: Double)],
         frequencies: [Double],
         sampleRate: Double,
         numSections: Int
     ) -> [FittedAllPassParams]? {
-        // Initial guess: center frequency at 1 kHz, Q = 1.0 for all sections
-        var params = (0..<numSections).map { _ in
-            FittedAllPassParams(frequency: 1000.0, q: 1.0)
-        }
+        var params = startParams.map { FittedAllPassParams(frequency: $0.frequency, q: $0.q) }
 
-        // Simple coordinate descent: optimize each parameter in turn
         let iterations = 50
-        let learningRate = 0.1
 
         for _ in 0..<iterations {
             var improved = false
@@ -433,11 +531,10 @@ final class AllPassChain: @unchecked Sendable {
                     params: params,
                     paramIndex: i,
                     isFrequency: true,
-                    targetPhase: targetPhase,
+                    biquadSections: biquadSections,
                     frequencies: frequencies,
                     sampleRate: sampleRate,
-                    originalValue: originalFreq,
-                    learningRate: learningRate
+                    originalValue: originalFreq
                 )
 
                 if bestFreq != originalFreq {
@@ -451,53 +548,35 @@ final class AllPassChain: @unchecked Sendable {
                     params: params,
                     paramIndex: i,
                     isFrequency: false,
-                    targetPhase: targetPhase,
+                    biquadSections: biquadSections,
                     frequencies: frequencies,
                     sampleRate: sampleRate,
-                    originalValue: originalQ,
-                    learningRate: learningRate
+                    originalValue: originalQ
                 )
 
                 if bestQ != originalQ {
-                    params[i].q = max(0.1, bestQ)  // Clamp Q to minimum 0.1
+                    params[i].q = max(0.1, bestQ)
                     improved = true
                 }
             }
 
             if !improved {
-                break  // Converged
+                break
             }
         }
 
-        // Verify the fitted sections actually improve group delay
-        let allPassSections = params.map { allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate) }
-
-        // Compute group delay of biquad chain alone
-        let gdBiquad = computeGroupDelayForChain(biquadSections: biquadSections, allPassSections: [], frequencies: frequencies, sampleRate: sampleRate)
-        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
-
-        // Compute group delay with fitted all-pass sections
-        let gdCombined = computeGroupDelayForChain(biquadSections: biquadSections, allPassSections: allPassSections, frequencies: frequencies, sampleRate: sampleRate)
-        let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
-
-        // Only return if improvement is significant (> 5%)
-        if peakDeviationCombined < peakDeviationBiquad * 0.95 {
-            return params
-        }
-
-        return nil  // Fitting didn't improve enough
+        return params
     }
 
-    /// Optimizes a single parameter using coordinate search.
+    /// Optimizes a single parameter using coordinate search with peak group delay deviation objective.
     private static func optimizeParameter(
         params: [FittedAllPassParams],
         paramIndex: Int,
         isFrequency: Bool,
-        targetPhase: [Double],
+        biquadSections: [BiquadCoefficients],
         frequencies: [Double],
         sampleRate: Double,
-        originalValue: Double,
-        learningRate: Double
+        originalValue: Double
     ) -> Double {
         let testValues = [
             originalValue * 0.8,
@@ -508,7 +587,7 @@ final class AllPassChain: @unchecked Sendable {
         ]
 
         var bestValue = originalValue
-        var bestError = Double.infinity
+        var bestDeviation = Double.infinity
 
         for testValue in testValues {
             // Clamp to valid ranges
@@ -526,10 +605,16 @@ final class AllPassChain: @unchecked Sendable {
                 testParams[paramIndex].q = clampedValue
             }
 
-            let error = computePhaseError(params: testParams, targetPhase: targetPhase, frequencies: frequencies, sampleRate: sampleRate)
+            let candidateParams = testParams.map { (frequency: $0.frequency, q: $0.q) }
+            let deviation = evaluateCandidate(
+                biquadSections: biquadSections,
+                candidateParams: candidateParams,
+                frequencies: frequencies,
+                sampleRate: sampleRate
+            )
 
-            if error < bestError {
-                bestError = error
+            if deviation < bestDeviation {
+                bestDeviation = deviation
                 bestValue = clampedValue
             }
         }

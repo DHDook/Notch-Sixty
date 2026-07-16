@@ -152,6 +152,124 @@ final class AllPassChainTests: XCTestCase {
         // If fitting returns nil, that's also valid (means no improvement was found)
     }
 
+    // MARK: - Acceptance Test: Peak Group Delay Deviation Improvement
+
+    func testMultiStartFitting_ImprovesPeakGroupDelayDeviation() {
+        // Acceptance test for the multi-start fitting improvement.
+        // Verifies that the new objective (peak group delay deviation) and multi-start
+        // approach produce measurable improvements across a representative sweep of bands.
+
+        let frequencies = [100.0, 500.0, 1000.0, 2000.0, 5000.0]
+        let qs = [0.7, 1.5, 2.0, 3.0, 6.0, 8.0]
+        let gains = [-12.0, -9.0, -6.0, -4.0, 4.0, 6.0, 9.0, 12.0]
+
+        var improvements: [(freq: Double, q: Double, gain: Double, improvement: Double)] = []
+        var regressions: [(freq: Double, q: Double, gain: Double, baseline: Double, fitted: Double)] = []
+
+        for freq in frequencies {
+            for q in qs {
+                for gain in gains {
+                    let coefficients = BiquadMath.calculateCoefficients(
+                        type: .parametric,
+                        sampleRate: sampleRate,
+                        frequency: freq,
+                        q: q,
+                        gain: gain
+                    )
+
+                    // Compute baseline peak deviation (biquad alone)
+                    let gdBiquad = computeGroupDelay(biquad: coefficients, sampleRate: sampleRate)
+                    let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+                    // Try to fit all-pass sections
+                    let fittedParams = AllPassChain.fitAllPassSectionsForBand(biquadSections: [coefficients], sampleRate: sampleRate)
+
+                    if let params = fittedParams {
+                        // Compute peak deviation with fitted all-pass sections
+                        let allPassSections = params.map { AllPassChain.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate) }
+                        let gdCombined = computeGroupDelayForChain(biquadSections: [coefficients], allPassSections: allPassSections, sampleRate: sampleRate)
+                        let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+                        // Check for regression (should never happen due to guard)
+                        if peakDeviationCombined > peakDeviationBiquad * 1.05 {  // 5% tolerance for numerical error
+                            regressions.append((freq, q, gain, peakDeviationBiquad, peakDeviationCombined))
+                        }
+
+                        // Track improvement
+                        let improvement = (peakDeviationBiquad - peakDeviationCombined) / peakDeviationBiquad
+                        improvements.append((freq, q, gain, improvement))
+                    }
+                }
+            }
+        }
+
+        // Verify no regressions
+        XCTAssertTrue(regressions.isEmpty, "Fitted sections should never be significantly worse than baseline. Regressions: \(regressions)")
+
+        // Verify that we got some improvements (especially for mid/high-frequency bands)
+        let midHighFreqImprovements = improvements.filter { $0.freq >= 500.0 && $0.freq <= 5000.0 }
+        XCTAssertGreaterThan(midHighFreqImprovements.count, 0, "Should have at least some improvements for mid/high-frequency bands")
+
+        // Check that improvements are in the expected range for mid/high-frequency, moderate-Q bands
+        let significantImprovements = midHighFreqImprovements.filter { $0.improvement > 0.10 && $0.q <= 6.0 }
+        XCTAssertGreaterThan(significantImprovements.count, 0, "Should have at least some >10% improvements for mid/high-frequency, moderate-Q bands")
+
+        // Low-frequency, high-Q, high-gain bands may show variable improvement
+        // The directive notes these are expected to show minimal improvement, but the
+        // multi-start approach may still find some improvements. We don't assert a
+        // strict limit here since any improvement is beneficial and not a failure.
+        let lowFreqHighQ = improvements.filter { $0.freq <= 100.0 && $0.q >= 6.0 && abs($0.gain) >= 6.0 }
+        if !lowFreqHighQ.isEmpty {
+            let avgImprovement = lowFreqHighQ.reduce(0.0) { $0 + $1.improvement } / Double(lowFreqHighQ.count)
+            // Just log the improvement - no strict assertion since improvement is always good
+            print("Low-frequency, high-Q, high-gain average improvement: \(avgImprovement * 100)%")
+        }
+    }
+
+    func testMultiStartFitting_Deterministic() {
+        // Verify that fitting is deterministic: running the fit twice on the same
+        // band configuration and sample rate produces identical output.
+
+        let coefficients = BiquadMath.calculateCoefficients(
+            type: .parametric,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 2.0,
+            gain: 6.0
+        )
+
+        // Run fit twice
+        let fittedParams1 = AllPassChain.fitAllPassSectionsForBand(biquadSections: [coefficients], sampleRate: sampleRate)
+        let fittedParams2 = AllPassChain.fitAllPassSectionsForBand(biquadSections: [coefficients], sampleRate: sampleRate)
+
+        // Compare results
+        if let params1 = fittedParams1, let params2 = fittedParams2 {
+            XCTAssertEqual(params1.count, params2.count, "Fitted parameter counts should match")
+            for i in 0..<params1.count {
+                XCTAssertEqual(params1[i].frequency, params2[i].frequency, accuracy: 1e-10, "Frequency should be deterministic")
+                XCTAssertEqual(params1[i].q, params2[i].q, accuracy: 1e-10, "Q should be deterministic")
+            }
+        } else {
+            // Both should be nil or both should have results
+            XCTAssertNil(fittedParams1, "First fit should be nil")
+            XCTAssertNil(fittedParams2, "Second fit should be nil")
+        }
+    }
+
+    private func computeGroupDelayForChain(biquadSections: [BiquadCoefficients], allPassSections: [AllPassChain.AllPassSection], sampleRate: Double) -> [Double] {
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+        return frequencies.map { freq in
+            var gd: Double = 0
+            for sec in biquadSections {
+                gd += groupDelayAtFrequency(biquad: sec, frequency: freq, sampleRate: sampleRate)
+            }
+            for sec in allPassSections {
+                gd += groupDelayAtFrequency(allPass: sec, frequency: freq, sampleRate: sampleRate)
+            }
+            return gd
+        }
+    }
+
     // MARK: - Independent Reference Check Test
 
     func testGroupDelayFormula_IndependentReferenceCheck() {
@@ -403,13 +521,32 @@ extension AllPassChain {
         return peakDeviationCombined < peakDeviationBiquad
     }
 
-    /// Expose Phase 2 fitting function for testing.
-    static func fitAllPassSectionsForBand(biquadSections: [BiquadCoefficients], sampleRate: Double) -> [FittedAllPassParams]? {
-        // The actual implementation is internal in AllPassChain
-        // Since we can't access it directly, we'll just return nil for testing
-        // The real implementation is tested indirectly through stageSections
-        return nil
+    /// Expose all-pass section construction from fitted parameters for testing.
+    static func allPassSectionFromParams(frequency: Double, q: Double, sampleRate: Double) -> AllPassSection {
+        let omega = 2.0 * .pi * frequency / sampleRate
+        let sinOmega = sin(omega)
+        let cosOmega = cos(omega)
+        let alpha = sinOmega / (2.0 * q)
+
+        let b0 = 1.0 - alpha
+        let b1 = -2.0 * cosOmega
+        let b2 = 1.0 + alpha
+        let a0 = 1.0 + alpha
+        let a1 = -2.0 * cosOmega
+        let a2 = 1.0 - alpha
+
+        // Normalize by a0
+        let norm = 1.0 / a0
+
+        return AllPassSection(
+            b0: Float(b0 * norm),
+            b1: Float(b1 * norm),
+            b2: Float(b2 * norm),
+            a1: Float(a1 * norm),
+            a2: Float(a2 * norm)
+        )
     }
+
 
     static func computeGroupDelay(biquad: BiquadCoefficients, sampleRate: Double) -> [Double] {
         let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
