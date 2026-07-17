@@ -34,6 +34,9 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
     // Lock-free IR update mechanism
     private var hasPendingIR = ManagedAtomic<Bool>(false)
 
+    /// Callback for latency change notifications (used by crossover path alignment)
+    private var latencyChangeCallback: (() -> Void)?
+
     /// The group delay introduced by the corrector in samples.
     /// Equal to kernelSize / 2 (the center of the causal kernel) when enabled, 0 when disabled.
     var correctorDelaySamples: Int {
@@ -116,12 +119,26 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
         config.kernelSize = kernelSize
         config.enabled = true
         hasPendingIR.store(true, ordering: .releasing)
+
+        // Notify latency change if it actually changed
+        if previousDelaySamples != targetDelaySamples {
+            latencyChangeCallback?()
+        }
     }
 
     /// Disables the correction filter.
     func disable() {
         config.enabled = false
         hasPendingIR.store(true, ordering: .releasing)
+
+        // Notify latency change
+        latencyChangeCallback?()
+    }
+
+    /// Sets a callback to be invoked when the corrector's latency changes.
+    /// Used by crossover path alignment to recompute alignment on escalation/de-escalation.
+    func setLatencyChangeCallback(_ callback: @escaping () -> Void) {
+        latencyChangeCallback = callback
     }
 
     // MARK: - Audio Thread API

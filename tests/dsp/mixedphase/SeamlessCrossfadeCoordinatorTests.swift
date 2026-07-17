@@ -7,7 +7,7 @@
 
 import Accelerate
 import XCTest
-@testable import Notch_Sixty
+@testable import Equaliser
 
 final class SeamlessCrossfadeCoordinatorTests: XCTestCase {
 

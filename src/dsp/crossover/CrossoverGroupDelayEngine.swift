@@ -64,6 +64,48 @@ enum CrossoverGroupDelayEngine {
         return groupDelay
     }
 
+    /// Computes the characteristic crossover filter delay in samples.
+    /// This is the median group delay across a representative frequency range.
+    ///
+    /// - Parameters:
+    ///   - crossoverSections: The IIR section array for this channel's crossover filter.
+    ///   - crossoverFIRKernel: FIR kernel for this channel's crossover filter. Nil for IIR.
+    ///   - sampleRate: System sample rate.
+    /// - Returns: Characteristic delay in samples.
+    static func crossoverFilterCharacteristicDelay(
+        crossoverSections: ActiveCrossoverEngine.SectionArray?,
+        crossoverFIRKernel: [Float]?,
+        sampleRate: Double
+    ) -> Int {
+        // For FIR crossover, delay is simply kernel.length / 2
+        if let firKernel = crossoverFIRKernel {
+            return firKernel.count / 2
+        }
+
+        // For IIR crossover, compute median group delay across audio band
+        guard let sections = crossoverSections else { return 0 }
+
+        // Use representative frequency range: 20 Hz to 20 kHz
+        let frequencies = stride(from: 20.0, through: 20000.0, by: 100.0).map { $0 }
+        var groupDelay = Array(repeating: 0.0, count: frequencies.count)
+
+        for section in sections {
+            let sectionDelay = biquadGroupDelayPublic(
+                b0: section.b0, b1: section.b1, b2: section.b2,
+                a1: -section.na1, a2: -section.na2,
+                frequencies: frequencies, sampleRate: sampleRate
+            )
+            for i in 0..<groupDelay.count { groupDelay[i] += sectionDelay[i] }
+        }
+
+        // Compute median delay
+        let sortedDelay = groupDelay.sorted()
+        let medianDelayMs = sortedDelay[sortedDelay.count / 2]
+        let medianDelaySamples = Int(medianDelayMs * sampleRate / 1000.0)
+
+        return medianDelaySamples
+    }
+
     // MARK: - Private Helpers
 
     /// Computes group delay of a single biquad section at specified frequencies.

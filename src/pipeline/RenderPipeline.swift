@@ -515,6 +515,16 @@ final class RenderPipeline {
         // Reset convolution engine on pipeline start
         context.resetConvolution()
 
+        // Hook up latency change callback from adaptive excess phase corrector
+        // to trigger crossover path alignment updates on escalation/de-escalation
+        context.setAdaptiveExcessPhaseCorrectorLatencyCallback { [weak self] in
+            guard let self = self, let ctx = self.callbackContext else { return }
+            ctx.updateCrossoverPathAlignment(
+                dynamicsProcessor: ctx.dynamicsProcessor,
+                sampleRate: self.currentSampleRate
+            )
+        }
+
         // Configure SRC with actual input and output rates.
         let driverRate: Double
         if captureMode == .halInput, let inputManager = inputHALManager {
@@ -836,6 +846,9 @@ final class RenderPipeline {
             }
         }
         ctx.activeOutputChannelCount = count
+
+        // Update crossover path alignment after matrix configuration changes
+        ctx.updateCrossoverPathAlignment(dynamicsProcessor: ctx.dynamicsProcessor, sampleRate: currentSampleRate)
     }
 
     /// Returns the UID of the currently active primary output device, if resolvable.
@@ -917,7 +930,7 @@ final class RenderPipeline {
     /// Total pipeline latency in milliseconds.
     /// Sum of all active processing stages: limiter look-ahead, oversampling,
     /// FIR convolution, speaker/room correction convolution, IR alignment, linear-phase EQ,
-    /// and adaptive excess-phase correction.
+    /// adaptive excess-phase correction, and crossover path alignment.
     var totalLatencyMs: Double {
         guard let ctx = callbackContext else { return 0.0 }
         let sr = ctx.dynamicsProcessor.storedSampleRate
@@ -958,6 +971,9 @@ final class RenderPipeline {
         if ctx.isMixedPhaseEnabled && ctx.adaptiveExcessPhaseCorrectorEnabled {
             ms += Double(ctx.adaptiveExcessPhaseCorrectorDelaySamples) / sr * 1000.0
         }
+
+        // Crossover path alignment delay (when active with multiple paths)
+        ms += ctx.crossoverPathAlignment.effectiveLatencyMs
 
         return ms
     }

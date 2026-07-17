@@ -162,6 +162,12 @@ final class RenderCallbackContext: @unchecked Sendable {
     private let _adaptiveExcessPhaseCorrectorEnabled: ManagedAtomic<Int32>
     nonisolated(unsafe) var adaptiveExcessPhaseCorrectorDelaySamples: Int = 0
 
+    /// Sets the latency change callback for the adaptive excess phase corrector.
+    /// Called from RenderPipeline to trigger crossover path alignment updates on escalation/de-escalation.
+    func setAdaptiveExcessPhaseCorrectorLatencyCallback(_ callback: @escaping () -> Void) {
+        adaptiveExcessPhaseCorrector.setLatencyChangeCallback(callback)
+    }
+
     // MARK: - Convolution Engine
 
     private nonisolated(unsafe) var convolutionEngine: ConvolutionEngine
@@ -618,6 +624,10 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// Sub mono output buffer: written by processBassManagement, read by .subMono output channels.
     nonisolated(unsafe) var monoLowOutputBuffer: UnsafeMutablePointer<Float>
 
+    /// Crossover path alignment engine for aligning delays across multiple crossover paths.
+    /// Only active when Active Crossover mode has more than one active output path.
+    let crossoverPathAlignment: CrossoverPathAlignmentEngine
+
     // MARK: - Initialization
 
     /// Creates a new callback context with ring buffers and pre-allocated audio buffers.
@@ -668,6 +678,7 @@ final class RenderCallbackContext: @unchecked Sendable {
         self._adaptiveExcessPhaseCorrectorEnabled = ManagedAtomic(0)
         self.convolutionEngine = ConvolutionEngine()
         self._convolutionEnabled = ManagedAtomic(0)
+        self.crossoverPathAlignment = CrossoverPathAlignmentEngine(sampleRate: sampleRate, maxFrameCount: Int(maxFrameCount))
 
         let osAdditional = max(0, Int(channelCount) - 1)
         self.oversampledBufferListSize = MemoryLayout<AudioBufferList>.size
@@ -1129,6 +1140,24 @@ final class RenderCallbackContext: @unchecked Sendable {
                 scratchR = sR
             }
 
+            // Apply crossover path alignment if active
+            if crossoverPathAlignment.alignmentActive {
+                crossoverPathAlignment.process(
+                    channelIndex: chIdx,
+                    input: outputScratchLeft[chIdx],
+                    output: outputScratchLeft[chIdx],
+                    frameCount: frameCount
+                )
+                if let sR = scratchR {
+                    crossoverPathAlignment.process(
+                        channelIndex: chIdx,
+                        input: sR,
+                        output: sR,
+                        frameCount: frameCount
+                    )
+                }
+            }
+
             // Run per-output DSP chain (EQ → gain → delay → limiter)
             processor.process(leftBuf: outputScratchLeft[chIdx],
                               rightBuf: scratchR,
@@ -1157,6 +1186,83 @@ final class RenderCallbackContext: @unchecked Sendable {
             // handled the interleaved write for channel 0; same-device channel routing is
             // managed by the OutputChannelProcessor's channel-map configuration.
         }
+    }
+
+    /// Updates crossover path alignment based on current configuration and latency information.
+    /// Called from the main thread when crossover configuration, EQ parameters, or Option 3
+    /// escalation state changes.
+    ///
+    /// - Parameters:
+    ///   - dynamicsProcessor: The dynamics processor containing the active crossover engine.
+    ///   - sampleRate: Current sample rate.
+    func updateCrossoverPathAlignment(dynamicsProcessor: DynamicsProcessor, sampleRate: Double) {
+        guard activeOutputChannelCount > 1 else {
+            // Single path or disabled - no alignment needed
+            crossoverPathAlignment.updatePathLatencies([:])
+            return
+        }
+
+        var pathLatencies: [Int: PathLatencyInfo] = [:]
+
+        for chIdx in 0..<activeOutputChannelCount {
+            guard let processor = outputChannelProcessors[chIdx] else { continue }
+
+            let source = outputChannelSources[chIdx]
+
+            // Get crossover filter delay for this path
+            let crossoverDelaySamples: Int
+            if let engine = dynamicsProcessor.activeCrossoverEngine {
+                // Determine which crossover filter this path uses
+                // Note: FIR crossover delay calculation not yet implemented
+                // For now, only IIR crossover is supported
+                if source == .mainsLeftLow || source == .mainsRightLow {
+                    crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                        crossoverSections: engine.activeLowerLP,
+                        crossoverFIRKernel: nil,  // FIR not yet supported
+                        sampleRate: sampleRate
+                    )
+                } else if source == .mainsLeftHigh || source == .mainsRightHigh {
+                    if engine.activeBandCount == 3 {
+                        crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                            crossoverSections: engine.activeUpperHP,
+                            crossoverFIRKernel: nil,  // FIR not yet supported
+                            sampleRate: sampleRate
+                        )
+                    } else {
+                        crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                            crossoverSections: engine.activeLowerHP,
+                            crossoverFIRKernel: nil,  // FIR not yet supported
+                            sampleRate: sampleRate
+                        )
+                    }
+                } else if source == .mainsLeftMid || source == .mainsRightMid {
+                    crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                        crossoverSections: engine.activeUpperLP,
+                        crossoverFIRKernel: nil,  // FIR not yet supported
+                        sampleRate: sampleRate
+                    )
+                } else {
+                    crossoverDelaySamples = 0
+                }
+            } else {
+                crossoverDelaySamples = 0
+            }
+
+            // Get EQ chain measured delay (from Option 3 or all-pass fitting)
+            // For now, use the adaptive excess phase corrector delay if enabled
+            let eqDelaySamples = adaptiveExcessPhaseCorrector.correctorDelaySamples
+
+            let totalLatency = crossoverDelaySamples + eqDelaySamples
+
+            pathLatencies[chIdx] = PathLatencyInfo(
+                totalLatencySamples: totalLatency,
+                crossoverFilterDelaySamples: crossoverDelaySamples,
+                eqChainMeasuredDelaySamples: eqDelaySamples,
+                isActive: true
+            )
+        }
+
+        crossoverPathAlignment.updatePathLatencies(pathLatencies)
     }
 
     /// Resolves a SignalSource to actual buffer pointers.
