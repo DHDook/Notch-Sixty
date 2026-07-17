@@ -157,6 +157,11 @@ final class RenderCallbackContext: @unchecked Sendable {
     private nonisolated(unsafe) var rightAllPassChain: AllPassChain
     private let _mixedPhaseEnabled: ManagedAtomic<Int32>
 
+    // Adaptive excess-phase corrector (escalation when all-pass alone is insufficient)
+    private nonisolated(unsafe) var adaptiveExcessPhaseCorrector: AdaptiveExcessPhaseCorrector
+    private let _adaptiveExcessPhaseCorrectorEnabled: ManagedAtomic<Int32>
+    nonisolated(unsafe) var adaptiveExcessPhaseCorrectorDelaySamples: Int = 0
+
     // MARK: - Convolution Engine
 
     private nonisolated(unsafe) var convolutionEngine: ConvolutionEngine
@@ -386,24 +391,55 @@ final class RenderCallbackContext: @unchecked Sendable {
         _mixedPhaseEnabled.load(ordering: .relaxed) != 0
     }
 
+    var adaptiveExcessPhaseCorrectorEnabled: Bool {
+        _adaptiveExcessPhaseCorrectorEnabled.load(ordering: .relaxed) != 0
+    }
+
     func setMixedPhaseEnabled(_ enabled: Bool) {
         _mixedPhaseEnabled.store(enabled ? 1 : 0, ordering: .relaxed)
         if !enabled {
             leftAllPassChain.reset()
             rightAllPassChain.reset()
+            adaptiveExcessPhaseCorrector.disable()
+            _adaptiveExcessPhaseCorrectorEnabled.store(0, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = 0
         }
     }
 
     /// Stages new all-pass sections derived from the current biquad band coefficients.
     /// Called from the main thread when band parameters change while in mixed-phase mode.
-    /// Phase 1 guard: only stages all-pass sections that measurably improve group delay.
+    /// Returns true if escalation to FIR correction is needed.
     func updateMixedPhaseSections(
         leftSections: [[BiquadCoefficients]],
         rightSections: [[BiquadCoefficients]]
-    ) {
+    ) -> Bool {
         let sampleRate = dynamicsProcessor.storedSampleRate
-        leftAllPassChain.stageSections(from: leftSections, sampleRate: sampleRate)
-        rightAllPassChain.stageSections(from: rightSections, sampleRate: sampleRate)
+        let leftEscalates = leftAllPassChain.stageSections(from: leftSections, sampleRate: sampleRate)
+        let rightEscalates = rightAllPassChain.stageSections(from: rightSections, sampleRate: sampleRate)
+
+        // Escalate if either channel needs it
+        let shouldEscalate = leftEscalates || rightEscalates
+
+        if shouldEscalate {
+            // Update adaptive excess-phase corrector with residual phase
+            let allBiquadSections = leftSections.flatMap { $0 }
+            let allPassSections = leftAllPassChain.activeSections()
+
+            adaptiveExcessPhaseCorrector.updateCorrection(
+                biquadSections: allBiquadSections,
+                allPassSections: allPassSections,
+                sampleRate: sampleRate
+            )
+
+            _adaptiveExcessPhaseCorrectorEnabled.store(1, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = adaptiveExcessPhaseCorrector.correctorDelaySamples
+        } else {
+            adaptiveExcessPhaseCorrector.disable()
+            _adaptiveExcessPhaseCorrectorEnabled.store(0, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = 0
+        }
+
+        return shouldEscalate
     }
 
     // MARK: - Sweep Playback API
@@ -628,6 +664,8 @@ final class RenderCallbackContext: @unchecked Sendable {
         self.leftAllPassChain   = AllPassChain()
         self.rightAllPassChain  = AllPassChain()
         self._mixedPhaseEnabled = ManagedAtomic(0)
+        self.adaptiveExcessPhaseCorrector = AdaptiveExcessPhaseCorrector(sampleRate: sampleRate, maxFrameCount: Int(maxFrameCount))
+        self._adaptiveExcessPhaseCorrectorEnabled = ManagedAtomic(0)
         self.convolutionEngine = ConvolutionEngine()
         self._convolutionEnabled = ManagedAtomic(0)
 

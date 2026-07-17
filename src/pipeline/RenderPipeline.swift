@@ -916,7 +916,8 @@ final class RenderPipeline {
 
     /// Total pipeline latency in milliseconds.
     /// Sum of all active processing stages: limiter look-ahead, oversampling,
-    /// FIR convolution, speaker/room correction convolution, IR alignment, and linear-phase EQ.
+    /// FIR convolution, speaker/room correction convolution, IR alignment, linear-phase EQ,
+    /// and adaptive excess-phase correction.
     var totalLatencyMs: Double {
         guard let ctx = callbackContext else { return 0.0 }
         let sr = ctx.dynamicsProcessor.storedSampleRate
@@ -951,6 +952,11 @@ final class RenderPipeline {
         // Linear-phase EQ delay (kernel group delay)
         if ctx.isLinearPhaseEnabled {
             ms += Double(ctx.linearPhaseEngine.kernelDelaySamples) / sr * 1000.0
+        }
+
+        // Adaptive excess-phase correction delay (kernel group delay)
+        if ctx.isMixedPhaseEnabled && ctx.adaptiveExcessPhaseCorrectorEnabled {
+            ms += Double(ctx.adaptiveExcessPhaseCorrectorDelaySamples) / sr * 1000.0
         }
 
         return ms

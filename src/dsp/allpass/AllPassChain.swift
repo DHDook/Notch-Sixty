@@ -7,7 +7,7 @@ import Atomics
 import Foundation
 
 /// A single all-pass biquad section with its per-sample state.
-private struct AllPassSection {
+public struct AllPassSection {
     var b0: Float = 0, b1: Float = 0, b2: Float = 0
     var a1: Float = 0, a2: Float = 0
     var w1: Float = 0, w2: Float = 0   // Direct-Form II transposed state
@@ -30,6 +30,12 @@ final class AllPassChain: @unchecked Sendable {
 
     // Phase 2: Number of all-pass sections to fit per band (default: 2)
     private static let fittedSectionsPerBand = 2
+
+    // Escalation threshold for adaptive excess-phase correction (in samples at 48kHz).
+    // Configured as ~3ms peak group delay deviation threshold.
+    // This is the point beyond which all-pass correction alone is insufficient
+    // and the system escalates to FIR correction.
+    private static let escalationThresholdSamples: Double = 144.0  // 3ms @ 48kHz
 
     // Phase 2: Cache for fitted all-pass sections
     nonisolated(unsafe) private static var fittedSectionsCache: [String: [FittedAllPassParams]] = [:]
@@ -64,17 +70,20 @@ final class AllPassChain: @unchecked Sendable {
     /// Phase 1 guard: only stages all-pass sections that measurably improve group delay.
     /// Phase 2: Fits and gates all-pass sections for the entire active chain,
     /// not per-band, to avoid whole-chain regression in multi-band use.
+    /// Also triggers escalation to adaptive excess-phase correction if needed.
     ///
     /// - Parameters:
     ///   - sectionSets: One `[BiquadCoefficients]` array per active band.
     ///     Bypassed bands must be excluded by the caller.
     ///   - sampleRate: Current audio sample rate (Hz).
-    func stageSections(from sectionSets: [[BiquadCoefficients]], sampleRate: Double) {
+    /// - Returns: True if escalation to FIR correction is needed, false otherwise.
+    @discardableResult
+    func stageSections(from sectionSets: [[BiquadCoefficients]], sampleRate: Double) -> Bool {
         let allBiquadSections = sectionSets.flatMap { $0 }
         guard !allBiquadSections.isEmpty else {
             pendingCount = 0
             hasPending.store(true, ordering: .releasing)
-            return
+            return false
         }
 
         // Budget scales with how many bands are active, capped at maxSections.
@@ -91,6 +100,8 @@ final class AllPassChain: @unchecked Sendable {
         )
 
         var count = 0
+        var acceptedSections: [AllPassSection] = []
+        
         if let fittedParams = fittedParams {
             let candidateSections = fittedParams.map {
                 Self.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate)
@@ -101,6 +112,7 @@ final class AllPassChain: @unchecked Sendable {
                 allPassSections: candidateSections,
                 sampleRate: sampleRate
             ) {
+                acceptedSections = candidateSections
                 for sec in candidateSections {
                     guard count < Self.maxSections else { break }
                     pendingStore[count] = sec
@@ -113,6 +125,22 @@ final class AllPassChain: @unchecked Sendable {
         }
         pendingCount = count
         hasPending.store(true, ordering: .releasing)
+
+        // Check escalation trigger: compute peak group delay deviation after all-pass fitting
+        let frequencies = Self.logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+        let gdCombined = Self.computeGroupDelayForChain(
+            biquadSections: allBiquadSections,
+            allPassSections: acceptedSections,
+            frequencies: frequencies,
+            sampleRate: sampleRate
+        )
+        let peakDeviation = Self.peakGroupDelayDeviation(groupDelay: gdCombined)
+        
+        // Scale threshold by sample rate (144 samples at 48kHz = 3ms)
+        let scaledThreshold = Self.escalationThresholdSamples * (sampleRate / 48000.0)
+        
+        // Escalate if peak deviation exceeds threshold
+        return peakDeviation > scaledThreshold
     }
 
     // MARK: - Audio Thread API
@@ -265,7 +293,7 @@ final class AllPassChain: @unchecked Sendable {
     }
 
     /// Computes group delay at a single frequency for a biquad filter.
-    private static func groupDelayAtFrequency(biquad: BiquadCoefficients, frequency: Double, sampleRate: Double) -> Double {
+    public static func groupDelayAtFrequency(biquad: BiquadCoefficients, frequency: Double, sampleRate: Double) -> Double {
         let omega = 2.0 * Double.pi * frequency / sampleRate
         let cosOmega = cos(omega)
         let sinOmega = sin(omega)
@@ -455,7 +483,7 @@ final class AllPassChain: @unchecked Sendable {
     }
 
     /// Computes phase response at a single frequency for a biquad.
-    private static func phaseAtFrequency(biquad: BiquadCoefficients, frequency: Double, sampleRate: Double) -> Double {
+    public static func phaseAtFrequency(biquad: BiquadCoefficients, frequency: Double, sampleRate: Double) -> Double {
         let omega = 2.0 * Double.pi * frequency / sampleRate
         let cosOmega = cos(omega)
         let sinOmega = sin(omega)
@@ -853,5 +881,14 @@ final class AllPassChain: @unchecked Sendable {
             activeStore[i].w1 = 0
             activeStore[i].w2 = 0
         }
+    }
+
+    /// Returns the currently active all-pass sections.
+    func activeSections() -> [AllPassSection] {
+        var sections: [AllPassSection] = []
+        for i in 0..<activeCount {
+            sections.append(activeStore[i])
+        }
+        return sections
     }
 }

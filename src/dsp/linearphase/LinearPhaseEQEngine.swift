@@ -171,6 +171,95 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
         hasPendingIR.store(true, ordering: .releasing)
     }
 
+    /// Updates the IR directly from pre-computed time-domain FIR kernels.
+    /// Used by adaptive excess-phase correction where the kernel is computed externally.
+    func updateIRFromKernel(leftKernel: [Float], rightKernel: [Float], sampleRate: Double) {
+        let newDesignSize: Int
+        switch sampleRate {
+        case ...48_000:  newDesignSize = 4096
+        case ...96_000:  newDesignSize = 8192
+        case ...192_000: newDesignSize = 16384
+        default:         newDesignSize = 32768
+        }
+        if newDesignSize != designSize {
+            designSize = newDesignSize
+            fftSize = 2 * designSize
+            _hopSize = fftSize / 2
+            kernelLength = designSize
+            halfN   = fftSize / 2
+            log2n   = vDSP_Length(log2(Double(fftSize)).rounded())
+            if let s = fftSetup { vDSP_destroy_fftsetup(s) }
+            fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
+            [activeReal, activeImag, activeRealR, activeImagR,
+             pendingReal, pendingImag, pendingRealR, pendingImagR,
+             nextPendingReal, nextPendingImag, nextPendingRealR, nextPendingImagR,
+             fftWorkReal, fftWorkImag].forEach { Self.free($0) }
+            activeReal   = Self.alloc(fftSize); activeImag   = Self.alloc(fftSize)
+            activeRealR  = Self.alloc(fftSize); activeImagR  = Self.alloc(fftSize)
+            pendingReal  = Self.alloc(fftSize); pendingImag  = Self.alloc(fftSize)
+            pendingRealR = Self.alloc(fftSize); pendingImagR = Self.alloc(fftSize)
+            nextPendingReal  = Self.alloc(fftSize); nextPendingImag  = Self.alloc(fftSize)
+            nextPendingRealR = Self.alloc(fftSize); nextPendingImagR = Self.alloc(fftSize)
+            fftWorkReal  = Self.alloc(fftSize); fftWorkImag  = Self.alloc(fftSize)
+            Self.free(outputBuf); outputBuf = Self.alloc(fftSize)
+            Self.free(overlapL); overlapL = Self.alloc(_hopSize)
+            Self.free(overlapR); overlapR = Self.alloc(_hopSize)
+            Self.free(accumL);   accumL   = Self.alloc(fftSize)
+            Self.free(accumR);   accumR   = Self.alloc(fftSize)
+            Self.free(outputCarryL); outputCarryL = Self.alloc(8 * _hopSize)
+            Self.free(outputCarryR); outputCarryR = Self.alloc(8 * _hopSize)
+            accumPosL = 0; accumPosR = 0
+            outputCarryReadPosL = 0; outputCarryReadPosR = 0
+            outputCarryWritePosL = 0; outputCarryWritePosR = 0
+            outputCarryAvailableL = 0; outputCarryAvailableR = 0
+            outputCarryHopsAccumulatedL = 0; outputCarryHopsAccumulatedR = 0
+        }
+        computeIRSpectrumFromKernel(kernel: leftKernel, outReal: nextPendingReal, outImag: nextPendingImag)
+        computeIRSpectrumFromKernel(kernel: rightKernel, outReal: nextPendingRealR, outImag: nextPendingImagR)
+        hasPendingIR.store(true, ordering: .releasing)
+    }
+
+    /// Computes the frequency spectrum of a time-domain FIR kernel.
+    private func computeIRSpectrumFromKernel(kernel: [Float], outReal: UnsafeMutablePointer<Float>, outImag: UnsafeMutablePointer<Float>) {
+        let N = designSize
+        let halfN = N / 2
+
+        // Pad kernel to designSize
+        var paddedKernel = [Float](repeating: 0, count: N)
+        let copyCount = min(kernel.count, N)
+        for i in 0..<copyCount {
+            paddedKernel[i] = kernel[i]
+        }
+
+        // Pack real kernel samples into halfN complex pairs for vDSP_fft_zrip
+        var packedReal = [Float](repeating: 0, count: halfN)
+        var packedImag = [Float](repeating: 0, count: halfN)
+        paddedKernel.withUnsafeMutableBufferPointer { kernelBuf in
+            kernelBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
+                packedReal.withUnsafeMutableBufferPointer { realBuf in
+                    packedImag.withUnsafeMutableBufferPointer { imagBuf in
+                        var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                        vDSP_ctoz(cBuf, 2, &kernelSC, 1, vDSP_Length(halfN))
+                    }
+                }
+            }
+        }
+
+        // Forward FFT on packed halfN buffer
+        packedReal.withUnsafeMutableBufferPointer { realBuf in
+            packedImag.withUnsafeMutableBufferPointer { imagBuf in
+                var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                guard let setup = fftSetup else { return }
+                vDSP_fft_zrip(setup, &kernelSC, 1, log2n, Int32(FFT_FORWARD))
+            }
+        }
+
+        // vDSP_fft_zrip applies a 2× scale on forward pass; normalise it out
+        var invScale = Float(1.0 / Float(N))
+        vDSP_vsmul(&packedReal, 1, &invScale, outReal, 1, vDSP_Length(halfN))
+        vDSP_vsmul(&packedImag, 1, &invScale, outImag, 1, vDSP_Length(halfN))
+    }
+
     @inline(__always)
     func process(bufL: UnsafeMutablePointer<Float>,
                  bufR: UnsafeMutablePointer<Float>?,
