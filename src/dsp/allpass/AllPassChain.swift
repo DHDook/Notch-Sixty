@@ -62,47 +62,54 @@ final class AllPassChain: @unchecked Sendable {
     /// Called from the main thread only.
     ///
     /// Phase 1 guard: only stages all-pass sections that measurably improve group delay.
-    /// Phase 2: For each band, attempts to fit optimized all-pass sections that reduce
-    /// group delay deviation, falling back to Phase 1 behavior if fitting fails.
+    /// Phase 2: Fits and gates all-pass sections for the entire active chain,
+    /// not per-band, to avoid whole-chain regression in multi-band use.
     ///
     /// - Parameters:
     ///   - sectionSets: One `[BiquadCoefficients]` array per active band.
     ///     Bypassed bands must be excluded by the caller.
     ///   - sampleRate: Current audio sample rate (Hz).
     func stageSections(from sectionSets: [[BiquadCoefficients]], sampleRate: Double) {
+        let allBiquadSections = sectionSets.flatMap { $0 }
+        guard !allBiquadSections.isEmpty else {
+            pendingCount = 0
+            hasPending.store(true, ordering: .releasing)
+            return
+        }
+
+        // Budget scales with how many bands are active, capped at maxSections.
+        let numSectionsToFit = min(Self.maxSections, max(2, sectionSets.count * 2))
+
+        // Seed the multi-start grid around EVERY active band's frequency, not
+        // just one — reuse the existing 3-multiplier x 3-Q pattern per band,
+        // rather than only anchoring near a single band.
+        let fittedParams = Self.fitAllPassSectionsForChain(
+            biquadSections: allBiquadSections,
+            bandFrequencyHints: sectionSets.map { Self.estimateBandFrequency(biquadSections: $0, sampleRate: sampleRate) },
+            sampleRate: sampleRate,
+            numSections: numSectionsToFit
+        )
+
         var count = 0
-        for sections in sectionSets {
-            // Phase 2: Try to fit optimized all-pass sections for this band
-            let fittedParams = Self.fitAllPassSectionsForBand(biquadSections: sections, sampleRate: sampleRate)
-
-            if let fittedParams = fittedParams {
-                // Convert fitted parameters to all-pass sections
-                for params in fittedParams {
+        if let fittedParams = fittedParams {
+            let candidateSections = fittedParams.map {
+                Self.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate)
+            }
+            // Gate the WHOLE candidate set against the WHOLE active chain at once.
+            if Self.allPassSectionsImproveGroupDelayForChain(
+                biquadSections: allBiquadSections,
+                allPassSections: candidateSections,
+                sampleRate: sampleRate
+            ) {
+                for sec in candidateSections {
                     guard count < Self.maxSections else { break }
-                    let allPassSec = Self.allPassSectionFromParams(frequency: params.frequency, q: params.q, sampleRate: sampleRate)
-
-                    // Phase 1 guard: only emit if it measurably improves group delay
-                    if Self.allPassSectionImprovesGroupDelayForChain(
-                        biquadSections: sections,
-                        allPassSection: allPassSec,
-                        sampleRate: sampleRate
-                    ) {
-                        pendingStore[count] = allPassSec
-                        count += 1
-                    }
-                }
-            } else {
-                // Phase 1 fallback: use the simple construction for each section
-                for sec in sections {
-                    guard count < Self.maxSections else { break }
-
-                    // Phase 1 guard: only emit all-pass section if it measurably improves group delay
-                    if Self.allPassSectionImprovesGroupDelay(biquad: sec, sampleRate: sampleRate) {
-                        pendingStore[count] = Self.allPassSection(from: sec)
-                        count += 1
-                    }
+                    pendingStore[count] = sec
+                    count += 1
                 }
             }
+            // If the combined set doesn't clear the threshold, accept nothing —
+            // do not fall back to per-section acceptance of a partial subset,
+            // and do not fall back to the reflection-based construction.
         }
         pendingCount = count
         hasPending.store(true, ordering: .releasing)
@@ -393,6 +400,49 @@ final class AllPassChain: @unchecked Sendable {
         return fittedParams
     }
 
+    /// Fits optimized all-pass sections for the entire active chain using numerical optimization.
+    ///
+    /// - Parameters:
+    ///   - biquadSections: All biquad sections across all active bands.
+    ///   - bandFrequencyHints: Estimated center frequencies for each band.
+    ///   - sampleRate: Audio sample rate in Hz.
+    ///   - numSections: Number of all-pass sections to fit.
+    /// - Returns: Array of fitted (frequency, Q) parameters, or nil if fitting fails.
+    public static func fitAllPassSectionsForChain(
+        biquadSections: [BiquadCoefficients],
+        bandFrequencyHints: [Double],
+        sampleRate: Double,
+        numSections: Int
+    ) -> [FittedAllPassParams]? {
+        // Generate cache key from all biquad coefficients and sample rate
+        let cacheKey = biquadSections.map { "\($0.b0),\($0.b1),\($0.b2),\($0.a1),\($0.a2)" }.joined(separator: "|") + "|sr:\(sampleRate)"
+
+        // Check cache
+        cacheLock.lock()
+        if let cached = fittedSectionsCache[cacheKey] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        // Fit N sections using multi-start coordinate search with multi-band seeding
+        let fittedParams = fitAllPassSectionsWithCoordinateSearchForChain(
+            biquadSections: biquadSections,
+            bandFrequencyHints: bandFrequencyHints,
+            sampleRate: sampleRate,
+            numSections: numSections
+        )
+
+        // Cache result
+        if let fitted = fittedParams {
+            cacheLock.lock()
+            fittedSectionsCache[cacheKey] = fitted
+            cacheLock.unlock()
+        }
+
+        return fittedParams
+    }
+
     /// Computes combined phase response of a biquad chain across frequencies.
     private static func computeCombinedPhase(biquadSections: [BiquadCoefficients], frequencies: [Double], sampleRate: Double) -> [Double] {
         return frequencies.map { freq in
@@ -485,8 +535,72 @@ final class AllPassChain: @unchecked Sendable {
         return nil  // Fitting didn't improve enough
     }
 
+    /// Fits all-pass sections for the entire chain using multi-start coordinate search with multi-band seeding.
+    private static func fitAllPassSectionsWithCoordinateSearchForChain(
+        biquadSections: [BiquadCoefficients],
+        bandFrequencyHints: [Double],
+        sampleRate: Double,
+        numSections: Int
+    ) -> [FittedAllPassParams]? {
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute baseline peak deviation for biquad chain alone
+        let gdBiquad = computeGroupDelayForChain(biquadSections: biquadSections, allPassSections: [], frequencies: frequencies, sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Generate deterministic multi-start configurations seeded around EVERY active band's frequency
+        let seedMultipliers: [Double] = [0.5, 1.0, 2.0]
+        let seedQs: [Double] = [0.7, 2.0, 6.0]
+
+        var candidateStarts: [[(frequency: Double, q: Double)]] = []
+        for bandFreq in bandFrequencyHints {
+            for freqMult in seedMultipliers {
+                for q in seedQs {
+                    let seedFreq = max(20.0, min(bandFreq * freqMult, sampleRate * 0.4))
+                    candidateStarts.append(Array(repeating: (frequency: seedFreq, q: q), count: numSections))
+                }
+            }
+        }
+
+        // Run coordinate search from each starting point and keep the best result
+        var bestParams: [FittedAllPassParams]?
+        var bestDeviation = peakDeviationBiquad  // Initialize with baseline (no correction)
+
+        for startConfig in candidateStarts {
+            let params = runCoordinateSearch(
+                biquadSections: biquadSections,
+                startParams: startConfig,
+                frequencies: frequencies,
+                sampleRate: sampleRate,
+                numSections: numSections
+            )
+
+            if let params = params {
+                let candidateParams = params.map { (frequency: $0.frequency, q: $0.q) }
+                let deviation = evaluateCandidate(
+                    biquadSections: biquadSections,
+                    candidateParams: candidateParams,
+                    frequencies: frequencies,
+                    sampleRate: sampleRate
+                )
+
+                if deviation < bestDeviation {
+                    bestDeviation = deviation
+                    bestParams = params
+                }
+            }
+        }
+
+        // Only return if improvement is significant (> 5%)
+        if let bestParams = bestParams, bestDeviation < peakDeviationBiquad * 0.95 {
+            return bestParams
+        }
+
+        return nil  // Fitting didn't improve enough
+    }
+
     /// Estimates the center frequency of a biquad band.
-    private static func estimateBandFrequency(biquadSections: [BiquadCoefficients], sampleRate: Double) -> Double {
+    public static func estimateBandFrequency(biquadSections: [BiquadCoefficients], sampleRate: Double) -> Double {
         // For a peaking EQ biquad, the center frequency can be estimated from the coefficients
         // This is a simplified estimate - we use the geometric mean of estimated frequencies
         var frequencies: [Double] = []
@@ -704,6 +818,33 @@ final class AllPassChain: @unchecked Sendable {
 
         // Only emit the all-pass section if it reduces peak deviation
         return peakDeviationCombined < peakDeviationBiquad
+    }
+
+    /// Evaluates whether cascading multiple all-pass sections with a biquad chain
+    /// measurably improves group delay (reduces peak deviation from median).
+    ///
+    /// - Parameters:
+    ///   - biquadSections: All biquad sections across the active chain.
+    ///   - allPassSections: The candidate all-pass sections to test.
+    ///   - sampleRate: Audio sample rate in Hz.
+    /// - Returns: true if the all-pass sections improve group delay, false otherwise.
+    private static func allPassSectionsImproveGroupDelayForChain(
+        biquadSections: [BiquadCoefficients],
+        allPassSections: [AllPassSection],
+        sampleRate: Double
+    ) -> Bool {
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute group delay of biquad chain alone
+        let gdBiquad = computeGroupDelayForChain(biquadSections: biquadSections, allPassSections: [], frequencies: frequencies, sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Compute group delay of biquad chain + all-pass sections
+        let gdCombined = computeGroupDelayForChain(biquadSections: biquadSections, allPassSections: allPassSections, frequencies: frequencies, sampleRate: sampleRate)
+        let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+        // Only accept the all-pass sections if they reduce peak deviation
+        return peakDeviationCombined < peakDeviationBiquad * 0.95  // Require 5% improvement
     }
 
     /// Clears processing state (call when mode is disabled).

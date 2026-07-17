@@ -256,6 +256,191 @@ final class AllPassChainTests: XCTestCase {
         }
     }
 
+    // MARK: - Multi-Band Whole-Chain Regression Tests
+
+    func testWholeChainFitting_NoRegression_5BandMix() {
+        // 5-band mix configuration (warmth/mud/presence/etc)
+        // Baseline: 137.75, shipped result: 166.05 (-20.5%, WORSE)
+        // After fix: should be <= baseline (137.75)
+        let bands = [
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 100.0, q: 1.0, gain: -3.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 250.0, q: 1.5, gain: -2.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 1000.0, q: 2.0, gain: 3.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 4000.0, q: 1.0, gain: 2.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 8000.0, q: 0.7, gain: 1.0)
+        ]
+
+        let allBiquadSections = bands
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute baseline peak deviation (biquad chain alone)
+        let gdBiquad = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: [], sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Fit using whole-chain approach
+        let bandFrequencyHints = bands.map { _ in 1000.0 }  // Simplified hints for test
+        let fittedParams = AllPassChain.fitAllPassSectionsForChain(
+            biquadSections: allBiquadSections,
+            bandFrequencyHints: bandFrequencyHints,
+            sampleRate: sampleRate,
+            numSections: 8
+        )
+
+        if let params = fittedParams {
+            let candidateSections = params.map { AllPassChain.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate) }
+            let gdCombined = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: candidateSections, sampleRate: sampleRate)
+            let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+            // Verify no regression: combined should not be worse than baseline
+            XCTAssertLessThanOrEqual(peakDeviationCombined, peakDeviationBiquad * 1.05,
+                "5-band mix should not regress: baseline \(peakDeviationBiquad), combined \(peakDeviationCombined)")
+        }
+        // If fitting returns nil, that's acceptable (no correction applied)
+    }
+
+    func testWholeChainFitting_NoRegression_3BandVocal() {
+        // 3-band vocal chain
+        // Baseline: 18.32, shipped result: 17.36 (+5.2%, fine)
+        let bands = [
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 200.0, q: 1.5, gain: -2.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 1000.0, q: 2.0, gain: 3.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 5000.0, q: 1.0, gain: 2.0)
+        ]
+
+        let allBiquadSections = bands
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute baseline peak deviation
+        let gdBiquad = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: [], sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Fit using whole-chain approach
+        let bandFrequencyHints = bands.map { _ in 1000.0 }
+        let fittedParams = AllPassChain.fitAllPassSectionsForChain(
+            biquadSections: allBiquadSections,
+            bandFrequencyHints: bandFrequencyHints,
+            sampleRate: sampleRate,
+            numSections: 6
+        )
+
+        if let params = fittedParams {
+            let candidateSections = params.map { AllPassChain.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate) }
+            let gdCombined = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: candidateSections, sampleRate: sampleRate)
+            let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+            XCTAssertLessThanOrEqual(peakDeviationCombined, peakDeviationBiquad * 1.05,
+                "3-band vocal should not regress: baseline \(peakDeviationBiquad), combined \(peakDeviationCombined)")
+        }
+    }
+
+    func testWholeChainFitting_NoRegression_2BandSimple() {
+        // 2-band simple (1kHz +6dB, 3kHz -9dB)
+        // Baseline: 24.37, shipped result: 28.53 (-17.1%, WORSE)
+        let bands = [
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 1000.0, q: 2.0, gain: 6.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 3000.0, q: 2.0, gain: -9.0)
+        ]
+
+        let allBiquadSections = bands
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute baseline peak deviation
+        let gdBiquad = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: [], sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Fit using whole-chain approach
+        let bandFrequencyHints = [1000.0, 3000.0]
+        let fittedParams = AllPassChain.fitAllPassSectionsForChain(
+            biquadSections: allBiquadSections,
+            bandFrequencyHints: bandFrequencyHints,
+            sampleRate: sampleRate,
+            numSections: 4
+        )
+
+        if let params = fittedParams {
+            let candidateSections = params.map { AllPassChain.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate) }
+            let gdCombined = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: candidateSections, sampleRate: sampleRate)
+            let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+            XCTAssertLessThanOrEqual(peakDeviationCombined, peakDeviationBiquad * 1.05,
+                "2-band simple should not regress: baseline \(peakDeviationBiquad), combined \(peakDeviationCombined)")
+        }
+    }
+
+    func testWholeChainFitting_NoRegression_4BandCloseSpaced() {
+        // 4-band close-spaced (900/1100/1300/1600)
+        // Baseline: 16.03, shipped result: 35.49 (-121.4%, MUCH WORSE)
+        let bands = [
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 900.0, q: 4.0, gain: 2.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 1100.0, q: 4.0, gain: -1.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 1300.0, q: 4.0, gain: 1.0),
+            BiquadMath.calculateCoefficients(type: .parametric, sampleRate: sampleRate, frequency: 1600.0, q: 4.0, gain: -2.0)
+        ]
+
+        let allBiquadSections = bands
+        let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
+
+        // Compute baseline peak deviation
+        let gdBiquad = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: [], sampleRate: sampleRate)
+        let peakDeviationBiquad = peakGroupDelayDeviation(groupDelay: gdBiquad)
+
+        // Fit using whole-chain approach
+        let bandFrequencyHints = [900.0, 1100.0, 1300.0, 1600.0]
+        let fittedParams = AllPassChain.fitAllPassSectionsForChain(
+            biquadSections: allBiquadSections,
+            bandFrequencyHints: bandFrequencyHints,
+            sampleRate: sampleRate,
+            numSections: 8
+        )
+
+        if let params = fittedParams {
+            let candidateSections = params.map { AllPassChain.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate) }
+            let gdCombined = computeGroupDelayForChain(biquadSections: allBiquadSections, allPassSections: candidateSections, sampleRate: sampleRate)
+            let peakDeviationCombined = peakGroupDelayDeviation(groupDelay: gdCombined)
+
+            XCTAssertLessThanOrEqual(peakDeviationCombined, peakDeviationBiquad * 1.05,
+                "4-band close-spaced should not regress: baseline \(peakDeviationBiquad), combined \(peakDeviationCombined)")
+        }
+    }
+
+    func testWholeChainFitting_SingleBandUnchanged() {
+        // Verify single-band cases are unaffected in outcome
+        let coefficients = BiquadMath.calculateCoefficients(
+            type: .parametric,
+            sampleRate: sampleRate,
+            frequency: 1000.0,
+            q: 2.0,
+            gain: 6.0
+        )
+
+        // Fit using per-band approach (original)
+        let fittedParamsPerBand = AllPassChain.fitAllPassSectionsForBand(biquadSections: [coefficients], sampleRate: sampleRate)
+
+        // Fit using whole-chain approach (should behave identically for single band)
+        let fittedParamsChain = AllPassChain.fitAllPassSectionsForChain(
+            biquadSections: [coefficients],
+            bandFrequencyHints: [1000.0],
+            sampleRate: sampleRate,
+            numSections: 2
+        )
+
+        // Both should return the same result (both nil or both with params)
+        if fittedParamsPerBand == nil && fittedParamsChain == nil {
+            // Both nil - acceptable
+            return
+        }
+
+        if let params1 = fittedParamsPerBand, let params2 = fittedParamsChain {
+            XCTAssertEqual(params1.count, params2.count, "Parameter counts should match for single band")
+            for i in 0..<params1.count {
+                XCTAssertEqual(params1[i].frequency, params2[i].frequency, accuracy: 1e-6, "Frequencies should match")
+                XCTAssertEqual(params1[i].q, params2[i].q, accuracy: 1e-6, "Q values should match")
+            }
+        } else {
+            XCTFail("Single-band fitting should return consistent results between per-band and whole-chain approaches")
+        }
+    }
+
     private func computeGroupDelayForChain(biquadSections: [BiquadCoefficients], allPassSections: [AllPassChain.AllPassSection], sampleRate: Double) -> [Double] {
         let frequencies = logSpacedFrequencies(minFreq: 20.0, maxFreq: 20000.0, count: 200)
         return frequencies.map { freq in
@@ -546,6 +731,8 @@ extension AllPassChain {
             a2: Float(a2 * norm)
         )
     }
+
+
 
 
     static func computeGroupDelay(biquad: BiquadCoefficients, sampleRate: Double) -> [Double] {
