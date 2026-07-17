@@ -17,6 +17,7 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
     struct Config: Equatable, Sendable {
         var enabled: Bool = false
         var kernelSize: Int = 4096  // Adaptive based on band characteristics
+        var seamlessCrossfadeEnabled: Bool = true  // Enable dual-path crossfade for latency transitions
     }
 
     // MARK: - State
@@ -26,6 +27,9 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
 
     // LinearPhaseEQEngine for realization (reused core machinery)
     private let linearPhaseEngine: LinearPhaseEQEngine
+
+    // Optional seamless crossfade coordinator for latency transitions
+    private var crossfadeCoordinator: SeamlessCrossfadeCoordinator?
 
     // Lock-free IR update mechanism
     private var hasPendingIR = ManagedAtomic<Bool>(false)
@@ -42,6 +46,14 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
         self.sampleRate = sampleRate
         self.config = Config()
         self.linearPhaseEngine = LinearPhaseEQEngine(maxFrameCount: maxFrameCount)
+
+        // Initialize crossfade coordinator if enabled
+        if config.seamlessCrossfadeEnabled {
+            self.crossfadeCoordinator = SeamlessCrossfadeCoordinator(
+                sampleRate: sampleRate,
+                maxFrameCount: maxFrameCount
+            )
+        }
     }
 
     // MARK: - Main Thread API
@@ -79,12 +91,27 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
             sampleRate: sampleRate
         )
 
-        // Update LinearPhaseEQEngine with the new kernel using the direct kernel update method
-        linearPhaseEngine.updateIRFromKernel(
-            leftKernel: kernel,
-            rightKernel: kernel,
-            sampleRate: sampleRate
-        )
+        let previousDelaySamples = config.enabled ? config.kernelSize / 2 : 0
+        let targetDelaySamples = kernelSize / 2
+
+        // Use seamless crossfade coordinator if enabled and latency is changing
+        if config.seamlessCrossfadeEnabled,
+           let coordinator = crossfadeCoordinator,
+           previousDelaySamples != targetDelaySamples {
+            // Trigger seamless transition
+            coordinator.triggerTransition(
+                targetKernel: kernel,
+                targetDelaySamples: targetDelaySamples,
+                currentDelaySamples: previousDelaySamples
+            )
+        } else {
+            // Direct update (no crossfade)
+            linearPhaseEngine.updateIRFromKernel(
+                leftKernel: kernel,
+                rightKernel: kernel,
+                sampleRate: sampleRate
+            )
+        }
 
         config.kernelSize = kernelSize
         config.enabled = true
@@ -114,8 +141,14 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
                  frameCount: Int) {
         guard config.enabled else { return }
 
-        applyPendingUpdates()
-        linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: frameCount)
+        // Use crossfade coordinator if available and in transition
+        if let coordinator = crossfadeCoordinator, coordinator.currentState != .idle {
+            coordinator.process(bufL: bufL, bufR: bufR, frameCount: frameCount)
+        } else {
+            // Direct processing through linear phase engine
+            applyPendingUpdates()
+            linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: frameCount)
+        }
     }
 
     // MARK: - Private Helpers
