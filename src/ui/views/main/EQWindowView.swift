@@ -9,7 +9,6 @@ struct EQWindowView: View {
     @State private var showCompareHelp = false
     @State private var showSnapshotCompareHelp = false
     @State private var showChannelHelp = false
-    @State private var showMetersHelp = false
     @State private var metersEnabledUI = true
     @State private var showSnapshotCompare = false
     @State private var localVolume: Float = 1.0
@@ -91,102 +90,6 @@ struct EQWindowView: View {
                     }
                 )
             )
-
-            Divider()
-                .frame(width: 120)
-
-            HStack(spacing: 6) {
-                Toggle("", isOn: $metersEnabledUI)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
-
-                Text("Meters")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button {
-                    showMetersHelp = true
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showMetersHelp, arrowEdge: .trailing) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            TooltipDefinitionEntry(
-                                title: "Peak In / Peak Out",
-                                detail: "Instantaneous peak level (highest sample amplitude), captured before and after all EQ, dynamics, and gain processing. Fast-reacting; shows transients and clipping."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "RMS In / RMS Out",
-                                detail: "Time-averaged level (root-mean-square), captured before and after all processing. Slower-reacting; better reflects perceived loudness."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "RTA",
-                                detail: "31-band real-time spectrum analyzer plotting input and output frequency content simultaneously, shown below the meters."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "Gain Structure",
-                                detail: "Live gain reduction, in dB, for every active dynamics stage — De-Esser, Multiband Compressor (low/mid/high), Compressor, Expander, Clipper, and Limiter — shown in the Dynamics section."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "Phase",
-                                detail: "Left/right correlation, from +1 (in phase, mono-compatible) through 0 (decorrelated/wide) to −1 (out of phase — will cancel in mono)."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "Crest Factor",
-                                detail: "Input peak-to-RMS ratio in dB. Higher means a more dynamic, less dense signal arriving at the plugin."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "DR Factor",
-                                detail: "Output peak-to-RMS ratio in dB, after processing. Shows how much dynamic range the dynamics chain has removed."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "ISP Latch",
-                                detail: "Overload indicator that latches on and stays lit once the input or output peak exceeds about −0.1 dBFS. Tap it to reset."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "TP-In / TP-Out",
-                                detail: "Live, non-latching clip indicator for the input and output peak level."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "True Peak Meter",
-                                detail: "Continuous true-peak level in dBTP, with an indicator for when oversampled peak detection is active."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "Bit Stream",
-                                detail: "24-bit activity monitor — one LED per bit of the input signal, lit when that bit carries energy."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "Sample Rate",
-                                detail: "Live input sample rate and its equivalent nominal bit rate."
-                            )
-                            Divider()
-                            TooltipDefinitionEntry(
-                                title: "Goniometer",
-                                detail: "Circular Lissajous (X/Y) plot of the stereo image, showing left/right correlation and width visually."
-                            )
-                        }
-                        .padding(12)
-                    }
-                    .frame(width: 320, height: 420)
-                }
-            }
         }
     }
 

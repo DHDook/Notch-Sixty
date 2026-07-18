@@ -15,7 +15,8 @@ struct EQCurveView: View {
     @State private var showCurveHelp:  Bool = false
 
     // MARK: - Constants
-    private let plotHeight:  CGFloat = 200   // total canvas height in points (expanded from 100)
+    private let plotHeight:  CGFloat = 156   // reduced from 200; offsets removal of the Meters
+                                          // master toggle row from preampVolumeColumn
     private let maxDB:       Double  =  15   // ±15 dB display range
     private let freqMin:     Double  =  20
     private let freqMax:     Double  = 20_000
