@@ -758,16 +758,22 @@ struct EQBandDetailPopover: View {
                 }
 
                 if let onDelete {
-                    Button {
-                        onDelete()
-                        onClose()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                    HStack(spacing: 4) {
+                        Text("Delete")
                             .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            onDelete()
+                            onClose()
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 15, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Delete band")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Delete band")
                 }
             }
         }
