@@ -2,6 +2,9 @@
 // Regression test for the output carry-over buffer fix in LinearPhaseEQEngine.
 // Verifies that the engine correctly drains valid output across multiple process() calls
 // when frameCount < hopSize.
+//
+// Regression test for heap buffer overflow in computeIRSpectrumFromKernel (incident 950FA9B7-DEDC-4461-9AB8-F50E8387BCCA).
+// Run with Address Sanitizer enabled to catch buffer overflows.
 
 import Accelerate
 import XCTest
@@ -675,5 +678,55 @@ final class LinearPhaseEQEngineTests: XCTestCase {
             XCTAssertGreaterThan(rms, 0.01,
                 "Sample rate \(sampleRate): should produce output after startup (RMS: \(rms))")
         }
+    }
+
+    /// Regression test for heap buffer overflow in computeIRSpectrumFromKernel.
+    ///
+    /// This test directly calls updateIRFromKernel with a kernel and verifies that
+    /// process() runs cleanly afterward. Run with Address Sanitizer enabled to catch
+    /// the buffer overflow that existed in the original implementation (incident
+    /// 950FA9B7-DEDC-4461-9AB8-F50E8387BCCA).
+    ///
+    /// To enable Address Sanitizer in Xcode:
+    /// Edit Scheme → Run → Diagnostics → Address Sanitizer → Enable
+    func testUpdateIRFromKernel_NoHeapOverflow() {
+        let engine = LinearPhaseEQEngine(maxFrameCount: 512)
+
+        // Create a test FIR kernel (similar to what AdaptiveExcessPhaseCorrector would produce)
+        let kernelSize = 4096
+        var kernel = [Float](repeating: 0, count: kernelSize)
+        kernel[kernelSize / 2] = 1.0  // Impulse at center (causal linear-phase FIR)
+
+        // Call updateIRFromKernel directly - this is where the heap overflow occurred
+        engine.updateIRFromKernel(leftKernel: kernel, rightKernel: kernel, sampleRate: sampleRate)
+
+        // Process some audio to ensure the engine is in a valid state
+        var input = [Float](repeating: 0, count: 512)
+        input[0] = 1.0  // Impulse input
+
+        var outputL = [Float](repeating: 0, count: 512)
+        var outputR = [Float](repeating: 0, count: 512)
+
+        input.withUnsafeBufferPointer { inputPtr in
+            outputL.withUnsafeMutableBufferPointer { outLPtr in
+                outputR.withUnsafeMutableBufferPointer { outRPtr in
+                    memcpy(outLPtr.baseAddress!, inputPtr.baseAddress!, 512 * MemoryLayout<Float>.size)
+                    memcpy(outRPtr.baseAddress!, inputPtr.baseAddress!, 512 * MemoryLayout<Float>.size)
+
+                    // This should not crash or corrupt memory
+                    engine.process(
+                        bufL: outLPtr.baseAddress!,
+                        bufR: outRPtr.baseAddress!,
+                        frameCount: 512
+                    )
+                }
+            }
+        }
+
+        // Verify output is valid (no NaN, no Inf)
+        let hasNaN = outputL.contains { $0.isNaN } || outputR.contains { $0.isNaN }
+        let hasInf = outputL.contains { $0.isInfinite } || outputR.contains { $0.isInfinite }
+        XCTAssertFalse(hasNaN, "Output should not contain NaN")
+        XCTAssertFalse(hasInf, "Output should not contain Inf")
     }
 }

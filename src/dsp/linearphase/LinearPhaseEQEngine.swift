@@ -220,21 +220,35 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
     }
 
     /// Computes the frequency spectrum of a time-domain FIR kernel.
+    ///
+    /// - Important: The forward transform below must run at `log2n` (the
+    ///   `fftSize`-resolution FFT used by `processChannel`'s spectral multiply),
+    ///   and the packed split-complex buffers must therefore be sized to the
+    ///   class's `halfN` (== fftSize / 2), NOT to `designSize / 2`. Using a
+    ///   locally-shadowed, half-sized `halfN` here previously caused
+    ///   `vDSP_fft_zrip` to read/write a `fftSize`-order transform into
+    ///   buffers only allocated for a `designSize`-order transform — a
+    ///   silent heap buffer overflow on every call (see incident
+    ///   950FA9B7-DEDC-4461-9AB8-F50E8387BCCA).
     private func computeIRSpectrumFromKernel(kernel: [Float], outReal: UnsafeMutablePointer<Float>, outImag: UnsafeMutablePointer<Float>) {
         let N = designSize
-        let halfN = N / 2
 
-        // Pad kernel to designSize
-        var paddedKernel = [Float](repeating: 0, count: N)
+        // Build a causal, zero-padded fftSize-length kernel buffer: the kernel's
+        // (up to N) taps occupy [0, N), and [N, fftSize) is zero padding. This is
+        // the same layout `processChannel` expects when it multiplies this
+        // spectrum against the fftSize-point signal-block FFT.
+        var causalKernel = [Float](repeating: 0, count: fftSize)
         let copyCount = min(kernel.count, N)
         for i in 0..<copyCount {
-            paddedKernel[i] = kernel[i]
+            causalKernel[i] = kernel[i]
         }
 
-        // Pack real kernel samples into halfN complex pairs for vDSP_fft_zrip
+        // Pack real fftSize-length samples into `halfN` (== fftSize / 2) complex
+        // pairs for vDSP_fft_zrip. `halfN` here is intentionally the class
+        // property (fftSize / 2), matching the buffer sizes below.
         var packedReal = [Float](repeating: 0, count: halfN)
         var packedImag = [Float](repeating: 0, count: halfN)
-        paddedKernel.withUnsafeMutableBufferPointer { kernelBuf in
+        causalKernel.withUnsafeMutableBufferPointer { kernelBuf in
             kernelBuf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: halfN) { cBuf in
                 packedReal.withUnsafeMutableBufferPointer { realBuf in
                     packedImag.withUnsafeMutableBufferPointer { imagBuf in
@@ -245,7 +259,8 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             }
         }
 
-        // Forward FFT on packed halfN buffer
+        // Forward FFT on the packed halfN (= fftSize/2) buffer — log2n matches
+        // this buffer's size, so this no longer overruns packedReal/packedImag.
         packedReal.withUnsafeMutableBufferPointer { realBuf in
             packedImag.withUnsafeMutableBufferPointer { imagBuf in
                 var kernelSC = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
@@ -254,10 +269,13 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
             }
         }
 
-        // vDSP_fft_zrip applies a 2× scale on forward pass; normalise it out
-        var invScale = Float(1.0 / Float(N))
-        vDSP_vsmul(&packedReal, 1, &invScale, outReal, 1, vDSP_Length(halfN))
-        vDSP_vsmul(&packedImag, 1, &invScale, outImag, 1, vDSP_Length(halfN))
+        // Note: unlike the biquad path (computeIRSpectrum), no additional
+        // manual normalisation is applied here — unnormalised, this carries
+        // the same implicit 2x forward-transform scale that computeIRSpectrum's
+        // output carries, which processChannel's final 1/(4*fftSize) scale
+        // already accounts for. Copy directly into the output spectrum.
+        memcpy(outReal, &packedReal, halfN * MemoryLayout<Float>.size)
+        memcpy(outImag, &packedImag, halfN * MemoryLayout<Float>.size)
     }
 
     @inline(__always)

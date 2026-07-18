@@ -1527,7 +1527,7 @@ final class RenderCallbackContext: @unchecked Sendable {
             _linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: Int(frameCount))
 
         } else if _mixedPhaseEnabled.load(ordering: .relaxed) != 0 {
-            // --- Mixed-phase path: biquad IIR + all-pass phase correction ---
+            // --- Mixed-phase path: biquad IIR + all-pass phase correction + adaptive excess-phase correction ---
 
             // 1. Run biquad EQ chains (magnitude response, same as normal EQ mode)
             for chain in leftEQChains {
@@ -1547,6 +1547,16 @@ final class RenderCallbackContext: @unchecked Sendable {
             if channelCount > 1 {
                 rightAllPassChain.applyPendingUpdates()
                 rightAllPassChain.process(buffer: processingBuffers[1], frameCount: frameCount)
+            }
+
+            // 3. Apply adaptive excess-phase correction (FIR escalation when all-pass alone is insufficient)
+            if _adaptiveExcessPhaseCorrectorEnabled.load(ordering: .relaxed) != 0 {
+                adaptiveExcessPhaseCorrector.applyPendingUpdates()
+                adaptiveExcessPhaseCorrector.process(
+                    bufL: processingBuffers[0],
+                    bufR: channelCount > 1 ? processingBuffers[1] : nil,
+                    frameCount: Int(frameCount)
+                )
             }
 
         } else {

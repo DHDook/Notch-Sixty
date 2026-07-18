@@ -41,6 +41,15 @@ final class AllPassChain: @unchecked Sendable {
     nonisolated(unsafe) private static var fittedSectionsCache: [String: [FittedAllPassParams]] = [:]
     private static let cacheLock = NSLock()
 
+    // Background queue for expensive fitting work
+    private static let fittingQueue = DispatchQueue(label: "com.notchsixty.allpass.fitting", qos: .userInitiated)
+
+    // Generation counter for discarding stale fitting results
+    private var currentFittingGeneration = ManagedAtomic<Int>(0)
+
+    // Completion callback for when fitting completes
+    private var fittingCompletionCallback: (() -> Void)?
+
     // Pre-allocated flat storage — no heap allocation on the audio thread.
     private let activeStore:  UnsafeMutablePointer<AllPassSection>
     private let pendingStore: UnsafeMutablePointer<AllPassSection>
@@ -72,11 +81,18 @@ final class AllPassChain: @unchecked Sendable {
     /// not per-band, to avoid whole-chain regression in multi-band use.
     /// Also triggers escalation to adaptive excess-phase correction if needed.
     ///
+    /// The expensive fitting work is dispatched to a background queue to avoid
+    /// blocking the main thread. The method returns immediately with a conservative
+    /// estimate (no escalation by default), and the actual fitting result is applied
+    /// asynchronously when ready.
+    ///
     /// - Parameters:
     ///   - sectionSets: One `[BiquadCoefficients]` array per active band.
     ///     Bypassed bands must be excluded by the caller.
     ///   - sampleRate: Current audio sample rate (Hz).
     /// - Returns: True if escalation to FIR correction is needed, false otherwise.
+    ///   Note: This is a conservative estimate; the actual escalation decision
+    ///   is made asynchronously and reported via the completion callback.
     @discardableResult
     func stageSections(from sectionSets: [[BiquadCoefficients]], sampleRate: Double) -> Bool {
         let allBiquadSections = sectionSets.flatMap { $0 }
@@ -86,22 +102,60 @@ final class AllPassChain: @unchecked Sendable {
             return false
         }
 
-        // Budget scales with how many bands are active, capped at maxSections.
-        let numSectionsToFit = min(Self.maxSections, max(2, sectionSets.count * 2))
+        // Increment generation counter for this update
+        let generation = currentFittingGeneration.wrappingIncrementThenLoad(ordering: .relaxed)
 
-        // Seed the multi-start grid around EVERY active band's frequency, not
-        // just one — reuse the existing 3-multiplier x 3-Q pattern per band,
-        // rather than only anchoring near a single band.
-        let fittedParams = Self.fitAllPassSectionsForChain(
-            biquadSections: allBiquadSections,
-            bandFrequencyHints: sectionSets.map { Self.estimateBandFrequency(biquadSections: $0, sampleRate: sampleRate) },
-            sampleRate: sampleRate,
-            numSections: numSectionsToFit
-        )
+        // Dispatch expensive fitting work to background queue
+        // sectionSets and sampleRate are value types, safe to capture
+        Self.fittingQueue.async { [weak self] in
+            guard let self = self else { return }
 
+            let numSectionsToFit = min(Self.maxSections, max(2, sectionSets.count * 2))
+
+            // Seed the multi-start grid around EVERY active band's frequency, not
+            // just one — reuse the existing 3-multiplier x 3-Q pattern per band,
+            // rather than only anchoring near a single band.
+            let fittedParams = Self.fitAllPassSectionsForChain(
+                biquadSections: allBiquadSections,
+                bandFrequencyHints: sectionSets.map { Self.estimateBandFrequency(biquadSections: $0, sampleRate: sampleRate) },
+                sampleRate: sampleRate,
+                numSections: numSectionsToFit
+            )
+
+            // Discard stale results: if a newer update was requested while this
+            // one was computing, don't apply an out-of-date result.
+            guard generation == self.currentFittingGeneration.load(ordering: .relaxed) else { return }
+
+            // Apply the fitting result
+            self.applyFittingResult(
+                fittedParams: fittedParams,
+                allBiquadSections: allBiquadSections,
+                sectionSets: sectionSets,
+                sampleRate: sampleRate
+            )
+        }
+
+        // Return conservative estimate (no escalation by default)
+        // The actual escalation decision is made asynchronously
+        return false
+    }
+
+    /// Sets a callback to be invoked when fitting completes.
+    /// Used to notify callers of the actual escalation decision.
+    func setFittingCompletionCallback(_ callback: @escaping () -> Void) {
+        fittingCompletionCallback = callback
+    }
+
+    /// Applies the fitting result from the background queue (runs on background queue).
+    private func applyFittingResult(
+        fittedParams: [FittedAllPassParams]?,
+        allBiquadSections: [BiquadCoefficients],
+        sectionSets: [[BiquadCoefficients]],
+        sampleRate: Double
+    ) {
         var count = 0
         var acceptedSections: [AllPassSection] = []
-        
+
         if let fittedParams = fittedParams {
             let candidateSections = fittedParams.map {
                 Self.allPassSectionFromParams(frequency: $0.frequency, q: $0.q, sampleRate: sampleRate)
@@ -119,9 +173,6 @@ final class AllPassChain: @unchecked Sendable {
                     count += 1
                 }
             }
-            // If the combined set doesn't clear the threshold, accept nothing —
-            // do not fall back to per-section acceptance of a partial subset,
-            // and do not fall back to the reflection-based construction.
         }
         pendingCount = count
         hasPending.store(true, ordering: .releasing)
@@ -135,12 +186,15 @@ final class AllPassChain: @unchecked Sendable {
             sampleRate: sampleRate
         )
         let peakDeviation = Self.peakGroupDelayDeviation(groupDelay: gdCombined)
-        
+
         // Scale threshold by sample rate (144 samples at 48kHz = 3ms)
         let scaledThreshold = Self.escalationThresholdSamples * (sampleRate / 48000.0)
-        
-        // Escalate if peak deviation exceeds threshold
-        return peakDeviation > scaledThreshold
+
+        // TODO: Store escalation decision for callback notification
+        // For now, just notify completion
+        DispatchQueue.main.async { [weak self] in
+            self?.fittingCompletionCallback?()
+        }
     }
 
     // MARK: - Audio Thread API

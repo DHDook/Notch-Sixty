@@ -23,6 +23,7 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
     // MARK: - State
 
     private var config: Config
+    private let configLock = NSLock()
     private var sampleRate: Double
 
     // LinearPhaseEQEngine for realization (reused core machinery)
@@ -45,8 +46,12 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
 
     /// The group delay introduced by the corrector in samples.
     /// Equal to kernelSize / 2 (the center of the causal kernel) when enabled, 0 when disabled.
+    /// Thread-safe: reads config under lock.
     var correctorDelaySamples: Int {
-        config.enabled ? config.kernelSize / 2 : 0
+        configLock.lock()
+        let delay = config.enabled ? config.kernelSize / 2 : 0
+        configLock.unlock()
+        return delay
     }
 
     // MARK: - Initialization
@@ -101,11 +106,15 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
 
     /// Applies the computed correction kernel (runs on background queue).
     private func applyComputedCorrection(kernel: [Float], kernelSize: Int, sampleRate: Double) {
+        configLock.lock()
         let previousDelaySamples = config.enabled ? config.kernelSize / 2 : 0
+        let seamlessEnabled = config.seamlessCrossfadeEnabled
+        configLock.unlock()
+
         let targetDelaySamples = kernelSize / 2
 
         // Use seamless crossfade coordinator if enabled and latency is changing
-        if config.seamlessCrossfadeEnabled,
+        if seamlessEnabled,
            let coordinator = crossfadeCoordinator,
            previousDelaySamples != targetDelaySamples {
             // Trigger seamless transition
@@ -123,8 +132,10 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
             )
         }
 
+        configLock.lock()
         config.kernelSize = kernelSize
         config.enabled = true
+        configLock.unlock()
         hasPendingIR.store(true, ordering: .releasing)
 
         // Notify latency change if it actually changed
@@ -135,7 +146,9 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
 
     /// Disables the correction filter.
     func disable() {
+        configLock.lock()
         config.enabled = false
+        configLock.unlock()
         hasPendingIR.store(true, ordering: .releasing)
 
         // Notify latency change
