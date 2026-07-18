@@ -757,6 +757,8 @@ struct EQBandDetailPopover: View {
                         }
                 }
 
+                Spacer()
+
                 if let onDelete {
                     HStack(spacing: 4) {
                         Text("Delete")

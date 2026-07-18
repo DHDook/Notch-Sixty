@@ -5,10 +5,11 @@ struct BandCountControl: View {
     @State private var isEditing = false
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
+    @State private var showRemoveBandConfirmation = false
 
     var body: some View {
         HStack(spacing: 4) {
-            StepperButton(symbol: "-", action: { adjustBands(by: -1) })
+            StepperButton(symbol: "-", action: { showRemoveBandConfirmation = true })
 
             // Inline editable band count - matching gain control style
             Group {
@@ -53,6 +54,14 @@ struct BandCountControl: View {
         .onChange(of: store.bandCount) { _, newValue in
             text = "\(newValue)"
             isEditing = false
+        }
+        .alert("Remove Last Band?", isPresented: $showRemoveBandConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) {
+                adjustBands(by: -1)
+            }
+        } message: {
+            Text("This removes band \(store.bandCount) from the EQ. This cannot be undone.")
         }
     }
 
