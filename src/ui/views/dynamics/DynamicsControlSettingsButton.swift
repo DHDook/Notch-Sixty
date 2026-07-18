@@ -6,6 +6,7 @@ import SwiftUI
 /// Stereo Matrix, next to a Column 4 picker instead of a toggle).
 struct DynamicsControlSettingsButton<Content: View>: View {
     let fullName: String
+    var width: CGFloat = 400
     @ViewBuilder var content: () -> Content
 
     @State private var isPresented = false
@@ -30,7 +31,7 @@ struct DynamicsControlSettingsButton<Content: View>: View {
                 content()
             }
             .padding(16)
-            .frame(width: 400)
+            .frame(width: width)
             .background(
                 Button("") { }
                     .buttonStyle(.plain)
