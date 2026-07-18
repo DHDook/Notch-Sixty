@@ -37,6 +37,12 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
     /// Callback for latency change notifications (used by crossover path alignment)
     private var latencyChangeCallback: (() -> Void)?
 
+    /// Background queue for expensive kernel computation
+    private let correctionQueue = DispatchQueue(label: "com.notchsixty.mixedphase.correction", qos: .userInitiated)
+
+    /// Generation counter for discarding stale computation results
+    private var currentComputationGeneration = ManagedAtomic<Int>(0)
+
     /// The group delay introduced by the corrector in samples.
     /// Equal to kernelSize / 2 (the center of the causal kernel) when enabled, 0 when disabled.
     var correctorDelaySamples: Int {
@@ -74,26 +80,27 @@ final class AdaptiveExcessPhaseCorrector: @unchecked Sendable {
     ) {
         self.sampleRate = sampleRate
 
-        // Compute adaptive kernel size based on band characteristics
-        let kernelSize = computeAdaptiveKernelSize(
-            biquadSections: biquadSections,
-            sampleRate: sampleRate
-        )
+        // biquadSections/allPassSections are value types (structs) — safe to
+        // capture and use on a background thread without further synchronization.
+        let generation = currentComputationGeneration.wrappingIncrementThenLoad(ordering: .relaxed)
 
-        // Compute target phase: unity magnitude, phase = -residual excess phase
-        let targetPhase = computeTargetPhase(
-            biquadSections: biquadSections,
-            allPassSections: allPassSections,
-            sampleRate: sampleRate
-        )
+        correctionQueue.async { [weak self] in
+            guard let self = self else { return }
 
-        // Build FIR kernel from target phase
-        let kernel = buildKernelFromTargetPhase(
-            targetPhase: targetPhase,
-            kernelSize: kernelSize,
-            sampleRate: sampleRate
-        )
+            let kernelSize = self.computeAdaptiveKernelSize(biquadSections: biquadSections, sampleRate: sampleRate)
+            let targetPhase = self.computeTargetPhase(biquadSections: biquadSections, allPassSections: allPassSections, sampleRate: sampleRate)
+            let kernel = self.buildKernelFromTargetPhase(targetPhase: targetPhase, kernelSize: kernelSize, sampleRate: sampleRate)
 
+            // Discard stale results: if a newer update was requested while this
+            // one was computing, don't apply an out-of-date kernel.
+            guard generation == self.currentComputationGeneration.load(ordering: .relaxed) else { return }
+
+            self.applyComputedCorrection(kernel: kernel, kernelSize: kernelSize, sampleRate: sampleRate)
+        }
+    }
+
+    /// Applies the computed correction kernel (runs on background queue).
+    private func applyComputedCorrection(kernel: [Float], kernelSize: Int, sampleRate: Double) {
         let previousDelaySamples = config.enabled ? config.kernelSize / 2 : 0
         let targetDelaySamples = kernelSize / 2
 

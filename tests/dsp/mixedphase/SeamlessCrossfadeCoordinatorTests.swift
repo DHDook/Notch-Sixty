@@ -39,16 +39,21 @@ final class SeamlessCrossfadeCoordinatorTests: XCTestCase {
         let shortKernel = createTestKernel(size: 2048, peakIndex: 1024)
         let longKernel = createTestKernel(size: 4096, peakIndex: 2048)
 
-        // Configure primary engine (short latency)
+        // Configure primary engine (short latency) - use different delays to trigger setup
         coordinator.triggerTransition(
             targetKernel: shortKernel,
             targetDelaySamples: 1024,
-            currentDelaySamples: 1024
+            currentDelaySamples: 512  // Different to trigger transition
         )
 
-        // Process to establish baseline
-        var bufL = testSignal
-        coordinator.process(bufL: &bufL, bufR: nil, frameCount: testSignal.count)
+        // Process through transition to establish baseline
+        for _ in 0..<20 {
+            var temp = testSignal
+            coordinator.process(bufL: &temp, bufR: nil, frameCount: temp.count)
+        }
+
+        // Reset to idle state for next test
+        coordinator.reset()
 
         // Trigger escalation (short → long latency)
         coordinator.triggerTransition(
@@ -85,15 +90,21 @@ final class SeamlessCrossfadeCoordinatorTests: XCTestCase {
         let shortKernel = createTestKernel(size: 2048, peakIndex: 1024)
         let longKernel = createTestKernel(size: 4096, peakIndex: 2048)
 
-        // Start with long latency
+        // Start with long latency - use different delays to trigger setup
         coordinator.triggerTransition(
             targetKernel: longKernel,
             targetDelaySamples: 2048,
-            currentDelaySamples: 2048
+            currentDelaySamples: 1024  // Different to trigger transition
         )
 
-        var bufL = testSignal
-        coordinator.process(bufL: &bufL, bufR: nil, frameCount: testSignal.count)
+        // Process through transition to establish baseline
+        for _ in 0..<20 {
+            var temp = testSignal
+            coordinator.process(bufL: &temp, bufR: nil, frameCount: temp.count)
+        }
+
+        // Reset to idle state for next test
+        coordinator.reset()
 
         // Trigger de-escalation (long → short latency)
         coordinator.triggerTransition(
@@ -147,16 +158,21 @@ final class SeamlessCrossfadeCoordinatorTests: XCTestCase {
         let shortKernel = createTestKernel(size: 2048, peakIndex: 1024)
         let longKernel = createTestKernel(size: 4096, peakIndex: 2048)
 
-        // Start with long latency
+        // Start with long latency - use different delays to trigger setup
         coordinator.triggerTransition(
             targetKernel: longKernel,
             targetDelaySamples: 2048,
-            currentDelaySamples: 2048
+            currentDelaySamples: 1024  // Different to trigger transition
         )
 
-        // Process to establish baseline
-        var bufL = Array(testSignal.prefix(512))
-        coordinator.process(bufL: &bufL, bufR: nil, frameCount: bufL.count)
+        // Process through transition to establish baseline
+        for _ in 0..<20 {
+            var temp = Array(testSignal.prefix(512))
+            coordinator.process(bufL: &temp, bufR: nil, frameCount: temp.count)
+        }
+
+        // Reset to idle state for next test
+        coordinator.reset()
 
         // Trigger de-escalation
         coordinator.triggerTransition(
@@ -212,16 +228,23 @@ final class SeamlessCrossfadeCoordinatorTests: XCTestCase {
         let shortKernel = createTestKernel(size: 2048, peakIndex: 1024)
         let longKernel = createTestKernel(size: 4096, peakIndex: 2048)
 
-        // Setup and trigger de-escalation
+        // Setup and trigger de-escalation - use different delays to trigger setup
         coordinator.triggerTransition(
             targetKernel: longKernel,
             targetDelaySamples: 2048,
-            currentDelaySamples: 2048
+            currentDelaySamples: 1024  // Different to trigger transition
         )
 
-        var bufL = Array(testSignal.prefix(512))
-        coordinator.process(bufL: &bufL, bufR: nil, frameCount: bufL.count)
+        // Process through transition to establish baseline
+        for _ in 0..<20 {
+            var temp = Array(testSignal.prefix(512))
+            coordinator.process(bufL: &temp, bufR: nil, frameCount: temp.count)
+        }
 
+        // Reset to idle state for next test
+        coordinator.reset()
+
+        // Trigger de-escalation
         coordinator.triggerTransition(
             targetKernel: shortKernel,
             targetDelaySamples: 1024,
@@ -279,6 +302,10 @@ final class SeamlessCrossfadeCoordinatorTests: XCTestCase {
             targetDelaySamples: 1024,
             currentDelaySamples: 512
         )
+
+        // Process to move to priming state
+        var temp = testSignal
+        coordinator.process(bufL: &temp, bufR: nil, frameCount: temp.count)
 
         // Immediately try to trigger another (should be rejected due to in-progress transition)
         coordinator.triggerTransition(

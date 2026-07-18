@@ -11,6 +11,7 @@ import Foundation
 /// Transition state for the crossfade coordinator.
 enum CrossfadeState: Sendable {
     case idle                      // No transition in progress
+    case preparingTransition       // Transition reserved, preparing secondary engine (outside lock)
     case priming                   // New chain is priming (accumulating startup hops)
     case crossfading               // Active crossfade between old and new chains
     case delayRamping              // Post-crossfade delay ramp (de-escalation only)
@@ -128,43 +129,30 @@ final class SeamlessCrossfadeCoordinator: @unchecked Sendable {
         currentDelaySamples: Int
     ) {
         stateLock.lock()
-        defer { stateLock.unlock() }
-
-        // Reject if a transition is already in progress or in cooldown
-        guard state == .idle else { return }
+        guard state == .idle else { stateLock.unlock(); return }
+        state = .preparingTransition  // Reserve the transition, block re-entry
+        stateLock.unlock()
 
         // Determine direction
-        if targetDelaySamples > currentDelaySamples {
-            direction = .escalation
-        } else if targetDelaySamples < currentDelaySamples {
-            direction = .deescalation
-        } else {
-            return  // No latency change, no transition needed
-        }
-
-        // Configure secondary (non-primary) engine with target kernel
+        let direction: TransitionDirection = targetDelaySamples > currentDelaySamples ? .escalation : .deescalation
         let secondaryIndex = 1 - primaryEngineIndex
         let secondaryEngine = secondaryIndex == 0 ? engineA : engineB
-        secondaryEngine.updateIRFromKernel(
-            leftKernel: targetKernel,
-            rightKernel: targetKernel,
-            sampleRate: sampleRate
-        )
 
-        // Calculate alignment delay needed
+        // Expensive work: fully outside any lock.
+        secondaryEngine.updateIRFromKernel(leftKernel: targetKernel, rightKernel: targetKernel, sampleRate: sampleRate)
+
         let latencyDifference = abs(targetDelaySamples - currentDelaySamples)
 
-        // Start priming phase
+        // Fast finalization: back under the lock only for simple assignments.
+        stateLock.lock()
+        self.direction = direction
         state = .priming
-        primingHopsRemaining = 2  // Require 2 hops for startup (same as LinearPhaseEQEngine)
+        primingHopsRemaining = 2
+        stateLock.unlock()
 
-        // For de-escalation, set up fractional delay line
         if direction == .deescalation {
             let alignmentDelayMs = Double(latencyDifference) * 1000.0 / sampleRate
-            fractionalDelay.setTargetDelay(
-                targetDelayMs: alignmentDelayMs,
-                rampDurationMs: config.delayRampDurationMs
-            )
+            fractionalDelay.setTargetDelay(targetDelayMs: alignmentDelayMs, rampDurationMs: config.delayRampDurationMs)
         }
     }
 
@@ -183,6 +171,12 @@ final class SeamlessCrossfadeCoordinator: @unchecked Sendable {
 
         switch currentState {
         case .idle:
+            // Single-path processing through primary engine only
+            let primaryEngine = primaryEngineIndex == 0 ? engineA : engineB
+            primaryEngine.process(bufL: bufL, bufR: bufR, frameCount: frameCount)
+
+        case .preparingTransition:
+            // Transition is being prepared on background thread - treat as idle
             // Single-path processing through primary engine only
             let primaryEngine = primaryEngineIndex == 0 ? engineA : engineB
             primaryEngine.process(bufL: bufL, bufR: bufR, frameCount: frameCount)
