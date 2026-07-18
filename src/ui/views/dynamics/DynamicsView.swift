@@ -1782,30 +1782,35 @@ struct DynamicsInlineView: View {
                 Toggle("RTA", isOn: $rtaEnabledUI)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .onChange(of: rtaEnabledUI) { newValue in
                         store.meterStore.rtaEnabled = newValue
                     }
                 Toggle("Goniometer", isOn: $goniometerEnabledUI)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .onChange(of: goniometerEnabledUI) { newValue in
                         store.meterStore.goniometerEnabled = newValue
                     }
                 Toggle("Analytics Meters", isOn: $analyticsEnabledUI)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .onChange(of: analyticsEnabledUI) { newValue in
                         store.meterStore.analyticsMetersEnabled = newValue
                     }
                 Toggle("Gain Structure", isOn: $gainStructureEnabledUI)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .onChange(of: gainStructureEnabledUI) { newValue in
                         store.meterStore.gainStructureEnabled = newValue
                     }
                 Toggle("Level Meters", isOn: $levelMetersEnabledUI)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .onChange(of: levelMetersEnabledUI) { newValue in
                         store.meterStore.levelMetersEnabled = newValue
                     }
