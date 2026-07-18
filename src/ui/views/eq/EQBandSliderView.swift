@@ -49,16 +49,6 @@ struct EQBandSliderView: View {
                 onAdjust: AudioConstants.clampGain
             )
             .font(.system(size: 10, weight: .bold, design: .monospaced))
-            if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .bold))
-                        .padding(4)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Delete band")
-            }
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
@@ -72,13 +62,12 @@ struct EQBandSliderView: View {
 
     private var header: some View {
         VStack(alignment: .center, spacing: 4) {
-            Text("\(bandNumber)")
-                .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundStyle(band.isDynamic ? Color.accentColor : Color.secondary)
-                .monospacedDigit()
+            HStack(spacing: 4) {
+                Text("\(bandNumber)")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(band.isDynamic ? Color.accentColor : Color.secondary)
+                    .monospacedDigit()
 
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
                 Button {
                     isShowingDetail = true
                 } label: {
@@ -105,6 +94,7 @@ struct EQBandSliderView: View {
                             dynamicParamsUpdate?(params)
                         },
                         onClose: { isShowingDetail = false },
+                        onDelete: onDelete,
                         onLoadFIRKernel: onLoadFIRKernel,
                         onClearFIRKernel: onClearFIRKernel,
                         isLinearPhaseActive: isLinearPhaseActive,
@@ -113,7 +103,6 @@ struct EQBandSliderView: View {
                     )
                     .frame(width: 240)
                 }
-                Spacer(minLength: 0)
             }
 
             InlineEditableValue(
@@ -212,6 +201,7 @@ struct EQBandDetailPopover: View {
     let onClose: () -> Void
     var onLoadFIRKernel: (() -> Void)? = nil
     var onClearFIRKernel: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
     var constantQUpdate: ((Bool) -> Void)? = nil
     var linkwitzTargetHzUpdate: ((Float?) -> Void)? = nil
     /// True when the EQ is in linear-phase mode. Shown as a hint when .fir is selected
@@ -263,6 +253,7 @@ struct EQBandDetailPopover: View {
          isDynamicUpdate: @escaping (Bool) -> Void,
          dynamicParamsUpdate: @escaping (DynamicBandParams) -> Void,
          onClose: @escaping () -> Void,
+         onDelete: (() -> Void)? = nil,
          onLoadFIRKernel: (() -> Void)? = nil,
          onClearFIRKernel: (() -> Void)? = nil,
          isLinearPhaseActive: Bool = false,
@@ -304,6 +295,7 @@ struct EQBandDetailPopover: View {
         self.isDynamicUpdate = isDynamicUpdate
         self.dynamicParamsUpdate = dynamicParamsUpdate
         self.onClose = onClose
+        self.onDelete = onDelete
         self.band = band
         self.onLoadFIRKernel = onLoadFIRKernel
         self.onClearFIRKernel = onClearFIRKernel
@@ -751,10 +743,33 @@ struct EQBandDetailPopover: View {
                 slopeUpdate(newValue)
             }
 
-            Toggle("Bypass Band", isOn: $bypass)
-                .onChange(of: bypass) { _, newValue in
-                    bypassUpdate(newValue)
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Text("Bypass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Toggle("", isOn: $bypass)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: bypass) { _, newValue in
+                            bypassUpdate(newValue)
+                        }
                 }
+
+                if let onDelete {
+                    Button {
+                        onDelete()
+                        onClose()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Delete band")
+                }
+            }
         }
         .padding(16)
         .onKeyPress(.escape) {
