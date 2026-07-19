@@ -749,9 +749,6 @@ final class AudioRoutingCoordinator: ObservableObject {
         if granted {
             deviceProvider.enumerateInputDevices()
             captureMode = .halInput
-            if !manualModeEnabled && routingStatus != .idle {
-                reconfigureRouting()
-            }
             logger.info("Microphone permission granted, switched to HAL capture")
         } else {
             logger.warning("Microphone permission denied, staying with shared memory capture")
