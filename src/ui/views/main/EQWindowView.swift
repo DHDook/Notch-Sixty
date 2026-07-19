@@ -28,11 +28,6 @@ struct EQWindowView: View {
         store.showDriverUpdateRequired && !store.routingCoordinator.manualModeEnabled
     }
 
-    /// View model for routing status.
-    private var routingViewModel: RoutingViewModel {
-        RoutingViewModel(store: store)
-    }
-
     /// View model for EQ configuration.
     private var eqViewModel: EQViewModel {
         EQViewModel(store: store)
@@ -112,33 +107,6 @@ struct EQWindowView: View {
         }
     }
 
-    /// Manual routing column (device pickers + routing toggle).
-    private var manualRoutingColumn: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            DevicePickerView()
-
-            ToggleWithHelp(
-                label: "Audio Routing",
-                isOn: Binding(
-                    get: { routingViewModel.isActive },
-                    set: { newValue in
-                        if newValue {
-                            store.reconfigureRouting()
-                        } else {
-                            store.stopRouting()
-                        }
-                    }
-                ),
-                helpText: "Enable or disable audio routing between the selected input and output devices. Both devices must be selected to enable routing."
-            )
-            .disabled(!routingViewModel.canToggleRouting)
-            .errorTint({
-                if case .error = store.routingStatus { return true }
-                return false
-            }())
-        }
-        .frame(minWidth: 376)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -149,10 +117,6 @@ struct EQWindowView: View {
                 metersAndCurveColumn
                 Divider()
                 DynamicsInlineView()
-                if routingViewModel.manualModeEnabled {
-                    Divider()
-                    manualRoutingColumn
-                }
             }
 
             // Dual 31-band real-time spectrum analyser

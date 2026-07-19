@@ -165,6 +165,26 @@ struct DisplaySettingsTab: View {
             if store.manualModeEnabled {
                 Section {
                     DevicePickerView(layout: .vertical)
+
+                    ToggleWithHelp(
+                        label: "Audio Routing",
+                        isOn: Binding(
+                            get: { routingViewModel.isActive },
+                            set: { newValue in
+                                if newValue {
+                                    store.reconfigureRouting()
+                                } else {
+                                    store.stopRouting()
+                                }
+                            }
+                        ),
+                        helpText: "Enable or disable audio routing between the selected input and output devices. Both devices must be selected to enable routing."
+                    )
+                    .disabled(!routingViewModel.canToggleRouting)
+                    .errorTint({
+                        if case .error = store.routingStatus { return true }
+                        return false
+                    }())
                 } header: {
                     Text("Device Selection")
                 }
