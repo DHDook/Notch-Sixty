@@ -162,6 +162,10 @@ final class RenderCallbackContext: @unchecked Sendable {
     private let _adaptiveExcessPhaseCorrectorEnabled: ManagedAtomic<Int32>
     nonisolated(unsafe) var adaptiveExcessPhaseCorrectorDelaySamples: Int = 0
 
+    // Per-channel escalation state for combining async callback results
+    private var lastLeftEscalationNeeded = false
+    private var lastRightEscalationNeeded = false
+
     /// Sets the latency change callback for the adaptive excess phase corrector.
     /// Called from RenderPipeline to trigger crossover path alignment updates on escalation/de-escalation.
     func setAdaptiveExcessPhaseCorrectorLatencyCallback(_ callback: @escaping () -> Void) {
@@ -446,6 +450,26 @@ final class RenderCallbackContext: @unchecked Sendable {
         }
 
         return shouldEscalate
+    }
+
+    /// Handles escalation update from the async fitting callback.
+    /// Combines per-channel decisions and triggers or disengages the adaptive corrector.
+    private func handleEscalationUpdate(isLeft: Bool, needsEscalation: Bool, biquadSections: [BiquadCoefficients], allPassSections: [AllPassSection]) {
+        if isLeft { lastLeftEscalationNeeded = needsEscalation } else { lastRightEscalationNeeded = needsEscalation }
+        let shouldEscalate = lastLeftEscalationNeeded || lastRightEscalationNeeded
+
+        let sampleRate = dynamicsProcessor.storedSampleRate
+
+        if shouldEscalate {
+            adaptiveExcessPhaseCorrector.updateCorrection(biquadSections: biquadSections, allPassSections: allPassSections, sampleRate: sampleRate)
+            _adaptiveExcessPhaseCorrectorEnabled.store(1, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = adaptiveExcessPhaseCorrector.correctorDelaySamples
+        } else {
+            // De-escalation: disable the corrector
+            adaptiveExcessPhaseCorrector.disable()
+            _adaptiveExcessPhaseCorrectorEnabled.store(0, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = 0
+        }
     }
 
     // MARK: - Sweep Playback API
@@ -785,6 +809,14 @@ final class RenderCallbackContext: @unchecked Sendable {
             mutableBuffer.mDataByteSize = UInt32(framesPerBuffer * MemoryLayout<Float>.size)
             mutableBuffer.mData = UnsafeMutableRawPointer(inputBuffers[index])
             buffersPtr[index] = mutableBuffer
+        }
+
+        // Register escalation callbacks for both channels (must be after all properties initialized)
+        leftAllPassChain.setFittingCompletionCallback { [weak self] needsEscalation, biquadSections, allPassSections in
+            self?.handleEscalationUpdate(isLeft: true, needsEscalation: needsEscalation, biquadSections: biquadSections, allPassSections: allPassSections)
+        }
+        rightAllPassChain.setFittingCompletionCallback { [weak self] needsEscalation, biquadSections, allPassSections in
+            self?.handleEscalationUpdate(isLeft: false, needsEscalation: needsEscalation, biquadSections: biquadSections, allPassSections: allPassSections)
         }
     }
 

@@ -48,7 +48,8 @@ final class AllPassChain: @unchecked Sendable {
     private var currentFittingGeneration = ManagedAtomic<Int>(0)
 
     // Completion callback for when fitting completes
-    private var fittingCompletionCallback: (() -> Void)?
+    // Signature carries the actual escalation decision plus what the corrector needs to act on it
+    private var fittingCompletionCallback: ((Bool, [BiquadCoefficients], [AllPassSection]) -> Void)?
 
     // Pre-allocated flat storage — no heap allocation on the audio thread.
     private let activeStore:  UnsafeMutablePointer<AllPassSection>
@@ -142,7 +143,7 @@ final class AllPassChain: @unchecked Sendable {
 
     /// Sets a callback to be invoked when fitting completes.
     /// Used to notify callers of the actual escalation decision.
-    func setFittingCompletionCallback(_ callback: @escaping () -> Void) {
+    func setFittingCompletionCallback(_ callback: @escaping (Bool, [BiquadCoefficients], [AllPassSection]) -> Void) {
         fittingCompletionCallback = callback
     }
 
@@ -189,11 +190,10 @@ final class AllPassChain: @unchecked Sendable {
 
         // Scale threshold by sample rate (144 samples at 48kHz = 3ms)
         let scaledThreshold = Self.escalationThresholdSamples * (sampleRate / 48000.0)
+        let needsEscalation = peakDeviation > scaledThreshold
 
-        // TODO: Store escalation decision for callback notification
-        // For now, just notify completion
         DispatchQueue.main.async { [weak self] in
-            self?.fittingCompletionCallback?()
+            self?.fittingCompletionCallback?(needsEscalation, allBiquadSections, acceptedSections)
         }
     }
 

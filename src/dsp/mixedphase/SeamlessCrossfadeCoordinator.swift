@@ -105,7 +105,10 @@ final class SeamlessCrossfadeCoordinator: @unchecked Sendable {
         self.fractionalDelay = FractionalDelayLine(maxDelayMs: maxDelayMs, sampleRate: sampleRate)
 
         // Fixed alignment delay buffer
-        self.alignmentDelaySize = Int(ceil(config.maxAlignmentDelayMs * sampleRate / 1000.0)) + maxFrameCount
+        // Derive from the real maximum, not a fixed ms budget that doesn't scale
+        // with sample rate or adaptive kernel sizing.
+        let maxPossibleKernelDelaySamples = 32768 / 2   // half of the largest adaptive kernel size
+        self.alignmentDelaySize = maxPossibleKernelDelaySamples + maxFrameCount
         self.alignmentDelayBuffer = UnsafeMutablePointer<Float>.allocate(capacity: alignmentDelaySize)
         self.alignmentDelayBuffer.initialize(repeating: 0, count: alignmentDelaySize)
     }
@@ -459,6 +462,14 @@ final class SeamlessCrossfadeCoordinator: @unchecked Sendable {
         delaySamples: Int,
         frameCount: Int
     ) {
+        // Bounds check: if delay exceeds buffer capacity, fall back to hard transition
+        // This is a defensive backstop against buffer-sizing assumptions going stale
+        guard delaySamples < alignmentDelaySize else {
+            // Hard transition: copy input directly to output without delay
+            memcpy(&output, &input, frameCount * MemoryLayout<Float>.size)
+            return
+        }
+
         // Write input to alignment delay buffer
         for i in 0..<frameCount {
             alignmentDelayBuffer[alignmentDelayWritePos] = input[i]

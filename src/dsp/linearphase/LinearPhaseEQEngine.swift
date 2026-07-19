@@ -174,13 +174,16 @@ final class LinearPhaseEQEngine: @unchecked Sendable {
     /// Updates the IR directly from pre-computed time-domain FIR kernels.
     /// Used by adaptive excess-phase correction where the kernel is computed externally.
     func updateIRFromKernel(leftKernel: [Float], rightKernel: [Float], sampleRate: Double) {
-        let newDesignSize: Int
+        precondition(leftKernel.count == rightKernel.count, "left/right kernel size mismatch")
+
+        let sampleRateMinimum: Int
         switch sampleRate {
-        case ...48_000:  newDesignSize = 4096
-        case ...96_000:  newDesignSize = 8192
-        case ...192_000: newDesignSize = 16384
-        default:         newDesignSize = 32768
+        case ...48_000:  sampleRateMinimum = 4096
+        case ...96_000:  sampleRateMinimum = 8192
+        case ...192_000: sampleRateMinimum = 16384
+        default:         sampleRateMinimum = 32768
         }
+        let newDesignSize = max(sampleRateMinimum, leftKernel.count)
         if newDesignSize != designSize {
             designSize = newDesignSize
             fftSize = 2 * designSize
