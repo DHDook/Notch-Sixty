@@ -21,9 +21,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.6-20260719.3a4b33c</string>
+	<string>0.5.6-20260719.ac013e7</string>
 	<key>CFBundleVersion</key>
-	<string>3a4b33c</string>
+	<string>ac013e7</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
