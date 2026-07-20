@@ -114,9 +114,6 @@ final class EQChain {
         pendingCoefficients[index] = sanitizedSections(sections)
         pendingBypassFlags[index] = bypass
         filters[index].useDoublePrecision = needsDoublePrecision
-        // Build the vDSP setup here, on the main thread. The audio thread only does the
-        // pointer swap (BiquadFilter.applyPendingSetup(), called from EQChain.process()).
-        filters[index].stageCoefficients(pendingCoefficients[index], resetState: false)
         hasPendingUpdate.store(true, ordering: .releasing)
     }
 
@@ -142,9 +139,6 @@ final class EQChain {
             pendingCoefficients[i] = sanitizedSections(raw)
             pendingBypassFlags[i] = i < bypassFlags.count ? bypassFlags[i] : false
             filters[i].useDoublePrecision = i < needsDoublePrecision.count ? needsDoublePrecision[i] : false
-            // Build the vDSP setup here, on the main thread — same reasoning as stageBandUpdate.
-            // Full updates always reset delay state (clean start for preset loads / rate changes).
-            filters[i].stageCoefficients(pendingCoefficients[i], resetState: true)
         }
         pendingActiveBandCount = min(activeBandCount, Self.maxBandCount)
         pendingLayerBypass = layerBypass
@@ -163,14 +157,12 @@ final class EQChain {
     /// Applies any pending coefficient updates.
     /// Call once per render cycle before processing.
     ///
-    /// vDSP setups were already built on the main thread (in `stageBandUpdate` /
-    /// `stageFullUpdate`). This only updates plain-value bookkeeping — no allocation,
-    /// no vDSP calls. The actual pointer swap happens in `process()` via
-    /// `BiquadFilter.applyPendingSetup()`.
+    /// Only rebuilds vDSP setups for bands whose sections actually changed.
     @inline(__always)
     func applyPendingUpdates() {
         guard hasPendingUpdate.exchange(false, ordering: .acquiringAndReleasing) else { return }
 
+        let fullReset = pendingFullReset
         pendingFullReset = false
 
         activeBandCount = pendingActiveBandCount
@@ -178,7 +170,14 @@ final class EQChain {
 
         for i in 0..<Self.maxBandCount {
             bypassFlags[i] = pendingBypassFlags[i]
-            activeCoefficients[i] = pendingCoefficients[i]
+
+            let pending = pendingCoefficients[i]
+            if pending != activeCoefficients[i] {
+                activeCoefficients[i] = pending
+                filters[i].stageCoefficients(pending, resetState: fullReset)
+            } else if fullReset {
+                filters[i].stageCoefficients(pending, resetState: true)
+            }
         }
     }
 

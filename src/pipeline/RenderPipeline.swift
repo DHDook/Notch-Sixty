@@ -1402,17 +1402,14 @@ final class RenderPipeline {
         // 3. Copy processed audio to output buffer list
         let outputBuffers = context.outputBufferPointers
         let abl = UnsafeMutableAudioBufferListPointer(ioData)
-        let bufferCount = Int(ioData.pointee.mNumberBuffers)
         let framesToCopy = workFrames
 
-        withUnsafeMutablePointer(to: &ioData.pointee.mBuffers) { buffersPtr in
-            for index in 0..<bufferCount {
-                if let destData = buffersPtr[index].mData?.assumingMemoryBound(to: Float.self) {
-                    if index < outputBuffers.count {
-                        memcpy(destData, outputBuffers[index], framesToCopy * MemoryLayout<Float>.size)
-                    } else {
-                        memset(destData, 0, framesToCopy * MemoryLayout<Float>.size)
-                    }
+        for (index, buffer) in abl.enumerated() {
+            if let destData = buffer.mData?.assumingMemoryBound(to: Float.self) {
+                if index < outputBuffers.count {
+                    memcpy(destData, outputBuffers[index], framesToCopy * MemoryLayout<Float>.size)
+                } else {
+                    memset(destData, 0, framesToCopy * MemoryLayout<Float>.size)
                 }
             }
         }
