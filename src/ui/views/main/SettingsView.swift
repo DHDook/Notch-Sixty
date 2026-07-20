@@ -97,6 +97,22 @@ struct DisplaySettingsTab: View {
     var body: some View {
         Form {
             Section {
+                HStack {
+                    Spacer()
+                    Picker("Appearance", selection: $store.appearanceMode) {
+                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Spacer()
+                }
+            } header: {
+                Text("Appearance")
+            }
+
+            Section {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Spacer()
@@ -188,22 +204,6 @@ struct DisplaySettingsTab: View {
                 } header: {
                     Text("Device Selection")
                 }
-            }
-
-            Section {
-                HStack {
-                    Spacer()
-                    Picker("Appearance", selection: $store.appearanceMode) {
-                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    Spacer()
-                }
-            } header: {
-                Text("Appearance")
             }
 
             Section {

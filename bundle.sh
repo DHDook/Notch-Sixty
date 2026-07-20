@@ -128,10 +128,30 @@ build_app() {
   echo "Menu bar icon generated"
 
   # Runtime-loadable full-resolution icons for Dock icon override (Part 2.2)
-  rsvg-convert -w 1024 -h 1024 "$ROOT_DIR/resources/AppIcon-light.svg" \
-    -o "$APP_BUNDLE/Contents/Resources/AppIconRuntime-light.png"
-  rsvg-convert -w 1024 -h 1024 "$ROOT_DIR/resources/AppIcon-dark.svg" \
-    -o "$APP_BUNDLE/Contents/Resources/AppIconRuntime-dark.png"
+  # NSApp.applicationIconImage draws the image exactly as given — unlike the default
+  # Assets.car/Finder icon path, it does NOT get macOS's automatic continuous-corner mask.
+  # So we bake in an equivalent squircle mask ourselves. The master AppIcon-light.svg /
+  # AppIcon-dark.svg stay untouched full-bleed squares; only these generated copies are masked.
+  render_masked_runtime_icon() {
+    local src_svg="$1"
+    local out_png="$2"
+    local tmp_svg
+    tmp_svg="$(mktemp /tmp/notch-sixty-icon-XXXXXX.svg)"
+
+    # Corner radius ratio (~18.1% of the 116-unit square) matches Apple's standard
+    # app-icon corner radius (~185px on a 1024px canvas).
+    sed \
+      -e 's|<g transform="translate(116,116)">|<defs><clipPath id="squircle"><rect x="-58" y="-58" width="116" height="116" rx="21" ry="21"/></clipPath></defs><g transform="translate(116,116)" clip-path="url(#squircle)">|' \
+      "$src_svg" > "$tmp_svg"
+
+    rsvg-convert -w 1024 -h 1024 "$tmp_svg" -o "$out_png"
+    rm -f "$tmp_svg"
+  }
+
+  render_masked_runtime_icon "$ROOT_DIR/resources/AppIcon-light.svg" \
+    "$APP_BUNDLE/Contents/Resources/AppIconRuntime-light.png"
+  render_masked_runtime_icon "$ROOT_DIR/resources/AppIcon-dark.svg" \
+    "$APP_BUNDLE/Contents/Resources/AppIconRuntime-dark.png"
   echo "Runtime Dock icons generated"
 
   codesign --force --sign - --options runtime \
