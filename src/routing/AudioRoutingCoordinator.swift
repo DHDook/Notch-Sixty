@@ -186,6 +186,26 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "AudioRoutingCoordinator")
 
+    // MARK: - Sample Rate Validation Helpers
+
+    /// Checks whether a sample rate is supported by a device.
+    /// - Parameters:
+    ///   - rate: The sample rate to check.
+    ///   - availableRates: List of available sample rates from the device.
+    /// - Returns: `true` if the rate is in the available rates list, `false` otherwise.
+    private func rateIsSupported(_ rate: Float64, in availableRates: [Float64]) -> Bool {
+        return availableRates.contains(rate)
+    }
+
+    /// Finds the closest supported sample rate to a requested rate.
+    /// - Parameters:
+    ///   - rate: The requested sample rate.
+    ///   - availableRates: List of available sample rates from the device.
+    /// - Returns: The sample rate from availableRates with the smallest absolute difference from the requested rate.
+    private func closestRate(to rate: Float64, in availableRates: [Float64]) -> Float64 {
+        return availableRates.min(by: { abs($0 - rate) < abs($1 - rate) }) ?? rate
+    }
+
     // MARK: - Persistence Keys
 
     private enum PersistenceKeys {
@@ -1005,8 +1025,22 @@ final class AudioRoutingCoordinator: ObservableObject {
 
             self.logger.info("Output device sample rate changed to \(newRate) Hz, re-syncing driver")
 
+            // Validate rate against device's supported rates
+            let syncRate: Float64
+            if let availableRates = self.sampleRateService.getAvailableSampleRates(deviceID: outputDeviceID) {
+                if self.rateIsSupported(newRate, in: availableRates) {
+                    syncRate = newRate
+                } else {
+                    let adjusted = self.closestRate(to: newRate, in: availableRates)
+                    self.logger.warning("Output device doesn't support \(newRate) Hz after change, using \(adjusted) Hz")
+                    syncRate = adjusted
+                }
+            } else {
+                syncRate = newRate
+            }
+
             // Sync driver to new rate
-            if let setRate = driverAccess.setDriverSampleRate(matching: newRate) {
+            if let setRate = driverAccess.setDriverSampleRate(matching: syncRate) {
                 self.logger.info("Driver re-synced to \(setRate) Hz")
 
                 // Reconfigure pipeline after rate change settles

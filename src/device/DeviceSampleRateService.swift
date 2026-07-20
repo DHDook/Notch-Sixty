@@ -51,6 +51,47 @@ final class DeviceSampleRateService: SampleRateObserving {
         return rate
     }
     
+    func getAvailableSampleRates(deviceID: AudioDeviceID) -> [Float64]? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyAvailableNominalSampleRates,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr else {
+            return nil
+        }
+        
+        let count = size / UInt32(MemoryLayout<AudioValueRange>.size)
+        var ranges = [AudioValueRange](repeating: AudioValueRange(mMinimum: 0, mMaximum: 0), count: Int(count))
+        
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &ranges) == noErr else {
+            return nil
+        }
+        
+        // Extract all discrete sample rates from the ranges
+        var rates: [Float64] = []
+        for range in ranges {
+            // If the range is a single value, add it directly
+            if range.mMinimum == range.mMaximum {
+                rates.append(range.mMinimum)
+            } else {
+                // For continuous ranges, add common sample rates that fall within the range
+                let commonRates: [Float64] = [8000, 11025, 16000, 22050, 32000, 44100, 48000,
+                                              64000, 88200, 96000, 176400, 192000,
+                                              352800, 384000, 705600, 768000]
+                for rate in commonRates {
+                    if rate >= range.mMinimum && rate <= range.mMaximum {
+                        rates.append(rate)
+                    }
+                }
+            }
+        }
+        
+        return rates.isEmpty ? nil : rates
+    }
+    
     // MARK: - Sample Rate Observation
     
     func observeSampleRateChanges(on deviceID: AudioDeviceID, handler: @escaping (Float64) -> Void) {
