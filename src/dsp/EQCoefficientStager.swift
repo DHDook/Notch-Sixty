@@ -354,8 +354,6 @@ final class EQCoefficientStager {
     /// Stages coefficients for a single band (incremental update path).
     private func stageBandCoefficients(index: Int, config: EQBandConfiguration) {
         if config.filterType == .fir {
-            // FIR bands produce no IIR coefficients — stage an identity (bypassed) slot
-            // and refresh the linear-phase IR so the new kernel takes effect.
             renderPipeline?.updateBandCoefficients(
                 channel: .both,
                 layerIndex: EQLayerConstants.userEQLayerIndex,
@@ -383,7 +381,6 @@ final class EQCoefficientStager {
             warpedFrequency = Double(config.frequency)
         }
 
-        let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
         let target: EQChannelTarget
         switch eqConfiguration.channelMode {
         case .linked:
@@ -391,11 +388,63 @@ final class EQCoefficientStager {
         case .stereo:
             target = eqConfiguration.channelFocus == .left ? .left : .right
         case .midSide:
-            // Mid stored in leftState → leftEQChain
-            // Side stored in rightState → rightEQChain
             let editingMid = (eqConfiguration.channelFocus == .mid ||
                               eqConfiguration.channelFocus == .left)
             target = editingMid ? .left : .right
+        }
+
+        // Validate parameters before calculation.
+        let paramResult = BiquadValidator.validate(
+            type: config.filterType,
+            sampleRate: designRate,
+            frequency: warpedFrequency,
+            q: Double(config.q),
+            gain: Double(config.gain)
+        )
+        if case .invalid(let message) = paramResult {
+            logger.warning("Band \(index) invalid parameters: \(message) — using passthrough")
+            renderPipeline?.updateBandCoefficients(
+                channel: target,
+                layerIndex: EQLayerConstants.userEQLayerIndex,
+                bandIndex: index,
+                sections: [],
+                bypass: true,
+                needsDoublePrecision: false
+            )
+            return
+        }
+        if case .warning(let message) = paramResult {
+            logger.debug("Band \(index) parameter warning: \(message)")
+        }
+
+        let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
+
+        // Validate every computed section — a cascade is only as stable as its weakest section.
+        for (sectionIndex, section) in sections.enumerated() {
+            if !BiquadValidator.isFinite(section) {
+                logger.warning("Band \(index) section \(sectionIndex) coefficients are non-finite — using passthrough")
+                renderPipeline?.updateBandCoefficients(
+                    channel: target,
+                    layerIndex: EQLayerConstants.userEQLayerIndex,
+                    bandIndex: index,
+                    sections: [],
+                    bypass: true,
+                    needsDoublePrecision: false
+                )
+                return
+            }
+            if !BiquadValidator.isStable(section) {
+                logger.warning("Band \(index) section \(sectionIndex) coefficients are unstable — using passthrough")
+                renderPipeline?.updateBandCoefficients(
+                    channel: target,
+                    layerIndex: EQLayerConstants.userEQLayerIndex,
+                    bandIndex: index,
+                    sections: [],
+                    bypass: true,
+                    needsDoublePrecision: false
+                )
+                return
+            }
         }
 
         renderPipeline?.updateBandCoefficients(

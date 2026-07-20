@@ -40,17 +40,55 @@ final class DeviceSampleRateService: SampleRateObserving {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        
+
         var rate: Float64 = 0
         var size = UInt32(MemoryLayout<Float64>.size)
-        
+
         guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate) == noErr else {
             return nil
         }
-        
+
         return rate
     }
-    
+
+    func getAvailableSampleRates(deviceID: AudioDeviceID) -> [Float64]? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyAvailableNominalSampleRates,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr else {
+            return nil
+        }
+
+        let count = size / UInt32(MemoryLayout<AudioValueRange>.size)
+        var ranges = [AudioValueRange](repeating: AudioValueRange(), count: Int(count))
+
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &ranges) == noErr else {
+            return nil
+        }
+
+        // Convert ranges to discrete rates
+        var rates: [Float64] = []
+        for range in ranges {
+            if range.mMinimum == range.mMaximum {
+                rates.append(range.mMinimum)
+            } else {
+                // For continuous ranges, add common rates
+                let commonRates: [Float64] = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000]
+                for rate in commonRates {
+                    if rate >= range.mMinimum && rate <= range.mMaximum {
+                        rates.append(rate)
+                    }
+                }
+            }
+        }
+
+        return rates.sorted()
+    }
+
     // MARK: - Sample Rate Observation
     
     func observeSampleRateChanges(on deviceID: AudioDeviceID, handler: @escaping (Float64) -> Void) {

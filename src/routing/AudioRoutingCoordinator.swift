@@ -1005,8 +1005,22 @@ final class AudioRoutingCoordinator: ObservableObject {
 
             self.logger.info("Output device sample rate changed to \(newRate) Hz, re-syncing driver")
 
-            // Sync driver to new rate
-            if let setRate = driverAccess.setDriverSampleRate(matching: newRate) {
+            // Validate rate against device's supported rates
+            let syncRate: Float64
+            if let availableRates = self.sampleRateService.getAvailableSampleRates(deviceID: outputDeviceID) {
+                if self.rateIsSupported(newRate, in: availableRates) {
+                    syncRate = newRate
+                } else {
+                    let adjusted = self.closestRate(to: newRate, in: availableRates)
+                    self.logger.warning("Output device doesn't support \(newRate) Hz after change, using \(adjusted) Hz")
+                    syncRate = adjusted
+                }
+            } else {
+                syncRate = newRate
+            }
+
+            // Sync driver to validated rate
+            if let setRate = driverAccess.setDriverSampleRate(matching: syncRate) {
                 self.logger.info("Driver re-synced to \(setRate) Hz")
 
                 // Reconfigure pipeline after rate change settles
@@ -1015,6 +1029,18 @@ final class AudioRoutingCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Sample Rate Validation Helpers
+
+    /// Checks whether a sample rate is in the list of available rates.
+    private func rateIsSupported(_ rate: Float64, in availableRates: [Float64]) -> Bool {
+        return availableRates.contains { abs($0 - rate) < 0.1 }
+    }
+
+    /// Returns the closest available sample rate to the requested rate.
+    private func closestRate(to requestedRate: Float64, in availableRates: [Float64]) -> Float64 {
+        return availableRates.min(by: { abs($0 - requestedRate) < abs($1 - requestedRate) }) ?? requestedRate
     }
 
     private func setupVolumeListener(for outputDeviceID: AudioDeviceID) {
