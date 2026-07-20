@@ -27,6 +27,7 @@ struct AppStateSnapshot: Sendable {
     var inputDeviceID: String?
     var outputDeviceID: String?
     var bandwidthDisplayMode: String
+    var appearanceMode: String
     var manualModeEnabled: Bool
     var captureMode: Int  // CaptureMode.rawValue
 
@@ -57,6 +58,7 @@ struct AppStateSnapshot: Sendable {
             inputDeviceID: nil,
             outputDeviceID: nil,
             bandwidthDisplayMode: BandwidthDisplayMode.qFactor.rawValue,
+            appearanceMode: AppearanceMode.system.rawValue,
             manualModeEnabled: false,
             captureMode: CaptureMode.sharedMemory.rawValue,
             dynamicsConfig: .default,
@@ -84,6 +86,7 @@ extension AppStateSnapshot: Codable {
         case inputDeviceID
         case outputDeviceID
         case bandwidthDisplayMode
+        case appearanceMode
         case manualModeEnabled
         case captureMode
         case dynamicsConfig
@@ -112,6 +115,8 @@ extension AppStateSnapshot: Codable {
         outputDeviceID = try container.decodeIfPresent(String.self, forKey: .outputDeviceID)
         bandwidthDisplayMode = try container.decodeIfPresent(String.self, forKey: .bandwidthDisplayMode)
             ?? BandwidthDisplayMode.qFactor.rawValue
+        appearanceMode = try container.decodeIfPresent(String.self, forKey: .appearanceMode)
+            ?? AppearanceMode.system.rawValue
         manualModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .manualModeEnabled) ?? false
         captureMode = try container.decodeIfPresent(Int.self, forKey: .captureMode)
             ?? CaptureMode.sharedMemory.rawValue
@@ -140,6 +145,7 @@ extension AppStateSnapshot: Codable {
         try container.encodeIfPresent(inputDeviceID, forKey: .inputDeviceID)
         try container.encodeIfPresent(outputDeviceID, forKey: .outputDeviceID)
         try container.encode(bandwidthDisplayMode, forKey: .bandwidthDisplayMode)
+        try container.encode(appearanceMode, forKey: .appearanceMode)
         try container.encode(manualModeEnabled, forKey: .manualModeEnabled)
         try container.encode(captureMode, forKey: .captureMode)
         try container.encode(dynamicsConfig, forKey: .dynamicsConfig)

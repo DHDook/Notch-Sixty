@@ -127,6 +127,13 @@ build_app() {
     -o "$APP_BUNDLE/Contents/Resources/MenuBarIcon@2x.png"
   echo "Menu bar icon generated"
 
+  # Runtime-loadable full-resolution icons for Dock icon override (Part 2.2)
+  rsvg-convert -w 1024 -h 1024 "$ROOT_DIR/resources/AppIcon-light.svg" \
+    -o "$APP_BUNDLE/Contents/Resources/AppIconRuntime-light.png"
+  rsvg-convert -w 1024 -h 1024 "$ROOT_DIR/resources/AppIcon-dark.svg" \
+    -o "$APP_BUNDLE/Contents/Resources/AppIconRuntime-dark.png"
+  echo "Runtime Dock icons generated"
+
   codesign --force --sign - --options runtime \
     --entitlements "$ENTITLEMENTS" \
     "$APP_BUNDLE"

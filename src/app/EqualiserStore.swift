@@ -91,6 +91,13 @@ final class EqualiserStore: ObservableObject {
     /// User preference for displaying bandwidth as octaves or Q factor.
     @Published var bandwidthDisplayMode: BandwidthDisplayMode = .qFactor
 
+    /// User preference for app appearance: follow the system, or force light/dark.
+    @Published var appearanceMode: AppearanceMode = .system {
+        didSet {
+            applyAppearance()
+        }
+    }
+
     /// Live normalised system volume gain (0.0–1.0), updated whenever the volume changes.
     /// Published so SwiftUI views (e.g. the loudness contour preview) re-render on volume change.
     @Published var liveSystemVolumeGain: Float = 1.0
@@ -300,6 +307,29 @@ final class EqualiserStore: ObservableObject {
             bypass: false
         )
         appendBandToOutputChannel(index: channelIndex, band: band)
+    }
+
+    /// Applies the current appearance preference at the AppKit level so it
+    /// cascades to every window, the menu bar extra, and system-drawn chrome.
+    private func applyAppearance() {
+        switch appearanceMode {
+        case .system:
+            NSApp.appearance = nil
+            NSApp.applicationIconImage = nil // revert to the bundle's default, system-driven icon
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+            NSApp.applicationIconImage = Self.runtimeIcon(named: "AppIconRuntime-light")
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+            NSApp.applicationIconImage = Self.runtimeIcon(named: "AppIconRuntime-dark")
+        }
+    }
+
+    private static func runtimeIcon(named name: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
     }
 
     /// Applies selected resonance detection candidates as notch bands on the
@@ -722,6 +752,7 @@ final class EqualiserStore: ObservableObject {
             inputDeviceID: manualModeEnabled ? routingCoordinator.selectedInputDeviceID : nil,
             outputDeviceID: routingCoordinator.selectedOutputDeviceID,
             bandwidthDisplayMode: bandwidthDisplayMode.rawValue,
+            appearanceMode: appearanceMode.rawValue,
             manualModeEnabled: manualModeEnabled,
             captureMode: routingCoordinator.captureMode.rawValue,
             dynamicsConfig: eqConfiguration.dynamicsConfig,
@@ -1099,6 +1130,7 @@ final class EqualiserStore: ObservableObject {
         // Restore app-level state
         logger.debug("Loading from snapshot: outputDeviceID=\(snapshot.outputDeviceID ?? "nil"), manualMode=\(snapshot.manualModeEnabled)")
         _bandwidthDisplayMode = Published(initialValue: BandwidthDisplayMode(rawValue: snapshot.bandwidthDisplayMode) ?? .qFactor)
+        _appearanceMode = Published(initialValue: AppearanceMode(rawValue: snapshot.appearanceMode) ?? .system)
 
         // Restore capture mode preference
         routingCoordinator.captureMode = CaptureMode(rawValue: snapshot.captureMode) ?? .sharedMemory
@@ -1298,6 +1330,9 @@ final class EqualiserStore: ObservableObject {
                 presetManager.isModified = true
             }
         }
+
+        // Apply the saved appearance preference on launch
+        applyAppearance()
     }
     
     deinit {
