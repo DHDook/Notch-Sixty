@@ -540,6 +540,77 @@ struct StereoWidenerConfig: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Voice-Activity Gate Configuration
+
+/// Confidence-multiplier gate on DialogueRelativeLeveler's correction, based on whether the
+/// dialogue band's envelope shows a speech-like syllabic modulation rate (~3-8 Hz) rather than
+/// a sustained tone or music's typically slower tempo-rate modulation.
+struct VoiceActivityGateConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool = false
+
+    /// Center of the syllabic modulation band checked, Hz. Range: 2–10.
+    var modulationCenterHz: Float = 5.0
+    /// Bandwidth around the center, Hz. Range: 2–8.
+    var modulationBandwidthHz: Float = 5.0
+
+    /// Fast envelope window feeding the modulation detector, ms. Must stay well below one
+    /// modulation period or the modulation itself gets smoothed away. Range: 5–30.
+    var envelopeWindowMs: Float = 15.0
+    /// Window over which modulation energy is measured, ms — needs several modulation cycles
+    /// to be stable. Range: 300–1500.
+    var measurementWindowMs: Float = 700.0
+
+    /// Normalized modulation index below which confidence is 0. Range: 0.0–1.0.
+    var confidenceFloorIndex: Float = 0.15
+    /// Normalized modulation index at/above which confidence is 1. Must exceed confidenceFloorIndex. Range: 0.0–1.0.
+    var confidenceCeilingIndex: Float = 0.45
+
+    /// Minimum confidence applied even at zero modulation index — a safety floor so heavily
+    /// processed or whispered dialogue that lacks strong syllabic modulation still gets partial
+    /// rescue instead of none. Range: 0.0–1.0.
+    var minConfidence: Float = 0.2
+
+    static let `default` = VoiceActivityGateConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, modulationCenterHz, modulationBandwidthHz
+        case envelopeWindowMs, measurementWindowMs
+        case confidenceFloorIndex, confidenceCeilingIndex, minConfidence
+    }
+
+    init(
+        isEnabled: Bool = false,
+        modulationCenterHz: Float = 5.0,
+        modulationBandwidthHz: Float = 5.0,
+        envelopeWindowMs: Float = 15.0,
+        measurementWindowMs: Float = 700.0,
+        confidenceFloorIndex: Float = 0.15,
+        confidenceCeilingIndex: Float = 0.45,
+        minConfidence: Float = 0.2
+    ) {
+        self.isEnabled = isEnabled
+        self.modulationCenterHz = modulationCenterHz
+        self.modulationBandwidthHz = modulationBandwidthHz
+        self.envelopeWindowMs = envelopeWindowMs
+        self.measurementWindowMs = measurementWindowMs
+        self.confidenceFloorIndex = confidenceFloorIndex
+        self.confidenceCeilingIndex = confidenceCeilingIndex
+        self.minConfidence = minConfidence
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        modulationCenterHz = try c.decodeIfPresent(Float.self, forKey: .modulationCenterHz) ?? 5.0
+        modulationBandwidthHz = try c.decodeIfPresent(Float.self, forKey: .modulationBandwidthHz) ?? 5.0
+        envelopeWindowMs = try c.decodeIfPresent(Float.self, forKey: .envelopeWindowMs) ?? 15.0
+        measurementWindowMs = try c.decodeIfPresent(Float.self, forKey: .measurementWindowMs) ?? 700.0
+        confidenceFloorIndex = try c.decodeIfPresent(Float.self, forKey: .confidenceFloorIndex) ?? 0.15
+        confidenceCeilingIndex = try c.decodeIfPresent(Float.self, forKey: .confidenceCeilingIndex) ?? 0.45
+        minConfidence = try c.decodeIfPresent(Float.self, forKey: .minConfidence) ?? 0.2
+    }
+}
+
 // MARK: - Dialogue-Relative Leveler Configuration
 
 /// Configuration for the dialogue-relative leveler.
@@ -579,11 +650,14 @@ struct DialogueRelativeLevelerConfig: Codable, Equatable, Sendable {
     /// to zero rather than chasing noise floor. dBFS. Range: -70…-30.
     var programGateThresholdDB: Float = -50.0
 
+    /// Voice-activity gate based on syllabic modulation rate.
+    var voiceGate: VoiceActivityGateConfig = VoiceActivityGateConfig()
+
     static let `default` = DialogueRelativeLevelerConfig()
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, bandLowHz, bandHighHz, targetGapDB, boostRatio, maxBoostDB
-        case detectorWindowMs, attackMs, releaseMs, programGateThresholdDB
+        case detectorWindowMs, attackMs, releaseMs, programGateThresholdDB, voiceGate
     }
 
     init(
@@ -596,7 +670,8 @@ struct DialogueRelativeLevelerConfig: Codable, Equatable, Sendable {
         detectorWindowMs: Float = 300.0,
         attackMs: Float = 150.0,
         releaseMs: Float = 900.0,
-        programGateThresholdDB: Float = -50.0
+        programGateThresholdDB: Float = -50.0,
+        voiceGate: VoiceActivityGateConfig = VoiceActivityGateConfig()
     ) {
         self.isEnabled = isEnabled
         self.bandLowHz = bandLowHz
@@ -608,6 +683,7 @@ struct DialogueRelativeLevelerConfig: Codable, Equatable, Sendable {
         self.attackMs = attackMs
         self.releaseMs = releaseMs
         self.programGateThresholdDB = programGateThresholdDB
+        self.voiceGate = voiceGate
     }
 
     init(from decoder: Decoder) throws {
@@ -622,6 +698,7 @@ struct DialogueRelativeLevelerConfig: Codable, Equatable, Sendable {
         attackMs = try c.decodeIfPresent(Float.self, forKey: .attackMs) ?? 150.0
         releaseMs = try c.decodeIfPresent(Float.self, forKey: .releaseMs) ?? 900.0
         programGateThresholdDB = try c.decodeIfPresent(Float.self, forKey: .programGateThresholdDB) ?? -50.0
+        voiceGate = try c.decodeIfPresent(VoiceActivityGateConfig.self, forKey: .voiceGate) ?? VoiceActivityGateConfig()
     }
 }
 

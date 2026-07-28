@@ -561,6 +561,41 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.0f dBFS", $0) }
                 )
                 .help("Below this full-program level, correction decays to zero rather than chasing noise floor.")
+                Toggle("Voice Gate", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.isEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.voiceGate.isEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Reduces the boost when the dialogue band doesn't have a speech-like rhythm — helps avoid falsely boosting quiet music content in the same frequency range.")
+                if store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.isEnabled {
+                    DynamicsSliderRow(
+                        label: "Sensitivity",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.confidenceCeilingIndex) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.dialogueRelativeLeveler.voiceGate.confidenceCeilingIndex = Float(v)
+                                adv.dialogueRelativeLeveler.voiceGate.confidenceFloorIndex = Float(v) - 0.30
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: 0.2...0.8,
+                        step: 0.05,
+                        formatValue: { String(format: "%.0f%%", $0 * 100) }
+                    )
+                    DynamicsSliderRow(
+                        label: "Min Confidence",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.minConfidence) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.voiceGate.minConfidence = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: 0.0...0.6,
+                        step: 0.05,
+                        formatValue: { String(format: "%.0f%%", $0 * 100) }
+                    )
+                    .help("Even when nothing looks speech-like, apply at least this much of the correction — a safety floor for whispered or heavily processed dialogue.")
+                }
             }
             col2Toggle(label: "DC Filter", isOn: inlineDcOffsetEnabled)
             col2ToggleWithSettings(

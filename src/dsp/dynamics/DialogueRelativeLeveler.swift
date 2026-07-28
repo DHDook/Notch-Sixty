@@ -37,6 +37,16 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     private let _releaseMsBits:      ManagedAtomic<Int32>  // Float bits
     private let _programGateThresholdDBBits: ManagedAtomic<Int32>  // Float bits
 
+    // Voice gate atomics
+    private let _voiceGateEnabled: ManagedAtomic<Int32>
+    private let _modCenterHzBits: ManagedAtomic<Int32>  // Float bits
+    private let _modBandwidthHzBits: ManagedAtomic<Int32>  // Float bits
+    private let _envelopeWindowMsBits: ManagedAtomic<Int32>  // Float bits
+    private let _measurementWindowMsBits: ManagedAtomic<Int32>  // Float bits
+    private let _confidenceFloorIndexBits: ManagedAtomic<Int32>  // Float bits
+    private let _confidenceCeilingIndexBits: ManagedAtomic<Int32>  // Float bits
+    private let _minConfidenceBits: ManagedAtomic<Int32>  // Float bits
+
     // MARK: - Audio-Thread State
 
     /// Dialogue bandpass biquad state per channel: [ch * 2 + stateVar] (w1, w2).
@@ -53,6 +63,41 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
     /// Current sample rate (updated by main thread before audio starts).
     nonisolated(unsafe) private var sampleRate: Double = 48000.0
+
+    // Voice gate state
+    /// Decimation counter for control-rate processing.
+    nonisolated(unsafe) private var decimationCounter: Int = 0
+    /// Decimation factor (samples per control update).
+    nonisolated(unsafe) private var decimationFactor: Int = 48  // ~1 kHz at 48 kHz
+
+    /// Fast envelope state for voice gate (separate from main detector).
+    nonisolated(unsafe) private var fastEnvelopeState: Float = 0.0
+
+    /// Modulation bandpass biquad state (w1, w2).
+    nonisolated(unsafe) private var modBiquadState: (Float, Float) = (0.0, 0.0)
+
+    /// Modulation band energy accumulator.
+    nonisolated(unsafe) private var modEnergyAccumulator: Float = 0.0
+    /// Total energy accumulator.
+    nonisolated(unsafe) private var totalEnergyAccumulator: Float = 0.0
+    /// Energy accumulator count.
+    nonisolated(unsafe) private var energyAccumulatorCount: Int = 0
+
+    /// Current confidence value (0-1).
+    nonisolated(unsafe) private var currentConfidence: Float = 1.0
+
+    /// Modulation bandpass coefficients (b0, b1, b2, a1, a2).
+    nonisolated(unsafe) private var mod_b0: Float = 0.0
+    nonisolated(unsafe) private var mod_b1: Float = 0.0
+    nonisolated(unsafe) private var mod_b2: Float = 0.0
+    nonisolated(unsafe) private var mod_a1: Float = 0.0
+    nonisolated(unsafe) private var mod_a2: Float = 0.0
+
+    /// Fast envelope alpha coefficient.
+    nonisolated(unsafe) private var fastEnvelopeAlpha: Float = 0.0
+
+    /// Energy window alpha coefficient.
+    nonisolated(unsafe) private var energyWindowAlpha: Float = 0.0
 
     /// Precomputed attack/release coefficients (updated when parameters change).
     nonisolated(unsafe) private var attackCoeff:  Float = 0.0
@@ -101,6 +146,16 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         _releaseMsBits = ManagedAtomic(floatBitsL(900.0))
         _programGateThresholdDBBits = ManagedAtomic(floatBitsL(-50.0))
 
+        // Voice gate atomics
+        _voiceGateEnabled = ManagedAtomic(0)
+        _modCenterHzBits = ManagedAtomic(floatBitsL(5.0))
+        _modBandwidthHzBits = ManagedAtomic(floatBitsL(5.0))
+        _envelopeWindowMsBits = ManagedAtomic(floatBitsL(15.0))
+        _measurementWindowMsBits = ManagedAtomic(floatBitsL(700.0))
+        _confidenceFloorIndexBits = ManagedAtomic(floatBitsL(0.15))
+        _confidenceCeilingIndexBits = ManagedAtomic(floatBitsL(0.45))
+        _minConfidenceBits = ManagedAtomic(floatBitsL(0.2))
+
         bandpassState = Array(repeating: 0.0, count: 2 * 2)  // 2 channels × 2 state vars
 
         // Pre-allocate scratch buffers
@@ -145,6 +200,15 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     func setReleaseMs(_ ms: Float) { _releaseMsBits.store(floatBitsL(ms), ordering: .relaxed) }
     func setProgramGateThresholdDB(_ db: Float) { _programGateThresholdDBBits.store(floatBitsL(db), ordering: .relaxed) }
 
+    func setVoiceGateEnabled(_ v: Bool) { _voiceGateEnabled.store(v ? 1 : 0, ordering: .relaxed) }
+    func setModulationCenterHz(_ hz: Float) { _modCenterHzBits.store(floatBitsL(hz), ordering: .relaxed) }
+    func setModulationBandwidthHz(_ hz: Float) { _modBandwidthHzBits.store(floatBitsL(hz), ordering: .relaxed) }
+    func setEnvelopeWindowMs(_ ms: Float) { _envelopeWindowMsBits.store(floatBitsL(ms), ordering: .relaxed) }
+    func setMeasurementWindowMs(_ ms: Float) { _measurementWindowMsBits.store(floatBitsL(ms), ordering: .relaxed) }
+    func setConfidenceFloorIndex(_ idx: Float) { _confidenceFloorIndexBits.store(floatBitsL(idx), ordering: .relaxed) }
+    func setConfidenceCeilingIndex(_ idx: Float) { _confidenceCeilingIndexBits.store(floatBitsL(idx), ordering: .relaxed) }
+    func setMinConfidence(_ conf: Float) { _minConfidenceBits.store(floatBitsL(conf), ordering: .relaxed) }
+
     func applyConfig(_ config: DialogueRelativeLevelerConfig) {
         setEnabled(config.isEnabled)
         setBandLowHz(config.bandLowHz)
@@ -157,6 +221,16 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         setReleaseMs(config.releaseMs)
         setProgramGateThresholdDB(config.programGateThresholdDB)
 
+        // Voice gate parameters
+        setVoiceGateEnabled(config.voiceGate.isEnabled)
+        setModulationCenterHz(config.voiceGate.modulationCenterHz)
+        setModulationBandwidthHz(config.voiceGate.modulationBandwidthHz)
+        setEnvelopeWindowMs(config.voiceGate.envelopeWindowMs)
+        setMeasurementWindowMs(config.voiceGate.measurementWindowMs)
+        setConfidenceFloorIndex(config.voiceGate.confidenceFloorIndex)
+        setConfidenceCeilingIndex(config.voiceGate.confidenceCeilingIndex)
+        setMinConfidence(config.voiceGate.minConfidence)
+
         // Recompute coefficients on main thread
         updateCoefficients(sampleRate: sampleRate)
     }
@@ -167,6 +241,16 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         dialogueRMSState = 0.0
         programRMSState = 0.0
         smoothedBoostDB = 0.0
+
+        // Reset voice gate state
+        decimationCounter = 0
+        fastEnvelopeState = 0.0
+        modBiquadState = (0.0, 0.0)
+        modEnergyAccumulator = 0.0
+        totalEnergyAccumulator = 0.0
+        energyAccumulatorCount = 0
+        currentConfidence = 1.0
+
         updateCoefficients(sampleRate: sampleRate)
     }
 
@@ -195,6 +279,13 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         let maxBoostDB = bitsToFloatL(_maxBoostDBBits.load(ordering: .relaxed))
         let programGateThresholdDB = bitsToFloatL(_programGateThresholdDBBits.load(ordering: .relaxed))
 
+        // Voice gate parameters
+        let voiceGateOn = _voiceGateEnabled.load(ordering: .relaxed) != 0
+        let confidenceFloorIdx = bitsToFloatL(_confidenceFloorIndexBits.load(ordering: .relaxed))
+        let confidenceCeilingIdx = bitsToFloatL(_confidenceCeilingIndexBits.load(ordering: .relaxed))
+        let minConf = bitsToFloatL(_minConfidenceBits.load(ordering: .relaxed))
+        let measurementWindowMs = bitsToFloatL(_measurementWindowMsBits.load(ordering: .relaxed))
+
         // Process each channel
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
@@ -204,6 +295,11 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
             // Step 1: Dialogue-band detector (bandpass → RMS envelope → dB)
             var dialogueRMS = dialogueRMSState
+            var fastEnv = fastEnvelopeState
+            var modW1 = modBiquadState.0
+            var modW2 = modBiquadState.1
+            var decimCounter = decimationCounter
+
             for i in 0..<count {
                 let x = buf[i]
                 // Bandpass filter (DF2T biquad)
@@ -214,10 +310,54 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
                 // RMS envelope (one-pole leaky integrator)
                 dialogueRMS = rmsAlpha * dialogueRMS + (1.0 - rmsAlpha) * (y * y)
+
+                // Voice gate: fast envelope detector (decimated)
+                if voiceGateOn {
+                    fastEnv = fastEnvelopeAlpha * fastEnv + (1.0 - fastEnvelopeAlpha) * abs(y)
+
+                    decimCounter += 1
+                    if decimCounter >= decimationFactor {
+                        decimCounter = 0
+
+                        // Modulation bandpass filter on envelope
+                        let modY = mod_b0 * fastEnv + modW1
+                        modW1 = mod_b1 * fastEnv + mod_a1 * modY + modW2
+                        modW2 = mod_b2 * fastEnv + mod_a2 * modY
+
+                        // Accumulate energy
+                        modEnergyAccumulator += modY * modY
+                        totalEnergyAccumulator += fastEnv * fastEnv
+                        energyAccumulatorCount += 1
+
+                        // Update confidence when we have enough samples
+                        let measurementWindowSamples = Double(measurementWindowMs) * sampleRate / 1000.0 / Double(decimationFactor)
+                        if energyAccumulatorCount >= Int(measurementWindowSamples) {
+                            let modEnergy = modEnergyAccumulator / Float(energyAccumulatorCount)
+                            let totalEnergy = totalEnergyAccumulator / Float(energyAccumulatorCount)
+                            let epsilon: Float = 1e-10
+                            let modulationIndex = modEnergy / (totalEnergy + epsilon)
+
+                            // Compute confidence
+                            var confidence = (modulationIndex - confidenceFloorIdx) / (confidenceCeilingIdx - confidenceFloorIdx)
+                            confidence = max(0.0, min(1.0, confidence))
+                            confidence = max(confidence, minConf)
+
+                            currentConfidence = confidence
+
+                            // Reset accumulators
+                            modEnergyAccumulator = 0.0
+                            totalEnergyAccumulator = 0.0
+                            energyAccumulatorCount = 0
+                        }
+                    }
+                }
             }
             bandpassState[stateBase] = w1
             bandpassState[stateBase + 1] = w2
             dialogueRMSState = dialogueRMS
+            fastEnvelopeState = fastEnv
+            modBiquadState = (modW1, modW2)
+            decimationCounter = decimCounter
 
             // Convert RMS to dB (per-sample for gain computer)
             for i in 0..<count {
@@ -253,6 +393,11 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
                 // Program gate: below threshold, decay to zero
                 if programDB < programGateThresholdDB {
                     targetBoostDB = 0.0
+                }
+
+                // Voice gate: scale by confidence if enabled
+                if voiceGateOn {
+                    targetBoostDB *= currentConfidence
                 }
 
                 // Asymmetric smoothing
@@ -336,6 +481,35 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         pending_bp_b2 = Float(b2_hp)
         pending_bp_a1 = Float(a1_hp)
         pending_bp_a2 = Float(a2_hp)
+
+        // Voice gate coefficients
+        let modCenterHz = bitsToFloatL(_modCenterHzBits.load(ordering: .relaxed))
+        let modBandwidthHz = bitsToFloatL(_modBandwidthHzBits.load(ordering: .relaxed))
+        let envelopeWindowMs = bitsToFloatL(_envelopeWindowMsBits.load(ordering: .relaxed))
+        let measurementWindowMs = bitsToFloatL(_measurementWindowMsBits.load(ordering: .relaxed))
+
+        // Compute decimation factor for ~1 kHz control rate
+        let controlRateHz: Double = 1000.0
+        decimationFactor = max(1, Int(sampleRate / controlRateHz))
+
+        // Compute fast envelope alpha
+        fastEnvelopeAlpha = Float(exp(-1.0 / (Double(envelopeWindowMs) * 0.001 * sampleRate)))
+
+        // Compute modulation bandpass at control rate (not audio rate)
+        let controlSampleRate = sampleRate / Double(decimationFactor)
+        let modCenter = Double(modCenterHz)
+        let modBandwidth = Double(modBandwidthHz)
+
+        // Bandpass filter at control rate (2nd-order Butterworth)
+        let w0_mod = 2.0 * .pi * modCenter / controlSampleRate
+        let Q_mod = w0_mod / modBandwidth  // Q = center/bandwidth for bandpass
+        let alpha_mod = sin(w0_mod) / (2.0 * Q_mod)
+        let a0_mod = 1.0 + alpha_mod
+        mod_b0 = Float(alpha_mod / a0_mod)
+        mod_b1 = Float(0.0)
+        mod_b2 = Float(-alpha_mod / a0_mod)
+        mod_a1 = Float(-2.0 * cos(w0_mod) / a0_mod)
+        mod_a2 = Float((1.0 - alpha_mod) / a0_mod)
 
         hasCoeffUpdate.store(true, ordering: .releasing)
     }
