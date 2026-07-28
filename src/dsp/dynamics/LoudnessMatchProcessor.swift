@@ -30,6 +30,8 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     private let _enabled:                ManagedAtomic<Int32>
     private let _targetLUFSBits:         ManagedAtomic<Int32>  // Float bits
+    /// Ceiling on corrective gain in either direction, dB (stored as float bits).
+    private let _maxCorrectionDBBits:    ManagedAtomic<Int32>
     /// When non-zero, raises the gate floor from −70 dBFS to −60 dBFS.
     private let _dialogueGateEnabled:    ManagedAtomic<Int32>
     /// Attack time constant in seconds (stored as float bits).
@@ -84,6 +86,7 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     init() {
         _enabled             = ManagedAtomic(0)
         _targetLUFSBits      = ManagedAtomic(floatBitsL(-16.0))
+        _maxCorrectionDBBits = ManagedAtomic(floatBitsL(12.0))
         _dialogueGateEnabled = ManagedAtomic(0)
         _attackSecondsBits   = ManagedAtomic(floatBitsL(1.0))
         _releaseSecondsBits  = ManagedAtomic(floatBitsL(4.0))
@@ -102,6 +105,7 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     func setEnabled(_ v: Bool)              { _enabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setTargetLUFS(_ lufs: Float)       { _targetLUFSBits.store(floatBitsL(lufs), ordering: .relaxed) }
+    func setMaxCorrectionDB(_ db: Float)     { _maxCorrectionDBBits.store(floatBitsL(db), ordering: .relaxed) }
     func setDialogueGateEnabled(_ v: Bool)  { _dialogueGateEnabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setAttackSeconds(_ seconds: Float)  { _attackSecondsBits.store(floatBitsL(seconds), ordering: .relaxed) }
     func setReleaseSeconds(_ seconds: Float) { _releaseSecondsBits.store(floatBitsL(seconds), ordering: .relaxed) }
@@ -109,6 +113,7 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     func applyConfig(_ config: LoudnessMatchConfig) {
         setEnabled(config.isEnabled)
         setTargetLUFS(config.targetLoudnessLUFS)
+        setMaxCorrectionDB(config.maxCorrectionDB)
         setAttackSeconds(config.attackSeconds)
         setReleaseSeconds(config.releaseSeconds)
     }
@@ -215,10 +220,11 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
         // LUFS ≈ 10*log10(meanPower) − 0.691 (K-weighting offset per BS.1770)
         let measuredLUFS: Float = meanPower > 1e-10 ? 10.0 * log10(meanPower) - 0.691 : -96.0
 
-        // Step 4: compute target gain in dB, clamp correction to ±12 dB
-        let targetLUFS  = bitsToFloatL(_targetLUFSBits.load(ordering: .relaxed))
-        let deltaDB     = max(-12.0, min(12.0, targetLUFS - measuredLUFS))
-        let targetGain  = pow(10.0, deltaDB / 20.0)
+        // Step 4: compute target gain in dB, clamp correction to the configured ceiling
+        let targetLUFS      = bitsToFloatL(_targetLUFSBits.load(ordering: .relaxed))
+        let maxCorrectionDB = bitsToFloatL(_maxCorrectionDBBits.load(ordering: .relaxed))
+        let deltaDB          = max(-maxCorrectionDB, min(maxCorrectionDB, targetLUFS - measuredLUFS))
+        let targetGain       = pow(10.0, deltaDB / 20.0)
 
         // Step 5: smooth with asymmetric attack/release (per block, not per sample)
         // targetGain < smoothedGain means program got louder and gain needs to come down (attack direction)

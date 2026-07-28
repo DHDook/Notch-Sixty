@@ -711,6 +711,11 @@ struct LoudnessMatchConfig: Codable, Equatable, Sendable {
     /// Target integrated loudness in LUFS. Range: −24 to −10 LUFS. Default: −16 LUFS.
     var targetLoudnessLUFS: Float = -16.0
 
+    /// Ceiling on corrective gain in either direction, dB. Content with scene-to-scene
+    /// loudness swings wider than this will only be partially corrected in its most
+    /// extreme moments. Range: 3–20. Default: 12 (unchanged from the prior hardcoded value).
+    var maxCorrectionDB: Float = 12.0
+
     /// Time constant (seconds) for gain *decreasing* — i.e. the program got louder
     /// and we need to pull level down. Kept faster than release so a loud scene's
     /// onset doesn't ride at full level for long. Range: 0.3–5.0.
@@ -719,17 +724,18 @@ struct LoudnessMatchConfig: Codable, Equatable, Sendable {
     /// Time constant (seconds) for gain *increasing* — i.e. the program got quieter
     /// and we're restoring level. Kept slower than attack so recovery doesn't rush
     /// into a loud scene's reverb tail. Range: 1.0–10.0.
-    var releaseSeconds: Float = 4.0  
+    var releaseSeconds: Float = 4.0
 
     static let `default` = LoudnessMatchConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, targetLoudnessLUFS, attackSeconds, releaseSeconds
+        case isEnabled, targetLoudnessLUFS, maxCorrectionDB, attackSeconds, releaseSeconds
     }
 
-    init(isEnabled: Bool = false, targetLoudnessLUFS: Float = -16.0, attackSeconds: Float = 1.0, releaseSeconds: Float = 4.0) {
+    init(isEnabled: Bool = false, targetLoudnessLUFS: Float = -16.0, maxCorrectionDB: Float = 12.0, attackSeconds: Float = 1.0, releaseSeconds: Float = 4.0) {
         self.isEnabled          = isEnabled
         self.targetLoudnessLUFS = targetLoudnessLUFS
+        self.maxCorrectionDB    = maxCorrectionDB
         self.attackSeconds      = attackSeconds
         self.releaseSeconds     = releaseSeconds
     }
@@ -738,6 +744,7 @@ struct LoudnessMatchConfig: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled          = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)          ?? false
         targetLoudnessLUFS = try c.decodeIfPresent(Float.self, forKey: .targetLoudnessLUFS) ?? -16.0
+        maxCorrectionDB    = try c.decodeIfPresent(Float.self, forKey: .maxCorrectionDB)    ?? 12.0
         attackSeconds      = try c.decodeIfPresent(Float.self, forKey: .attackSeconds)      ?? 1.0
         releaseSeconds     = try c.decodeIfPresent(Float.self, forKey: .releaseSeconds)     ?? 4.0
     }

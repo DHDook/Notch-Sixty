@@ -711,6 +711,17 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.1f LUFS", $0) }
                 )
                 DynamicsSliderRow(
+                    label: "Max Correction",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.loudnessMatch.maxCorrectionDB) },
+                        set: { v in var c = store.dynamicsConfig.loudnessMatch; c.maxCorrectionDB = Float(v); store.updateLoudnessMatch(c) }
+                    ),
+                    range: 3.0...20.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dB", $0) }
+                )
+                .help("Ceiling on how much gain this stage will ever apply in either direction. Content with wider scene-to-scene swings than this will only be partially corrected in its most extreme moments. Higher values reach further but risk more noticeable gain changes.")
+                DynamicsSliderRow(
                     label: "Attack",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.loudnessMatch.attackSeconds) },
