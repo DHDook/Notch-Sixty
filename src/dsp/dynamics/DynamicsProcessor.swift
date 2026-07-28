@@ -120,6 +120,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     // ── Stereo Widener + LUFS ─────────────────────────────────────────────
     let stereoWidener:  StereoWidener
     let lufsProcessor:  LoudnessMatchProcessor
+    let dialogueLeveler: DialogueRelativeLeveler
 
     /// Active crossover engine — splits the fully-processed mains signal into up to
     /// 3 bands per channel for bi-amp/tri-amp speaker systems.
@@ -274,6 +275,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _asymmetricCrossoverEnabled: ManagedAtomic<Int32>
     /// Dynamic EQ enabled flag (atomic).
     private let _dynamicEQEnabled: ManagedAtomic<Int32>
+    /// Dialogue-Relative Leveler enabled flag (atomic).
+    private let _dialogueLevelerEnabled: ManagedAtomic<Int32>
     /// Bass Management crossover frequency in Hz (atomic, stored as float bits).
     private let _bassManagementCrossoverHzBits: ManagedAtomic<Int32>
     /// Bass Management slope (atomic, stored as raw Int32).
@@ -711,6 +714,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stereo widener + LUFS processor
         self.stereoWidener = StereoWidener(maxFrameCount: maxFrameCount)
         self.lufsProcessor = LoudnessMatchProcessor()
+        self.dialogueLeveler = DialogueRelativeLeveler()
 
         // Look-ahead limiter (extracted from inline implementation)
         self.mainLimiter = LookAheadLimiter(channelCount: ch, sampleRate: sampleRate, lookAheadMs: 2.0)
@@ -1058,6 +1062,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _bassManagementEnabled = ManagedAtomic(0)
         _asymmetricCrossoverEnabled = ManagedAtomic(0)
         _dynamicEQEnabled = ManagedAtomic(0)
+        _dialogueLevelerEnabled = ManagedAtomic(0)
         _bassManagementCrossoverHzBits = ManagedAtomic(floatBits(80.0))
         _bassManagementSlopeBits = ManagedAtomic(Int32(BassCrossoverSlope.lr4.rawValue))
         _lowBandGainDBBits = ManagedAtomic(floatBits(0.0))
@@ -1689,6 +1694,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setDynamicEQEnabled(_ v: Bool) {
         _dynamicEQEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
+    func setDialogueLevelerEnabled(_ v: Bool) {
+        _dialogueLevelerEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
     func setFIREnabled(_ v: Bool) {
         _firEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
@@ -1832,6 +1840,7 @@ final class DynamicsProcessor: @unchecked Sendable {
             sampleRate: sampleRate
         )
         lufsProcessor.applyConfig(config.loudnessMatch)
+        dialogueLeveler.applyConfig(config.advanced.dialogueRelativeLeveler)
 
         setDeEsserEnabled(config.deEsser.isEnabled)
         setDeEsserFrequencyHz(config.deEsser.frequencyHz)
@@ -1988,6 +1997,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setBassManagementEnabled(adv.bassManagement.enabled)
         setAsymmetricCrossoverEnabled(adv.bassManagement.asymmetricCrossoverEnabled)
         setDynamicEQEnabled(adv.dynamicEQ.enabled)
+        setDialogueLevelerEnabled(adv.dialogueRelativeLeveler.isEnabled)
         setFIREnabled(adv.firImpulseResponse.enabled)
         // FIR — only rebuild the convolution engine's IR when the config actually changed.
         if adv.firImpulseResponse != previousFIRConfig {
@@ -2475,6 +2485,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Keep tracking vars in sync so applyConfig() doesn't re-trigger setMode()
         // immediately after a sample rate change.
         denoisersConfiguredSampleRate = sampleRate
+
+        // Reset dialogue leveler state for new sample rate
+        dialogueLeveler.resetState(sampleRate: sampleRate)
         limiterGainCurrent  = 1.0
         for i in 0..<deEsserFilterState.count  { deEsserFilterState[i]  = 0 }
         for i in 0..<mbFilterState.count        { mbFilterState[i]        = 0 }
@@ -2626,10 +2639,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         let denoisingOn  = _denoisingEnabled.load(ordering: .relaxed) != 0
         let bassMgmtOn  = _bassManagementEnabled.load(ordering: .relaxed) != 0
         let dynamicEQOn = _dynamicEQEnabled.load(ordering: .relaxed) != 0
+        let dialogueLevelerOn = _dialogueLevelerEnabled.load(ordering: .relaxed) != 0
         let firOn       = _firEnabled.load(ordering: .relaxed) != 0
         guard stereoModeRaw != 0 || dcOn || subPhaseOn || symBalanceOn || panningOn || irAlignOn || crosstalkOn || denoisingOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
-                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || firOn else {
+                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || dialogueLevelerOn || firOn else {
             // The entire chain is idle this callback. Zero every per-stage meter rather
             // than just the limiter's, so the gain-structure meter doesn't freeze on the
             // last nonzero reading from before the stages were disabled.
@@ -2663,6 +2677,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Stage −1.5: Dynamic EQ.
         if dynamicEQOn { processDynamicEQ(abl: abl, numCh: numCh, count: count) }
+
+        // Stage −1.5b: Dialogue-Relative Leveler.
+        if dialogueLevelerOn { dialogueLeveler.process(abl: abl, numCh: numCh, count: count) }
 
         // Stage −1.4: FIR Impulse Response.
         if firOn { processFIR(abl: abl, numCh: numCh, count: count) }

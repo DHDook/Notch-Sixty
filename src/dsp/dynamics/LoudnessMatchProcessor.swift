@@ -32,6 +32,10 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     private let _targetLUFSBits:         ManagedAtomic<Int32>  // Float bits
     /// When non-zero, raises the gate floor from −70 dBFS to −60 dBFS.
     private let _dialogueGateEnabled:    ManagedAtomic<Int32>
+    /// Attack time constant in seconds (stored as float bits).
+    private let _attackSecondsBits:      ManagedAtomic<Int32>
+    /// Release time constant in seconds (stored as float bits).
+    private let _releaseSecondsBits:     ManagedAtomic<Int32>
 
     // MARK: - Audio-Thread State
 
@@ -51,8 +55,10 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     /// Smoothed gain correction multiplier (linear). Starts at unity.
     nonisolated(unsafe) private var smoothedGain: Float = 1.0
 
-    /// Smoothed gain alpha for 2-second RC filter (updated when sample rate or block size changes).
-    nonisolated(unsafe) private var smoothAlpha: Float = 0.999
+    /// Attack alpha for gain decreasing (program got louder).
+    nonisolated(unsafe) private var attackAlpha: Float = 0.999
+    /// Release alpha for gain increasing (program got quieter).
+    nonisolated(unsafe) private var releaseAlpha: Float = 0.999
 
     /// Last block size seen (for lazy smoothAlpha recalculation).
     nonisolated(unsafe) private var lastBlockSize: Int = 512
@@ -79,6 +85,8 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
         _enabled             = ManagedAtomic(0)
         _targetLUFSBits      = ManagedAtomic(floatBitsL(-16.0))
         _dialogueGateEnabled = ManagedAtomic(0)
+        _attackSecondsBits   = ManagedAtomic(floatBitsL(1.0))
+        _releaseSecondsBits  = ManagedAtomic(floatBitsL(4.0))
         kwState1  = Array(repeating: 0.0, count: 2 * 2)  // 2 channels × 2 state vars
         kwState2  = Array(repeating: 0.0, count: 2 * 2)
         powerFIFO = Array(repeating: 0.0, count: Self.maxFIFOBlocks)
@@ -95,10 +103,14 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
     func setEnabled(_ v: Bool)              { _enabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setTargetLUFS(_ lufs: Float)       { _targetLUFSBits.store(floatBitsL(lufs), ordering: .relaxed) }
     func setDialogueGateEnabled(_ v: Bool)  { _dialogueGateEnabled.store(v ? 1 : 0, ordering: .relaxed) }
+    func setAttackSeconds(_ seconds: Float)  { _attackSecondsBits.store(floatBitsL(seconds), ordering: .relaxed) }
+    func setReleaseSeconds(_ seconds: Float) { _releaseSecondsBits.store(floatBitsL(seconds), ordering: .relaxed) }
 
     func applyConfig(_ config: LoudnessMatchConfig) {
         setEnabled(config.isEnabled)
         setTargetLUFS(config.targetLoudnessLUFS)
+        setAttackSeconds(config.attackSeconds)
+        setReleaseSeconds(config.releaseSeconds)
     }
 
     func resetState(sampleRate: Double) {
@@ -208,8 +220,9 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
         let deltaDB     = max(-12.0, min(12.0, targetLUFS - measuredLUFS))
         let targetGain  = pow(10.0, deltaDB / 20.0)
 
-        // Step 5: smooth with 2-second RC filter (per block, not per sample)
-        let alpha = smoothAlpha
+        // Step 5: smooth with asymmetric attack/release (per block, not per sample)
+        // targetGain < smoothedGain means program got louder and gain needs to come down (attack direction)
+        let alpha = (targetGain < smoothedGain) ? attackAlpha : releaseAlpha
         smoothedGain = alpha * smoothedGain + (1.0 - alpha) * targetGain
     }
 
@@ -217,10 +230,13 @@ final class LoudnessMatchProcessor: @unchecked Sendable {
 
     /// Recomputes K-weighting filter coefficients for the given sample rate and block size.
     func updateCoefficients(sampleRate: Double, blockSize: Int) {
-        // Update smooth alpha for 2-second time constant per-block
+        // Update attack/release alphas from atomics
+        let attackSeconds = bitsToFloatL(_attackSecondsBits.load(ordering: .relaxed))
+        let releaseSeconds = bitsToFloatL(_releaseSecondsBits.load(ordering: .relaxed))
+
         // Alpha depends on actual block size to maintain correct time constant across all sample rates
-        let tau = 2.0
-        smoothAlpha = Float(exp(-Double(blockSize) / (sampleRate * tau)))
+        attackAlpha = Float(exp(-Double(blockSize) / (sampleRate * Double(attackSeconds))))
+        releaseAlpha = Float(exp(-Double(blockSize) / (sampleRate * Double(releaseSeconds))))
 
         // ── Stage 1: K-weighting high-shelf pre-filter ───────────────────
         // Parameters from ITU-R BS.1770-4 (bilinear transform of analogue prototype).

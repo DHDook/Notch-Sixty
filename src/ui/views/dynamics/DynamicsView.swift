@@ -214,13 +214,15 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "FIR Impulse Response", body: "Loads a user-supplied impulse response file and convolves it with the signal — distinct from FIR Correction's convolution slot. Intended for headphone or speaker correction profiles supplied as a raw impulse response rather than a measurement-derived filter.")
                         Divider()
+                        definitionEntry(title: "Dialogue-Relative Leveler", body: "Dynamically boosts dialogue when it's being masked by other audio content. Compares the dialogue band's level against the full program level and applies gain only when the gap exceeds the target threshold. Uses asymmetric attack/release for natural response.")
+                        Divider()
                         definitionEntry(title: "DC Filter", body: "0.5 Hz single-pole high-pass removing DC bias before the dynamics chain.")
                         Divider()
                         definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
                         Divider()
                         definitionEntry(title: "Stereo Widener", body: "Three-band M/S processor that independently adjusts stereo width in the Low (< 200 Hz), Mid (200 Hz – 4 kHz), and High (> 4 kHz) regions.")
                         Divider()
-                        definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level.")
+                        definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level. Uses asymmetric attack/release: faster attack when the program gets louder, slower release when it gets quieter for more natural recovery.")
                         Divider()
                         definitionEntry(title: "Loudness Contour", body: "Fletcher-Munson compensation curve adding gentle bass and treble lift for low-level listening.")
                         Divider()
@@ -468,6 +470,98 @@ struct DynamicsInlineView: View {
                     }
                 }
             }
+            col2ToggleWithSettings(
+                label: "Dial. Level.",
+                isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.dialogueRelativeLeveler.isEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.isEnabled = v; store.updateAdvancedProcessing(adv) }
+                ),
+                fullName: "Dialogue-Relative Leveler"
+            ) {
+                DynamicsSliderRow(
+                    label: "Band Low",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.bandLowHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.bandLowHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 100.0...8000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Band High",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.bandHighHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.bandHighHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 100.0...8000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Target Gap",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.targetGapDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.targetGapDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 3.0...20.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
+                .help("Maximum acceptable gap between program level and dialogue-band level before correction engages.")
+                DynamicsSliderRow(
+                    label: "Boost Ratio",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.boostRatio) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.boostRatio = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 1.0...6.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f", $0) }
+                )
+                .help("How aggressively the gap is closed once it's exceeded. 1.0 = no correction.")
+                DynamicsSliderRow(
+                    label: "Max Boost",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.maxBoostDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.maxBoostDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...15.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.attackMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.attackMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 50.0...500.0,
+                    step: 10.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.releaseMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.releaseMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 200.0...2000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Gate Thresh",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.programGateThresholdDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.programGateThresholdDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: -70.0...(-30.0),
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dBFS", $0) }
+                )
+                .help("Below this full-program level, correction decays to zero rather than chasing noise floor.")
+            }
             col2Toggle(label: "DC Filter", isOn: inlineDcOffsetEnabled)
             col2ToggleWithSettings(
                 label: "Sub Align",
@@ -579,6 +673,28 @@ struct DynamicsInlineView: View {
                     step: 0.5,
                     formatValue: { String(format: "%.1f LUFS", $0) }
                 )
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.loudnessMatch.attackSeconds) },
+                        set: { v in var c = store.dynamicsConfig.loudnessMatch; c.attackSeconds = Float(v); store.updateLoudnessMatch(c) }
+                    ),
+                    range: 0.3...5.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f s", $0) }
+                )
+                .help("Fast direction: how quickly gain decreases when program gets louder.")
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.loudnessMatch.releaseSeconds) },
+                        set: { v in var c = store.dynamicsConfig.loudnessMatch; c.releaseSeconds = Float(v); store.updateLoudnessMatch(c) }
+                    ),
+                    range: 1.0...10.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f s", $0) }
+                )
+                .help("Slow direction: how quickly gain increases when program gets quieter.")
                 Toggle("Dialogue Gate", isOn: Binding(
                     get: { store.dynamicsConfig.advanced.loudnessDialogueGateEnabled },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.loudnessDialogueGateEnabled = v; store.updateAdvancedProcessing(adv) }

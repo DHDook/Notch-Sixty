@@ -540,6 +540,91 @@ struct StereoWidenerConfig: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Dialogue-Relative Leveler Configuration
+
+/// Configuration for the dialogue-relative leveler.
+///
+/// Unlike a single-band dynamic EQ, this compares the dialogue band's level against
+/// the *full program* level and boosts only when the gap between them exceeds
+/// targetGapDB — i.e. only when dialogue is actually being masked by the rest of
+/// the mix right now, not merely whenever the dialogue band itself is quiet.
+struct DialogueRelativeLevelerConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool = false
+
+    /// Bandpass region used to isolate dialogue content. Range: 100–8000 Hz.
+    var bandLowHz:  Float = 300.0
+    var bandHighHz: Float = 3500.0
+
+    /// Maximum acceptable gap (dB) between program level and dialogue-band level
+    /// before correction engages. Range: 3–20 dB.
+    var targetGapDB: Float = 10.0
+
+    /// How aggressively the gap is closed once it's exceeded. 1.0 = no correction,
+    /// higher = closes more of the gap. Range: 1.0–6.0.
+    var boostRatio: Float = 2.0
+
+    /// Ceiling on applied boost, dB. Range: 0–15.
+    var maxBoostDB: Float = 8.0
+
+    /// RMS envelope window for both detectors, ms. Range: 50–500.
+    var detectorWindowMs: Float = 300.0
+
+    /// Fast direction: how quickly correction increases when masking worsens. ms.
+    var attackMs: Float = 150.0
+
+    /// Slow direction: how quickly correction relaxes when masking eases. ms.
+    var releaseMs: Float = 900.0
+
+    /// Below this full-program level, treat as near-silence and decay correction
+    /// to zero rather than chasing noise floor. dBFS. Range: -70…-30.
+    var programGateThresholdDB: Float = -50.0
+
+    static let `default` = DialogueRelativeLevelerConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, bandLowHz, bandHighHz, targetGapDB, boostRatio, maxBoostDB
+        case detectorWindowMs, attackMs, releaseMs, programGateThresholdDB
+    }
+
+    init(
+        isEnabled: Bool = false,
+        bandLowHz: Float = 300.0,
+        bandHighHz: Float = 3500.0,
+        targetGapDB: Float = 10.0,
+        boostRatio: Float = 2.0,
+        maxBoostDB: Float = 8.0,
+        detectorWindowMs: Float = 300.0,
+        attackMs: Float = 150.0,
+        releaseMs: Float = 900.0,
+        programGateThresholdDB: Float = -50.0
+    ) {
+        self.isEnabled = isEnabled
+        self.bandLowHz = bandLowHz
+        self.bandHighHz = bandHighHz
+        self.targetGapDB = targetGapDB
+        self.boostRatio = boostRatio
+        self.maxBoostDB = maxBoostDB
+        self.detectorWindowMs = detectorWindowMs
+        self.attackMs = attackMs
+        self.releaseMs = releaseMs
+        self.programGateThresholdDB = programGateThresholdDB
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        bandLowHz = try c.decodeIfPresent(Float.self, forKey: .bandLowHz) ?? 300.0
+        bandHighHz = try c.decodeIfPresent(Float.self, forKey: .bandHighHz) ?? 3500.0
+        targetGapDB = try c.decodeIfPresent(Float.self, forKey: .targetGapDB) ?? 10.0
+        boostRatio = try c.decodeIfPresent(Float.self, forKey: .boostRatio) ?? 2.0
+        maxBoostDB = try c.decodeIfPresent(Float.self, forKey: .maxBoostDB) ?? 8.0
+        detectorWindowMs = try c.decodeIfPresent(Float.self, forKey: .detectorWindowMs) ?? 300.0
+        attackMs = try c.decodeIfPresent(Float.self, forKey: .attackMs) ?? 150.0
+        releaseMs = try c.decodeIfPresent(Float.self, forKey: .releaseMs) ?? 900.0
+        programGateThresholdDB = try c.decodeIfPresent(Float.self, forKey: .programGateThresholdDB) ?? -50.0
+    }
+}
+
 // MARK: - Loudness Match Configuration
 
 /// Configuration for real-time LUFS loudness matching.
@@ -549,21 +634,35 @@ struct LoudnessMatchConfig: Codable, Equatable, Sendable {
     /// Target integrated loudness in LUFS. Range: −24 to −10 LUFS. Default: −16 LUFS.
     var targetLoudnessLUFS: Float = -16.0
 
+    /// Time constant (seconds) for gain *decreasing* — i.e. the program got louder
+    /// and we need to pull level down. Kept faster than release so a loud scene's
+    /// onset doesn't ride at full level for long. Range: 0.3–5.0.
+    var attackSeconds: Float = 1.0
+
+    /// Time constant (seconds) for gain *increasing* — i.e. the program got quieter
+    /// and we're restoring level. Kept slower than attack so recovery doesn't rush
+    /// into a loud scene's reverb tail. Range: 1.0–10.0.
+    var releaseSeconds: Float = 4.0  
+
     static let `default` = LoudnessMatchConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, targetLoudnessLUFS
+        case isEnabled, targetLoudnessLUFS, attackSeconds, releaseSeconds
     }
 
-    init(isEnabled: Bool = false, targetLoudnessLUFS: Float = -16.0) {
+    init(isEnabled: Bool = false, targetLoudnessLUFS: Float = -16.0, attackSeconds: Float = 1.0, releaseSeconds: Float = 4.0) {
         self.isEnabled          = isEnabled
         self.targetLoudnessLUFS = targetLoudnessLUFS
+        self.attackSeconds      = attackSeconds
+        self.releaseSeconds     = releaseSeconds
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled          = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)          ?? false
         targetLoudnessLUFS = try c.decodeIfPresent(Float.self, forKey: .targetLoudnessLUFS) ?? -16.0
+        attackSeconds      = try c.decodeIfPresent(Float.self, forKey: .attackSeconds)      ?? 1.0
+        releaseSeconds     = try c.decodeIfPresent(Float.self, forKey: .releaseSeconds)     ?? 4.0
     }
 }
 
@@ -1375,6 +1474,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     // ── D. Dynamic EQ (General) ───────────────────────────────────────
     var dynamicEQ: DynamicEQConfig = DynamicEQConfig()
 
+    // ── D. Dialogue-Relative Leveler ───────────────────────────────────
+    var dialogueRelativeLeveler: DialogueRelativeLevelerConfig = DialogueRelativeLevelerConfig()
+
     // ── D. FIR Impulse Response (Room Correction) ─────────────────────
     var firImpulseResponse: FIRImpulseResponseConfig = FIRImpulseResponseConfig()
 
@@ -1579,6 +1681,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case clipperAsymmetryTrimDB
         case deesserDynamicModeEnabled
         case dynamicEQ
+        case dialogueRelativeLeveler
         case firImpulseResponse
         case coefficientDecouplingEnabled
         case deharshFilterEnabled, deharshTiltAmountDB, deharshFrequencyHz
@@ -1638,6 +1741,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         clipperAsymmetryTrimDB: Float = 0.0,
         deesserDynamicModeEnabled: Bool = false,
         dynamicEQ: DynamicEQConfig = DynamicEQConfig(),
+        dialogueRelativeLeveler: DialogueRelativeLevelerConfig = DialogueRelativeLevelerConfig(),
         firImpulseResponse: FIRImpulseResponseConfig = FIRImpulseResponseConfig(),
         coefficientDecouplingEnabled: Bool = true,
         deharshFilterEnabled: Bool = false,
@@ -1711,6 +1815,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.clipperAsymmetryTrimDB           = clipperAsymmetryTrimDB
         self.deesserDynamicModeEnabled        = deesserDynamicModeEnabled
         self.dynamicEQ                        = dynamicEQ
+        self.dialogueRelativeLeveler         = dialogueRelativeLeveler
         self.firImpulseResponse              = firImpulseResponse
         self.coefficientDecouplingEnabled     = coefficientDecouplingEnabled
         self.deharshFilterEnabled             = deharshFilterEnabled
@@ -1786,6 +1891,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         clipperAsymmetryTrimDB           = try c.decodeIfPresent(Float.self,                 forKey: .clipperAsymmetryTrimDB)           ?? 0.0
         deesserDynamicModeEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .deesserDynamicModeEnabled)        ?? false
         dynamicEQ                        = try c.decodeIfPresent(DynamicEQConfig.self,       forKey: .dynamicEQ)                        ?? DynamicEQConfig()
+        dialogueRelativeLeveler         = try c.decodeIfPresent(DialogueRelativeLevelerConfig.self, forKey: .dialogueRelativeLeveler) ?? DialogueRelativeLevelerConfig()
         firImpulseResponse              = try c.decodeIfPresent(FIRImpulseResponseConfig.self, forKey: .firImpulseResponse)              ?? FIRImpulseResponseConfig()
         coefficientDecouplingEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .coefficientDecouplingEnabled)     ?? true
         deharshFilterEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .deharshFilterEnabled)             ?? false
@@ -1881,6 +1987,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(clipperAsymmetryTrimDB,             forKey: .clipperAsymmetryTrimDB)
         try c.encode(deesserDynamicModeEnabled,          forKey: .deesserDynamicModeEnabled)
         try c.encode(dynamicEQ,                          forKey: .dynamicEQ)
+        try c.encode(dialogueRelativeLeveler,           forKey: .dialogueRelativeLeveler)
         try c.encode(firImpulseResponse,                 forKey: .firImpulseResponse)
         try c.encode(coefficientDecouplingEnabled,       forKey: .coefficientDecouplingEnabled)
         try c.encode(deharshFilterEnabled,               forKey: .deharshFilterEnabled)
