@@ -212,9 +212,9 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
                         Divider()
-                        definitionEntry(title: "FIR Impulse Response", body: "Loads a user-supplied impulse response file and convolves it with the signal — distinct from FIR Correction's convolution slot. Intended for headphone or speaker correction profiles supplied as a raw impulse response rather than a measurement-derived filter.")
-                        Divider()
                         definitionEntry(title: "Dialogue-Relative Leveler", body: "Dynamically boosts dialogue when it's being masked by other audio content. Compares the dialogue band's level against the full program level and applies gain only when the gap exceeds the target threshold. Uses asymmetric attack/release for natural response.")
+                        Divider()
+                        definitionEntry(title: "FIR Impulse Response", body: "Loads a user-supplied impulse response file and convolves it with the signal — distinct from FIR Correction's convolution slot. Intended for headphone or speaker correction profiles supplied as a raw impulse response rather than a measurement-derived filter.")
                         Divider()
                         definitionEntry(title: "DC Filter", body: "0.5 Hz single-pole high-pass removing DC bias before the dynamics chain.")
                         Divider()
@@ -228,6 +228,7 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance by applying frequency-selective gain reduction around a tunable centre frequency.")
                         Divider()
+                        // Column 2 — dynamics + spatial
                         definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers.")
                         Divider()
                         definitionEntry(title: "Compressor", body: "Standard feed-forward dynamics compressor with adjustable threshold, ratio, soft-knee width, attack, release, and makeup gain. Supports program-dependent release time adaptation and an optional sidechain high-pass filter to reduce low-frequency pumping.")
@@ -248,6 +249,7 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Symmetry Balance", body: "Gain-matrix correction for asymmetric listening positions. Aligns L/R loudness at the ear.")
                         Divider()
+                        // Column 3 — LTI suite + processing-mode flags
                         definitionEntry(title: "Panning Gain Matrix", body: "Bilinear crossfeed matrix blending a proportion of each channel into the opposite channel.")
                         Divider()
                         definitionEntry(title: "Crosstalk Cancel.", body: "Recursive binaural inversion filter reducing inter-channel acoustic leakage between speakers.")
@@ -449,28 +451,6 @@ struct DynamicsInlineView: View {
                 .help("Slower release smooths sustained material; faster release responds to changing noise floor.")
             }
             col2ToggleWithSettings(
-                label: "FIR IR",
-                isOn: inlineFirImpulseResponseEnabled,
-                fullName: "FIR Impulse Response"
-            ) {
-                let fir = store.dynamicsConfig.advanced.firImpulseResponse
-                if !fir.leftIR.isEmpty {
-                    Text("Loaded: \(fir.leftIR.count) taps @ \(Int(fir.sampleRate)) Hz")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("No impulse response loaded")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.tertiary)
-                }
-                HStack(spacing: 8) {
-                    Button("Load IR…") { openImpulseResponseFile { store.loadFIRImpulseResponse(url: $0) } }
-                    if !fir.leftIR.isEmpty {
-                        Button("Clear") { store.clearFIRImpulseResponse() }
-                    }
-                }
-            }
-            col2ToggleWithSettings(
                 label: "Dial. Level.",
                 isOn: Binding(
                     get: { store.dynamicsConfig.advanced.dialogueRelativeLeveler.isEnabled },
@@ -595,6 +575,28 @@ struct DynamicsInlineView: View {
                         formatValue: { String(format: "%.0f%%", $0 * 100) }
                     )
                     .help("Even when nothing looks speech-like, apply at least this much of the correction — a safety floor for whispered or heavily processed dialogue.")
+                }
+            }
+            col2ToggleWithSettings(
+                label: "FIR IR",
+                isOn: inlineFirImpulseResponseEnabled,
+                fullName: "FIR Impulse Response"
+            ) {
+                let fir = store.dynamicsConfig.advanced.firImpulseResponse
+                if !fir.leftIR.isEmpty {
+                    Text("Loaded: \(fir.leftIR.count) taps @ \(Int(fir.sampleRate)) Hz")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No impulse response loaded")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.tertiary)
+                }
+                HStack(spacing: 8) {
+                    Button("Load IR…") { openImpulseResponseFile { store.loadFIRImpulseResponse(url: $0) } }
+                    if !fir.leftIR.isEmpty {
+                        Button("Clear") { store.clearFIRImpulseResponse() }
+                    }
                 }
             }
             col2Toggle(label: "DC Filter", isOn: inlineDcOffsetEnabled)
@@ -898,6 +900,13 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.0f ms", $0) }
                 )
             }
+        }
+    }
+
+    // MARK: - Column 2: Dynamics + spatial
+
+    private var column2: some View {
+        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "M-Band",
                 isOn: mbEnabledBinding,
@@ -1014,13 +1023,6 @@ struct DynamicsInlineView: View {
                     ), range: 0.0...3000.0, step: 50.0, formatValue: { v in v == 0 ? "Off" : String(format: "%.0f Hz", v) })
                 }
             }
-        }
-    }
-
-    // MARK: - Column 2: Dynamics + spatial
-
-    private var column2: some View {
-        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Comp.",
                 isOn: compressorEnabledBinding,
@@ -1490,6 +1492,13 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "R"
                 )
             }
+        }
+    }
+
+    // MARK: - Column 3: LTI suite + processing-mode flags
+
+    private var column3: some View {
+        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Panning",
                 isOn: inlinePanningEnabled,
@@ -1508,13 +1517,6 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "Full"
                 )
             }
-        }
-    }
-
-    // MARK: - Column 3: LTI suite + processing-mode flags
-
-    private var column3: some View {
-        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Crosstalk",
                 isOn: inlineCrosstalkEnabled,

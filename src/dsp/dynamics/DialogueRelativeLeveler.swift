@@ -23,6 +23,7 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     // MARK: - Constants
 
     static let maxFrameCount: Int = 4096
+    private static let maxChannels = 16
 
     // MARK: - Atomics (main thread → audio thread)
 
@@ -52,39 +53,40 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     /// Dialogue bandpass biquad state per channel: [ch * 2 + stateVar] (w1, w2).
     nonisolated(unsafe) private var bandpassState: [Float]
 
-    /// Dialogue-band RMS envelope state (one-pole leaky integrator on squared signal).
-    nonisolated(unsafe) private var dialogueRMSState: Float = 0.0
+    /// Dialogue-band RMS envelope state per channel (one-pole leaky integrator on squared signal).
+    nonisolated(unsafe) private var dialogueRMSState: [Float]
 
-    /// Program RMS envelope state (one-pole leaky integrator on squared signal).
-    nonisolated(unsafe) private var programRMSState: Float = 0.0
+    /// Program RMS envelope state per channel (one-pole leaky integrator on squared signal).
+    nonisolated(unsafe) private var programRMSState: [Float]
 
-    /// Smoothed boost in dB (audio thread only). Starts at 0.
-    nonisolated(unsafe) private var smoothedBoostDB: Float = 0.0
+    /// Smoothed boost in dB per channel (audio thread only). Starts at 0.
+    nonisolated(unsafe) private var smoothedBoostDB: [Float]
 
     /// Current sample rate (updated by main thread before audio starts).
     nonisolated(unsafe) private var sampleRate: Double = 48000.0
 
     // Voice gate state
-    /// Decimation counter for control-rate processing.
-    nonisolated(unsafe) private var decimationCounter: Int = 0
+    /// Decimation counter per channel for control-rate processing.
+    nonisolated(unsafe) private var decimationCounter: [Int]
     /// Decimation factor (samples per control update).
     nonisolated(unsafe) private var decimationFactor: Int = 48  // ~1 kHz at 48 kHz
 
-    /// Fast envelope state for voice gate (separate from main detector).
-    nonisolated(unsafe) private var fastEnvelopeState: Float = 0.0
+    /// Fast envelope state per channel for voice gate (separate from main detector).
+    nonisolated(unsafe) private var fastEnvelopeState: [Float]
 
-    /// Modulation bandpass biquad state (w1, w2).
-    nonisolated(unsafe) private var modBiquadState: (Float, Float) = (0.0, 0.0)
+    /// Modulation bandpass biquad state per channel (w1, w2).
+    nonisolated(unsafe) private var modBiquadW1: [Float]
+    nonisolated(unsafe) private var modBiquadW2: [Float]
 
-    /// Modulation band energy accumulator.
-    nonisolated(unsafe) private var modEnergyAccumulator: Float = 0.0
-    /// Total energy accumulator.
-    nonisolated(unsafe) private var totalEnergyAccumulator: Float = 0.0
-    /// Energy accumulator count.
-    nonisolated(unsafe) private var energyAccumulatorCount: Int = 0
+    /// Modulation band energy accumulator per channel.
+    nonisolated(unsafe) private var modEnergyAccumulator: [Float]
+    /// Total energy accumulator per channel.
+    nonisolated(unsafe) private var totalEnergyAccumulator: [Float]
+    /// Energy accumulator count per channel.
+    nonisolated(unsafe) private var energyAccumulatorCount: [Int]
 
-    /// Current confidence value (0-1).
-    nonisolated(unsafe) private var currentConfidence: Float = 1.0
+    /// Current confidence value per channel (0-1).
+    nonisolated(unsafe) private var currentConfidence: [Float]
 
     /// Modulation bandpass coefficients (b0, b1, b2, a1, a2).
     nonisolated(unsafe) private var mod_b0: Float = 0.0
@@ -156,7 +158,18 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         _confidenceCeilingIndexBits = ManagedAtomic(floatBitsL(0.45))
         _minConfidenceBits = ManagedAtomic(floatBitsL(0.2))
 
-        bandpassState = Array(repeating: 0.0, count: 2 * 2)  // 2 channels × 2 state vars
+        bandpassState = Array(repeating: 0.0, count: Self.maxChannels * 2)  // maxChannels × 2 state vars
+        dialogueRMSState = Array(repeating: 0.0, count: Self.maxChannels)
+        programRMSState = Array(repeating: 0.0, count: Self.maxChannels)
+        smoothedBoostDB = Array(repeating: 0.0, count: Self.maxChannels)
+        decimationCounter = Array(repeating: 0, count: Self.maxChannels)
+        fastEnvelopeState = Array(repeating: 0.0, count: Self.maxChannels)
+        modBiquadW1 = Array(repeating: 0.0, count: Self.maxChannels)
+        modBiquadW2 = Array(repeating: 0.0, count: Self.maxChannels)
+        modEnergyAccumulator = Array(repeating: 0.0, count: Self.maxChannels)
+        totalEnergyAccumulator = Array(repeating: 0.0, count: Self.maxChannels)
+        energyAccumulatorCount = Array(repeating: 0, count: Self.maxChannels)
+        currentConfidence = Array(repeating: 1.0, count: Self.maxChannels)
 
         // Pre-allocate scratch buffers
         bandScratch = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxFrameCount)
@@ -238,18 +251,19 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     func resetState(sampleRate: Double) {
         self.sampleRate = sampleRate
         for i in 0..<bandpassState.count { bandpassState[i] = 0 }
-        dialogueRMSState = 0.0
-        programRMSState = 0.0
-        smoothedBoostDB = 0.0
+        for i in 0..<dialogueRMSState.count { dialogueRMSState[i] = 0.0 }
+        for i in 0..<programRMSState.count { programRMSState[i] = 0.0 }
+        for i in 0..<smoothedBoostDB.count { smoothedBoostDB[i] = 0.0 }
 
         // Reset voice gate state
-        decimationCounter = 0
-        fastEnvelopeState = 0.0
-        modBiquadState = (0.0, 0.0)
-        modEnergyAccumulator = 0.0
-        totalEnergyAccumulator = 0.0
-        energyAccumulatorCount = 0
-        currentConfidence = 1.0
+        for i in 0..<decimationCounter.count { decimationCounter[i] = 0 }
+        for i in 0..<fastEnvelopeState.count { fastEnvelopeState[i] = 0.0 }
+        for i in 0..<modBiquadW1.count { modBiquadW1[i] = 0.0 }
+        for i in 0..<modBiquadW2.count { modBiquadW2[i] = 0.0 }
+        for i in 0..<modEnergyAccumulator.count { modEnergyAccumulator[i] = 0.0 }
+        for i in 0..<totalEnergyAccumulator.count { totalEnergyAccumulator[i] = 0.0 }
+        for i in 0..<energyAccumulatorCount.count { energyAccumulatorCount[i] = 0 }
+        for i in 0..<currentConfidence.count { currentConfidence[i] = 1.0 }
 
         updateCoefficients(sampleRate: sampleRate)
     }
@@ -294,11 +308,11 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
             var w2 = bandpassState[stateBase + 1]
 
             // Step 1: Dialogue-band detector (bandpass → RMS envelope → dB)
-            var dialogueRMS = dialogueRMSState
-            var fastEnv = fastEnvelopeState
-            var modW1 = modBiquadState.0
-            var modW2 = modBiquadState.1
-            var decimCounter = decimationCounter
+            var dialogueRMS = dialogueRMSState[ch]
+            var fastEnv = fastEnvelopeState[ch]
+            var modW1 = modBiquadW1[ch]
+            var modW2 = modBiquadW2[ch]
+            var decimCounter = decimationCounter[ch]
 
             for i in 0..<count {
                 let x = buf[i]
@@ -325,15 +339,15 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
                         modW2 = mod_b2 * fastEnv + mod_a2 * modY
 
                         // Accumulate energy
-                        modEnergyAccumulator += modY * modY
-                        totalEnergyAccumulator += fastEnv * fastEnv
-                        energyAccumulatorCount += 1
+                        modEnergyAccumulator[ch] += modY * modY
+                        totalEnergyAccumulator[ch] += fastEnv * fastEnv
+                        energyAccumulatorCount[ch] += 1
 
                         // Update confidence when we have enough samples
                         let measurementWindowSamples = Double(measurementWindowMs) * sampleRate / 1000.0 / Double(decimationFactor)
-                        if energyAccumulatorCount >= Int(measurementWindowSamples) {
-                            let modEnergy = modEnergyAccumulator / Float(energyAccumulatorCount)
-                            let totalEnergy = totalEnergyAccumulator / Float(energyAccumulatorCount)
+                        if energyAccumulatorCount[ch] >= Int(measurementWindowSamples) {
+                            let modEnergy = modEnergyAccumulator[ch] / Float(energyAccumulatorCount[ch])
+                            let totalEnergy = totalEnergyAccumulator[ch] / Float(energyAccumulatorCount[ch])
                             let epsilon: Float = 1e-10
                             let modulationIndex = modEnergy / (totalEnergy + epsilon)
 
@@ -342,22 +356,23 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
                             confidence = max(0.0, min(1.0, confidence))
                             confidence = max(confidence, minConf)
 
-                            currentConfidence = confidence
+                            currentConfidence[ch] = confidence
 
                             // Reset accumulators
-                            modEnergyAccumulator = 0.0
-                            totalEnergyAccumulator = 0.0
-                            energyAccumulatorCount = 0
+                            modEnergyAccumulator[ch] = 0.0
+                            totalEnergyAccumulator[ch] = 0.0
+                            energyAccumulatorCount[ch] = 0
                         }
                     }
                 }
             }
             bandpassState[stateBase] = w1
             bandpassState[stateBase + 1] = w2
-            dialogueRMSState = dialogueRMS
-            fastEnvelopeState = fastEnv
-            modBiquadState = (modW1, modW2)
-            decimationCounter = decimCounter
+            dialogueRMSState[ch] = dialogueRMS
+            fastEnvelopeState[ch] = fastEnv
+            modBiquadW1[ch] = modW1
+            modBiquadW2[ch] = modW2
+            decimationCounter[ch] = decimCounter
 
             // Convert RMS to dB (per-sample for gain computer)
             for i in 0..<count {
@@ -366,19 +381,19 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
             }
 
             // Step 2: Program detector (broadband RMS → dB)
-            var programRMS = programRMSState
+            var programRMS = programRMSState[ch]
             for i in 0..<count {
                 let x = buf[i]
                 programRMS = rmsAlpha * programRMS + (1.0 - rmsAlpha) * (x * x)
             }
-            programRMSState = programRMS
+            programRMSState[ch] = programRMS
 
             // Convert program RMS to dB
             let programRMSValue = sqrt(max(0.0, programRMS))
             let programDB = programRMSValue > 1e-10 ? 20.0 * log10(programRMSValue) : -96.0
 
             // Step 3: Gain computer (per-sample)
-            var boostDB = smoothedBoostDB
+            var boostDB = smoothedBoostDB[ch]
             for i in 0..<count {
                 let dialogueDB = dialogueDBScratch[i]
 
@@ -397,7 +412,7 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
                 // Voice gate: scale by confidence if enabled
                 if voiceGateOn {
-                    targetBoostDB *= currentConfidence
+                    targetBoostDB *= currentConfidence[ch]
                 }
 
                 // Asymmetric smoothing
@@ -405,7 +420,7 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
                 boostDB = coeff * boostDB + (1.0 - coeff) * targetBoostDB
                 boostDBScratch[i] = boostDB
             }
-            smoothedBoostDB = boostDB
+            smoothedBoostDB[ch] = boostDB
 
             // Step 4: Convert boost to linear gain
             for i in 0..<count {
@@ -430,6 +445,21 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
     // MARK: - Coefficient Computation
 
+    /// RBJ "constant skirt gain, peak gain = Q" bandpass biquad. Shared by the dialogue-band
+    /// filter and the voice-gate modulation filter — one correct implementation instead of two.
+    private func computeBandpassCoefficients(centerHz: Double, q: Double, sampleRate: Double) -> (b0: Float, b1: Float, b2: Float, a1: Float, a2: Float) {
+        let w0 = 2.0 * .pi * centerHz / sampleRate
+        let alpha = sin(w0) / (2.0 * max(q, 0.05))   // guard against a degenerate q
+        let a0 = 1.0 + alpha
+        return (
+            b0: Float(alpha / a0),
+            b1: Float(0.0),
+            b2: Float(-alpha / a0),
+            a1: Float(-2.0 * cos(w0) / a0),
+            a2: Float((1.0 - alpha) / a0)
+        )
+    }
+
     private func updateCoefficients(sampleRate: Double) {
         self.sampleRate = sampleRate
 
@@ -447,40 +477,16 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         // Compute RMS envelope coefficient
         rmsAlpha = Float(exp(-1.0 / (Double(detectorWindowMs) * 0.001 * sampleRate)))
 
-        // Compute bandpass biquad coefficients (2nd-order Butterworth bandpass)
-        // Using cascade of high-shelf + low-shelf for simplicity
-        let lowHz = Double(bandLowHz)
-        let highHz = Double(bandHighHz)
-
-        // High-pass at lowHz
-        let w0_hp = 2.0 * .pi * lowHz / sampleRate
-        let Q_hp: Double = 0.7071  // Butterworth
-        let alpha_hp = sin(w0_hp) / (2.0 * Q_hp)
-        let a0_hp = 1.0 + alpha_hp
-        let b0_hp = (1.0 - cos(w0_hp)) / 2.0 / a0_hp
-        let b1_hp = -(1.0 - cos(w0_hp)) / a0_hp
-        let b2_hp = (1.0 - cos(w0_hp)) / 2.0 / a0_hp
-        let a1_hp = -2.0 * cos(w0_hp) / a0_hp
-        let a2_hp = (1.0 - alpha_hp) / a0_hp
-
-        // Low-pass at highHz
-        let w0_lp = 2.0 * .pi * highHz / sampleRate
-        let Q_lp: Double = 0.7071  // Butterworth
-        let alpha_lp = sin(w0_lp) / (2.0 * Q_lp)
-        let a0_lp = 1.0 + alpha_lp
-        let b0_lp = (1.0 - cos(w0_lp)) / 2.0 / a0_lp
-        let b1_lp = 1.0 - cos(w0_lp) / a0_lp
-        let b2_lp = (1.0 - cos(w0_lp)) / 2.0 / a0_lp
-        let a1_lp = -2.0 * cos(w0_lp) / a0_lp
-        let a2_lp = (1.0 - alpha_lp) / a0_lp
-
-        // Cascade the two filters (multiply their transfer functions)
-        // For simplicity, use the high-pass as the primary bandpass
-        pending_bp_b0 = Float(b0_hp)
-        pending_bp_b1 = Float(b1_hp)
-        pending_bp_b2 = Float(b2_hp)
-        pending_bp_a1 = Float(a1_hp)
-        pending_bp_a2 = Float(a2_hp)
+        // Compute dialogue-band bandpass coefficients (true bandpass, not cascade)
+        let centerHz = sqrt(Double(bandLowHz) * Double(bandHighHz))   // geometric mean
+        let bandwidthHz = max(1.0, Double(bandHighHz - bandLowHz))     // guard bandHighHz > bandLowHz
+        let q = centerHz / bandwidthHz
+        let coeffs = computeBandpassCoefficients(centerHz: centerHz, q: q, sampleRate: sampleRate)
+        pending_bp_b0 = coeffs.b0
+        pending_bp_b1 = coeffs.b1
+        pending_bp_b2 = coeffs.b2
+        pending_bp_a1 = coeffs.a1
+        pending_bp_a2 = coeffs.a2
 
         // Voice gate coefficients
         let modCenterHz = bitsToFloatL(_modCenterHzBits.load(ordering: .relaxed))
@@ -497,19 +503,13 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
         // Compute modulation bandpass at control rate (not audio rate)
         let controlSampleRate = sampleRate / Double(decimationFactor)
-        let modCenter = Double(modCenterHz)
-        let modBandwidth = Double(modBandwidthHz)
-
-        // Bandpass filter at control rate (2nd-order Butterworth)
-        let w0_mod = 2.0 * .pi * modCenter / controlSampleRate
-        let Q_mod = w0_mod / modBandwidth  // Q = center/bandwidth for bandpass
-        let alpha_mod = sin(w0_mod) / (2.0 * Q_mod)
-        let a0_mod = 1.0 + alpha_mod
-        mod_b0 = Float(alpha_mod / a0_mod)
-        mod_b1 = Float(0.0)
-        mod_b2 = Float(-alpha_mod / a0_mod)
-        mod_a1 = Float(-2.0 * cos(w0_mod) / a0_mod)
-        mod_a2 = Float((1.0 - alpha_mod) / a0_mod)
+        let q_mod = Double(modCenterHz) / Double(modBandwidthHz)   // Hz / Hz, correct
+        let modCoeffs = computeBandpassCoefficients(centerHz: Double(modCenterHz), q: q_mod, sampleRate: controlSampleRate)
+        mod_b0 = modCoeffs.b0
+        mod_b1 = modCoeffs.b1
+        mod_b2 = modCoeffs.b2
+        mod_a1 = modCoeffs.a1
+        mod_a2 = modCoeffs.a2
 
         hasCoeffUpdate.store(true, ordering: .releasing)
     }
