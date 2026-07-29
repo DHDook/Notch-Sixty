@@ -7,6 +7,7 @@ import SwiftUI
 struct DynamicsControlSettingsButton<Content: View>: View {
     let fullName: String
     var width: CGFloat = 400
+    var onReset: (() -> Void)? = nil
     @ViewBuilder var content: () -> Content
 
     @State private var isPresented = false
@@ -29,6 +30,17 @@ struct DynamicsControlSettingsButton<Content: View>: View {
         .popover(isPresented: $isPresented, arrowEdge: .trailing) {
             VStack(alignment: .leading, spacing: 12) {
                 content()
+                if let onReset {
+                    Divider()
+                    Button {
+                        onReset()
+                    } label: {
+                        Label("Reset to Default", systemImage: "arrow.counterclockwise")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(16)
             .frame(width: width)

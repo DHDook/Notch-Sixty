@@ -291,7 +291,15 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Infrasonic",
                 isOn: inlineInfrasonicFilterEnabled,
-                fullName: "Infrasonic Filter"
+                fullName: "Infrasonic Filter",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = InfrasonicFilterConfig()
+                    adv.infrasonicFilter.cutoffHz = d.cutoffHz
+                    adv.infrasonicFilter.slope = d.slope
+                    adv.infrasonicFilter.target = d.target
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Frequency",
@@ -339,7 +347,19 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Denoiser",
                 isOn: inlineDenoisingEnabled,
-                fullName: "Linear Denoising Engine"
+                fullName: "Linear Denoising Engine",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.linearDenoisingThresholdDB = d.linearDenoisingThresholdDB
+                    adv.linearDenoisingPreset = d.linearDenoisingPreset
+                    adv.denoiserMode = d.denoiserMode
+                    adv.denoiserWienerFloor = d.denoiserWienerFloor
+                    adv.denoiserReductionAmount = d.denoiserReductionAmount
+                    adv.denoiserAttackMs = d.denoiserAttackMs
+                    adv.denoiserReleaseMs = d.denoiserReleaseMs
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Threshold",
@@ -456,7 +476,20 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.advanced.dialogueRelativeLeveler.isEnabled },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.isEnabled = v; store.updateAdvancedProcessing(adv) }
                 ),
-                fullName: "Dialogue-Relative Leveler"
+                fullName: "Dialogue-Relative Leveler",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = DialogueRelativeLevelerConfig()
+                    adv.dialogueRelativeLeveler.targetGapDB = d.targetGapDB
+                    adv.dialogueRelativeLeveler.boostRatio = d.boostRatio
+                    adv.dialogueRelativeLeveler.maxBoostDB = d.maxBoostDB
+                    adv.dialogueRelativeLeveler.attackMs = d.attackMs
+                    adv.dialogueRelativeLeveler.releaseMs = d.releaseMs
+                    adv.dialogueRelativeLeveler.bandLowHz = d.bandLowHz
+                    adv.dialogueRelativeLeveler.bandHighHz = d.bandHighHz
+                    adv.dialogueRelativeLeveler.voiceGate.minConfidence = d.voiceGate.minConfidence
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Band Low",
@@ -580,7 +613,10 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "FIR IR",
                 isOn: inlineFirImpulseResponseEnabled,
-                fullName: "FIR Impulse Response"
+                fullName: "FIR Impulse Response",
+                onReset: {
+                    store.clearFIRImpulseResponse()
+                }
             ) {
                 let fir = store.dynamicsConfig.advanced.firImpulseResponse
                 if !fir.leftIR.isEmpty {
@@ -603,7 +639,14 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Sub Align",
                 isOn: inlineSubBassEnabled,
-                fullName: "Sub-Bass Phase Alignment"
+                fullName: "Sub-Bass Phase Alignment",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.subBassAlignmentFrequencyHz = d.subBassAlignmentFrequencyHz
+                    adv.subBassPhaseAlignmentQ = d.subBassPhaseAlignmentQ
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Frequency",
@@ -629,7 +672,18 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Widener",
                 isOn: inlineWideEnabled,
-                fullName: "Stereo Widener"
+                fullName: "Stereo Widener",
+                onReset: {
+                    var c = store.dynamicsConfig.stereoWidener
+                    let d = StereoWidenerConfig()
+                    c.widthFactorLow = d.widthFactorLow
+                    c.monoLowBand = d.monoLowBand
+                    c.crossoverLowMidHz = d.crossoverLowMidHz
+                    c.widthFactorMid = d.widthFactorMid
+                    c.crossoverMidHighHz = d.crossoverMidHighHz
+                    c.widthFactorHigh = d.widthFactorHigh
+                    store.updateStereoWidener(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Low Width",
@@ -698,7 +752,24 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "LUFS",
                 isOn: inlineLufsEnabled,
-                fullName: "LUFS Loudness Match"
+                fullName: "LUFS Loudness Match",
+                onReset: {
+                    var c = store.dynamicsConfig.loudnessMatch
+                    let d = LoudnessMatchConfig()
+                    c.targetLoudnessLUFS = d.targetLoudnessLUFS
+                    c.maxCorrectionDB = d.maxCorrectionDB
+                    c.attackSeconds = d.attackSeconds
+                    c.releaseSeconds = d.releaseSeconds
+                    store.updateLoudnessMatch(c)
+                    var adv = store.dynamicsConfig.advanced
+                    let dAdv = AdvancedProcessingConfig()
+                    adv.loudnessDialogueGateEnabled = dAdv.loudnessDialogueGateEnabled
+                    adv.volumeDependentLoudnessEnabled = dAdv.volumeDependentLoudnessEnabled
+                    adv.loudnessReferencePhon = dAdv.loudnessReferencePhon
+                    adv.loudnessReferenceVolume = dAdv.loudnessReferenceVolume
+                    adv.loudnessContourStrength = dAdv.loudnessContourStrength
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Target",
@@ -838,7 +909,19 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "De-Esser",
                 isOn: deEsserEnabledBinding,
-                fullName: "De-Esser"
+                fullName: "De-Esser",
+                onReset: {
+                    var c = store.dynamicsConfig.deEsser
+                    let d = DeEsserConfig()
+                    c.frequencyHz = d.frequencyHz
+                    c.detectionQ = d.detectionQ
+                    c.thresholdDB = d.thresholdDB
+                    c.ratio = d.ratio
+                    c.rangeDB = d.rangeDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    store.updateDeEsser(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Frequency",
@@ -921,7 +1004,37 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "M-Band",
                 isOn: mbEnabledBinding,
-                fullName: "Multiband Compressor"
+                fullName: "Multiband Compressor",
+                onReset: {
+                    var c = store.dynamicsConfig.multibandCompressor
+                    let d = MultibandCompressorConfig()
+                    c.crossLowMidHz = d.crossLowMidHz
+                    c.crossMidHighHz = d.crossMidHighHz
+                    c.slopeLowMid = d.slopeLowMid
+                    c.slopeMidHigh = d.slopeMidHigh
+                    c.thresholdLowDB = d.thresholdLowDB
+                    c.ratioLow = d.ratioLow
+                    c.attackLowMs = d.attackLowMs
+                    c.releaseLowMs = d.releaseLowMs
+                    c.kneeWidthLowDB = d.kneeWidthLowDB
+                    c.makeupGainLowDB = d.makeupGainLowDB
+                    c.sidechainHighPassLowHz = d.sidechainHighPassLowHz
+                    c.thresholdMidDB = d.thresholdMidDB
+                    c.ratioMid = d.ratioMid
+                    c.attackMidMs = d.attackMidMs
+                    c.releaseMidMs = d.releaseMidMs
+                    c.kneeWidthMidDB = d.kneeWidthMidDB
+                    c.makeupGainMidDB = d.makeupGainMidDB
+                    c.sidechainHighPassMidHz = d.sidechainHighPassMidHz
+                    c.thresholdHighDB = d.thresholdHighDB
+                    c.ratioHigh = d.ratioHigh
+                    c.attackHighMs = d.attackHighMs
+                    c.releaseHighMs = d.releaseHighMs
+                    c.kneeWidthHighDB = d.kneeWidthHighDB
+                    c.makeupGainHighDB = d.makeupGainHighDB
+                    c.sidechainHighPassHighHz = d.sidechainHighPassHighHz
+                    store.updateMultibandCompressor(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Low/Mid X-over",
@@ -1037,7 +1150,21 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Comp.",
                 isOn: compressorEnabledBinding,
-                fullName: "Compressor"
+                fullName: "Compressor",
+                onReset: {
+                    var c = store.dynamicsConfig.compressor
+                    let d = CompressorConfig()
+                    c.thresholdDB = d.thresholdDB
+                    c.ratio = d.ratio
+                    c.kneeWidthDB = d.kneeWidthDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    c.makeupGainDB = d.makeupGainDB
+                    c.programDependentRelease = d.programDependentRelease
+                    c.topology = d.topology
+                    c.sidechainHighPassHz = d.sidechainHighPassHz
+                    store.updateCompressor(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Threshold",
@@ -1130,7 +1257,17 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Expander",
                 isOn: expanderEnabledBinding,
-                fullName: "Expander"
+                fullName: "Expander",
+                onReset: {
+                    var c = store.dynamicsConfig.expander
+                    let d = ExpanderConfig()
+                    c.thresholdDB = d.thresholdDB
+                    c.ratio = d.ratio
+                    c.rangeDB = d.rangeDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    store.updateExpander(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Threshold",
@@ -1186,7 +1323,20 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Bass Mgmt",
                 isOn: inlineBassManagementEnabled,
-                fullName: "Bass Management"
+                fullName: "Bass Management",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = BassManagementConfig()
+                    adv.bassManagement.crossoverHz = d.crossoverHz
+                    adv.bassManagement.slope = d.slope
+                    adv.bassManagement.lowBandGainDB = d.lowBandGainDB
+                    adv.bassManagement.lowBandPolarityInverted = d.lowBandPolarityInverted
+                    adv.bassManagement.crossoverType = d.crossoverType
+                    adv.bassManagement.asymmetricCrossoverEnabled = d.asymmetricCrossoverEnabled
+                    adv.bassManagement.mainsHighPassHz = d.mainsHighPassHz
+                    adv.bassManagement.lowBandDelaySamples = d.lowBandDelaySamples
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Crossover",
@@ -1279,7 +1429,15 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Gain Rider",
                 isOn: inlineAutoHeadroomEnabled,
-                fullName: "Dynamic Gain Rider"
+                fullName: "Dynamic Gain Rider",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.autoHeadroomTargetGRDB = d.autoHeadroomTargetGRDB
+                    adv.autoHeadroomMaxReductionDB = d.autoHeadroomMaxReductionDB
+                    adv.autoHeadroomSpeed = d.autoHeadroomSpeed
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Target GR",
@@ -1332,7 +1490,17 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Clipper",
                 isOn: clipperEnabledBinding,
-                fullName: "Clipper"
+                fullName: "Clipper",
+                onReset: {
+                    var sc = store.dynamicsConfig.softClipper
+                    let d = SoftClipperConfig()
+                    sc.driveDB = d.driveDB
+                    sc.thresholdDB = d.thresholdDB
+                    sc.kneeSmooth = d.kneeSmooth
+                    sc.curveType = d.curveType
+                    sc.autoCompensateGain = d.autoCompensateGain
+                    store.updateSoftClipper(sc)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Drive",
@@ -1392,7 +1560,20 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Limiter",
                 isOn: limiterEnabledBinding,
-                fullName: "Limiter"
+                fullName: "Limiter",
+                onReset: {
+                    var c = store.dynamicsConfig.limiter
+                    let d = BrickwallLimiterConfig()
+                    c.ceilingDB = d.ceilingDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    c.lookAheadMs = d.lookAheadMs
+                    store.updateLimiter(c)
+                    var adv = store.dynamicsConfig.advanced
+                    let dAdv = AdvancedProcessingConfig()
+                    adv.limiterTruePeakGuardEnabled = dAdv.limiterTruePeakGuardEnabled
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Ceiling",
@@ -1444,7 +1625,14 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "De-Harsh",
                 isOn: inlineDeharshEnabled,
-                fullName: "De-Harsh Filter"
+                fullName: "De-Harsh Filter",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.deharshTiltAmountDB = d.deharshTiltAmountDB
+                    adv.deharshFrequencyHz = d.deharshFrequencyHz
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Tilt Amount",
@@ -1470,7 +1658,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "IR Align",
                 isOn: inlineIRAlignmentEnabled,
-                fullName: "Speaker IR Alignment"
+                fullName: "Speaker IR Alignment",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.speakerIRDelayMs = d.speakerIRDelayMs
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Fine Delay",
@@ -1488,7 +1682,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Sym. Bal.",
                 isOn: inlineSymmetryBalanceEnabled,
-                fullName: "Symmetry Balance"
+                fullName: "Symmetry Balance",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.stereoBalancePosition = d.stereoBalancePosition
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Balance",
@@ -1513,7 +1713,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Panning",
                 isOn: inlinePanningEnabled,
-                fullName: "Panning Gain Matrix"
+                fullName: "Panning Gain Matrix",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.panningCrossfeedAmount = d.panningCrossfeedAmount
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Crossfeed",
@@ -1531,7 +1737,14 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Crosstalk",
                 isOn: inlineCrosstalkEnabled,
-                fullName: "Crosstalk Cancellation Matrix"
+                fullName: "Crosstalk Cancellation Matrix",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.crosstalkCancellationAmount = d.crosstalkCancellationAmount
+                    adv.crosstalkHeadShadowHz = d.crosstalkHeadShadowHz
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Amount",
@@ -1560,7 +1773,18 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Pause Gate",
                 isOn: inlinePauseGateEnabled,
-                fullName: "Pause Gate"
+                fullName: "Pause Gate",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.pauseGatePreset = d.pauseGatePreset
+                    adv.pauseGateThresholdDBFS = d.pauseGateThresholdDBFS
+                    adv.pauseGateHoldMs = d.pauseGateHoldMs
+                    adv.pauseGateAttackMs = d.pauseGateAttackMs
+                    adv.pauseGateReleaseMs = d.pauseGateReleaseMs
+                    adv.pauseGateHysteresisDB = d.pauseGateHysteresisDB
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 HStack(spacing: 8) {
                     Text("Preset")
@@ -1707,7 +1931,8 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Hi-Res Coef",
                 isOn: inlineCoefficientDecouplingEnabled,
-                fullName: "Hi-Res Coefficient Decoupling"
+                fullName: "Hi-Res Coefficient Decoupling",
+                onReset: nil  // No user-adjustable parameters to reset
             ) {
                 HStack(spacing: 8) {
                     Text("Decoupling Active")
@@ -1723,7 +1948,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "EQ Headroom",
                 isOn: inlineEqHeadroomCompensationEnabled,
-                fullName: "EQ Headroom Compensation"
+                fullName: "EQ Headroom Compensation",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.eqHeadroomMaxAttenuationDB = d.eqHeadroomMaxAttenuationDB
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 HStack(spacing: 8) {
                     Text("Static Preamp")
@@ -1752,7 +1983,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Multi-Seat",
                 isOn: inlineMultiSeatEnabled,
-                fullName: "Multi-Seat Complex Averaging"
+                fullName: "Multi-Seat Complex Averaging",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.multiSeatCount = d.multiSeatCount
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Seat Count",
@@ -1768,7 +2005,10 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "FIR",
                 isOn: inlineConvolutionEnabled,
-                fullName: "FIR Correction"
+                fullName: "FIR Correction",
+                onReset: {
+                    store.clearConvolutionIR()
+                }
             ) {
                 if let name = store.convolutionConfig.irDisplayName {
                     Text("Loaded: \(name)")
@@ -2057,6 +2297,7 @@ struct DynamicsInlineView: View {
         label: String,
         isOn: Binding<Bool>,
         fullName: String,
+        onReset: (() -> Void)? = nil,
         @ViewBuilder settings: @escaping () -> Content
     ) -> some View {
         HStack(spacing: 4) {
@@ -2069,7 +2310,7 @@ struct DynamicsInlineView: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .fixedSize()
-            DynamicsControlSettingsButton(fullName: fullName, content: settings)
+            DynamicsControlSettingsButton(fullName: fullName, onReset: onReset, content: settings)
         }
     }
 
