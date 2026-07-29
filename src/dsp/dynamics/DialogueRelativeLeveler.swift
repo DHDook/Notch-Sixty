@@ -276,7 +276,7 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         numCh: Int,
         count: Int
     ) {
-        guard _enabled.load(ordering: .relaxed) != 0, count > 0 else { return }
+        guard _enabled.load(ordering: .relaxed) != 0, count > 0, count <= Self.maxFrameCount else { return }
 
         // Apply pending coefficient update if available
         if hasCoeffUpdate.exchange(false, ordering: .acquiringAndReleasing) {
