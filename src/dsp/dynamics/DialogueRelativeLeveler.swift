@@ -92,8 +92,8 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     nonisolated(unsafe) private var mod_b0: Float = 0.0
     nonisolated(unsafe) private var mod_b1: Float = 0.0
     nonisolated(unsafe) private var mod_b2: Float = 0.0
-    nonisolated(unsafe) private var mod_a1: Float = 0.0
-    nonisolated(unsafe) private var mod_a2: Float = 0.0
+    nonisolated(unsafe) private var mod_na1: Float = 0.0
+    nonisolated(unsafe) private var mod_na2: Float = 0.0
 
     /// Fast envelope alpha coefficient.
     nonisolated(unsafe) private var fastEnvelopeAlpha: Float = 0.0
@@ -110,15 +110,15 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
     nonisolated(unsafe) private var bp_b0: Float = 1.0
     nonisolated(unsafe) private var bp_b1: Float = 0.0
     nonisolated(unsafe) private var bp_b2: Float = 0.0
-    nonisolated(unsafe) private var bp_a1: Float = 0.0
-    nonisolated(unsafe) private var bp_a2: Float = 0.0
+    nonisolated(unsafe) private var bp_na1: Float = 0.0
+    nonisolated(unsafe) private var bp_na2: Float = 0.0
 
     /// Pending coefficients for thread-safe updates.
     nonisolated(unsafe) private var pending_bp_b0: Float = 1.0
     nonisolated(unsafe) private var pending_bp_b1: Float = 0.0
     nonisolated(unsafe) private var pending_bp_b2: Float = 0.0
-    nonisolated(unsafe) private var pending_bp_a1: Float = 0.0
-    nonisolated(unsafe) private var pending_bp_a2: Float = 0.0
+    nonisolated(unsafe) private var pending_bp_na1: Float = 0.0
+    nonisolated(unsafe) private var pending_bp_na2: Float = 0.0
 
     private let hasCoeffUpdate = ManagedAtomic<Bool>(false)
 
@@ -283,8 +283,8 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
             bp_b0 = pending_bp_b0
             bp_b1 = pending_bp_b1
             bp_b2 = pending_bp_b2
-            bp_a1 = pending_bp_a1
-            bp_a2 = pending_bp_a2
+            bp_na1 = pending_bp_na1
+            bp_na2 = pending_bp_na2
         }
 
         // Read parameters (once per block)
@@ -318,8 +318,8 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
                 let x = buf[i]
                 // Bandpass filter (DF2T biquad)
                 let y = bp_b0 * x + w1
-                w1 = bp_b1 * x + bp_a1 * y + w2
-                w2 = bp_b2 * x + bp_a2 * y
+                w1 = bp_b1 * x + bp_na1 * y + w2
+                w2 = bp_b2 * x + bp_na2 * y
                 bandScratch[i] = y
 
                 // RMS envelope (one-pole leaky integrator)
@@ -335,8 +335,8 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
                         // Modulation bandpass filter on envelope
                         let modY = mod_b0 * fastEnv + modW1
-                        modW1 = mod_b1 * fastEnv + mod_a1 * modY + modW2
-                        modW2 = mod_b2 * fastEnv + mod_a2 * modY
+                        modW1 = mod_b1 * fastEnv + mod_na1 * modY + modW2
+                        modW2 = mod_b2 * fastEnv + mod_na2 * modY
 
                         // Accumulate energy
                         modEnergyAccumulator[ch] += modY * modY
@@ -447,16 +447,18 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
 
     /// RBJ "constant skirt gain, peak gain = Q" bandpass biquad. Shared by the dialogue-band
     /// filter and the voice-gate modulation filter — one correct implementation instead of two.
-    private func computeBandpassCoefficients(centerHz: Double, q: Double, sampleRate: Double) -> (b0: Float, b1: Float, b2: Float, a1: Float, a2: Float) {
+    /// Coefficients follow this codebase's Direct Form II Transposed convention: na1/na2 are
+    /// pre-negated (-a1/a0, -a2/a0) for use in the +form recursion.
+    private func computeBandpassCoefficients(centerHz: Double, q: Double, sampleRate: Double) -> (b0: Float, b1: Float, b2: Float, na1: Float, na2: Float) {
         let w0 = 2.0 * .pi * centerHz / sampleRate
         let alpha = sin(w0) / (2.0 * max(q, 0.05))   // guard against a degenerate q
         let a0 = 1.0 + alpha
         return (
-            b0: Float(alpha / a0),
-            b1: Float(0.0),
-            b2: Float(-alpha / a0),
-            a1: Float(-2.0 * cos(w0) / a0),
-            a2: Float((1.0 - alpha) / a0)
+            b0:  Float(alpha / a0),
+            b1:  Float(0.0),
+            b2:  Float(-alpha / a0),
+            na1: Float(2.0 * cos(w0) / a0),        // = -a1/a0, pre-negated per this codebase's DF2T convention
+            na2: Float(-(1.0 - alpha) / a0)         // = -a2/a0, pre-negated per this codebase's DF2T convention
         )
     }
 
@@ -485,8 +487,8 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         pending_bp_b0 = coeffs.b0
         pending_bp_b1 = coeffs.b1
         pending_bp_b2 = coeffs.b2
-        pending_bp_a1 = coeffs.a1
-        pending_bp_a2 = coeffs.a2
+        pending_bp_na1 = coeffs.na1
+        pending_bp_na2 = coeffs.na2
 
         // Voice gate coefficients
         let modCenterHz = bitsToFloatL(_modCenterHzBits.load(ordering: .relaxed))
@@ -508,8 +510,8 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         mod_b0 = modCoeffs.b0
         mod_b1 = modCoeffs.b1
         mod_b2 = modCoeffs.b2
-        mod_a1 = modCoeffs.a1
-        mod_a2 = modCoeffs.a2
+        mod_na1 = modCoeffs.na1
+        mod_na2 = modCoeffs.na2
 
         hasCoeffUpdate.store(true, ordering: .releasing)
     }
