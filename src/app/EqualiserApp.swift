@@ -11,6 +11,13 @@ final class AppCleanupDelegate: NSObject, NSApplicationDelegate {
         self.store = store
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Notch Sixty is a tray/menu-bar utility app: closing the window (traffic lights)
+        // must never quit the app, in any interface style. The user quits explicitly via
+        // Cmd+Q, the tray's Quit button, or the Dock icon's context menu.
+        false
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if !hasVisibleWindows {
             openEqualiserWindow?()
