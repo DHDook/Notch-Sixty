@@ -4,72 +4,81 @@ import XCTest
 
 @MainActor
 final class WindowActivationControllerTests: XCTestCase {
-    func testPrepareToShowWindow_requestsRegularActivation() {
+    func testDockStyle_requestsRegularActivation() {
         let policyApplier = RecordingActivationPolicyApplier()
         let controller = WindowActivationController(policyApplier: policyApplier)
 
+        controller.setInterfaceStyle(.dock)
+
+        XCTAssertEqual(policyApplier.policies, [.regular])
+    }
+
+    func testTrayStyle_requestsAccessoryActivation() {
+        let policyApplier = RecordingActivationPolicyApplier()
+        let controller = WindowActivationController(policyApplier: policyApplier)
+
+        controller.setInterfaceStyle(.tray)
+
+        XCTAssertEqual(policyApplier.policies, [.accessory])
+    }
+
+    func testBothStyle_requestsRegularActivation() {
+        let policyApplier = RecordingActivationPolicyApplier()
+        let controller = WindowActivationController(policyApplier: policyApplier)
+
+        controller.setInterfaceStyle(.both)
+
+        XCTAssertEqual(policyApplier.policies, [.regular])
+    }
+
+    func testPrepareToShowWindow_requestsRegularUnderDockStyle() {
+        let policyApplier = RecordingActivationPolicyApplier()
+        let controller = WindowActivationController(policyApplier: policyApplier)
+
+        controller.setInterfaceStyle(.dock)
         controller.prepareToShowWindow()
 
         XCTAssertEqual(policyApplier.policies, [.regular])
     }
 
-    func testWindowBecameVisible_requestsRegularActivation() {
+    func testPrepareToShowWindow_requestsRegularUnderBothStyle() {
         let policyApplier = RecordingActivationPolicyApplier()
         let controller = WindowActivationController(policyApplier: policyApplier)
 
-        controller.windowBecameVisible(.equaliser)
+        controller.setInterfaceStyle(.both)
+        controller.prepareToShowWindow()
 
         XCTAssertEqual(policyApplier.policies, [.regular])
     }
 
-    func testWindowBecameHidden_requestsAccessoryWhenLastWindowCloses() {
+    func testPrepareToShowWindow_isNoOpUnderTrayStyle() {
         let policyApplier = RecordingActivationPolicyApplier()
         let controller = WindowActivationController(policyApplier: policyApplier)
 
-        controller.windowBecameVisible(.equaliser)
-        controller.windowBecameHidden(.equaliser)
-
-        XCTAssertEqual(policyApplier.policies, [.regular, .accessory])
-    }
-
-    func testWindowBecameHidden_keepsRegularWhenAnotherWindowIsVisible() {
-        let policyApplier = RecordingActivationPolicyApplier()
-        let controller = WindowActivationController(policyApplier: policyApplier)
-
-        controller.windowBecameVisible(.equaliser)
-        controller.windowBecameVisible(.settings)
-        controller.windowBecameHidden(.equaliser)
-
-        XCTAssertEqual(policyApplier.policies, [.regular])
-    }
-
-    func testWindowVisibilityChanges_areIdempotent() {
-        let policyApplier = RecordingActivationPolicyApplier()
-        let controller = WindowActivationController(policyApplier: policyApplier)
-
-        controller.windowBecameVisible(.equaliser)
-        controller.windowBecameVisible(.equaliser)
-        controller.windowBecameHidden(.equaliser)
-        controller.windowBecameHidden(.equaliser)
-
-        XCTAssertEqual(policyApplier.policies, [.regular, .accessory])
-    }
-
-    func testLaunchAsMenuBarApp_requestsAccessoryActivation() {
-        let policyApplier = RecordingActivationPolicyApplier()
-        let controller = WindowActivationController(policyApplier: policyApplier)
-
-        controller.launchAsMenuBarApp()
+        controller.setInterfaceStyle(.tray)
+        controller.prepareToShowWindow()
 
         XCTAssertEqual(policyApplier.policies, [.accessory])
     }
 
-    func testLaunchAsMenuBarApp_keepsRegularWhenWindowIsVisible() {
+    func testStyleSwitching_appliesNewPolicyImmediately() {
         let policyApplier = RecordingActivationPolicyApplier()
         let controller = WindowActivationController(policyApplier: policyApplier)
 
-        controller.windowBecameVisible(.equaliser)
-        controller.launchAsMenuBarApp()
+        controller.setInterfaceStyle(.dock)
+        controller.setInterfaceStyle(.tray)
+        controller.setInterfaceStyle(.both)
+
+        XCTAssertEqual(policyApplier.policies, [.regular, .accessory, .regular])
+    }
+
+    func testStyleSwitching_isIdempotent() {
+        let policyApplier = RecordingActivationPolicyApplier()
+        let controller = WindowActivationController(policyApplier: policyApplier)
+
+        controller.setInterfaceStyle(.dock)
+        controller.setInterfaceStyle(.dock)
+        controller.setInterfaceStyle(.dock)
 
         XCTAssertEqual(policyApplier.policies, [.regular])
     }

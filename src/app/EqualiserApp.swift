@@ -5,9 +5,17 @@ import SwiftUI
 @MainActor
 final class AppCleanupDelegate: NSObject, NSApplicationDelegate {
     private weak var store: EqualiserStore?
+    var openEqualiserWindow: (() -> Void)?
 
     func setStore(_ store: EqualiserStore) {
         self.store = store
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            openEqualiserWindow?()
+        }
+        return true
     }
 }
 
@@ -18,6 +26,7 @@ struct EqualiserMain: App {
     @StateObject private var store = EqualiserStore()
     @StateObject private var windowActivation = WindowActivationController()
     @NSApplicationDelegateAdaptor(AppCleanupDelegate.self) var appDelegate
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         // IMPORTANT: Do NOT access @StateObject (self.store) here.
@@ -36,10 +45,14 @@ struct EqualiserMain: App {
             EQWindowView()
                 .environmentObject(store)
                 .environmentObject(windowActivation)
+                .onAppear {
+                    bootstrapAppDelegate()
+                }
         }
         .defaultPosition(.center)
         .defaultSize(width: 1060, height: 530)
         .windowResizability(.contentMinSize)
+        .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {
             // Cmd+B: Toggle bypass
             CommandGroup(replacing: .toolbar) {
@@ -56,15 +69,15 @@ struct EqualiserMain: App {
         }
 
         // Menu bar popover (always available)
-        MenuBarExtra {
+        MenuBarExtra(isInserted: Binding(
+            get: { store.interfaceStyle != .dock },
+            set: { _ in } // presence is controlled by the picker, not by user dismissal
+        )) {
             MenuBarContentView()
                 .environmentObject(store)
                 .environmentObject(windowActivation)
                 .onAppear {
-                    windowActivation.launchAsMenuBarApp()
-                    // Wire up appDelegate reference after @StateObject is initialized.
-                    // MenuBarExtra is always visible, so this will always fire.
-                    appDelegate.setStore(store)
+                    bootstrapAppDelegate()
                 }
         } label: {
             Image(nsImage: {
@@ -82,7 +95,19 @@ struct EqualiserMain: App {
             SettingsView()
                 .environmentObject(store)
                 .environmentObject(windowActivation)
+                .onAppear {
+                    bootstrapAppDelegate()
+                }
         }
+    }
+
+    private func bootstrapAppDelegate() {
+        appDelegate.setStore(store)
+        appDelegate.openEqualiserWindow = { openWindow(id: "equaliser") }
+        store.onInterfaceStyleChanged = { [weak windowActivation] style in
+            windowActivation?.setInterfaceStyle(style)
+        }
+        windowActivation.setInterfaceStyle(store.interfaceStyle)
     }
 }
 

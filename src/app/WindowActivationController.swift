@@ -14,39 +14,29 @@ struct NSApplicationActivationPolicyApplier: ActivationPolicyApplying {
 
 @MainActor
 final class WindowActivationController: ObservableObject {
-    enum WindowRole: Hashable {
-        case equaliser
-        case settings
-    }
-
     private let policyApplier: ActivationPolicyApplying
-    private var visibleWindows: Set<WindowRole> = []
     private var currentPolicy: NSApplication.ActivationPolicy?
+    private var interfaceStyle: InterfaceStyle = .both
 
     init(policyApplier: ActivationPolicyApplying = NSApplicationActivationPolicyApplier()) {
         self.policyApplier = policyApplier
     }
 
-    func launchAsMenuBarApp() {
-        guard visibleWindows.isEmpty else { return }
-        apply(.accessory)
+    /// Called once at launch (with the restored preference) and again any time
+    /// the user changes the picker in Settings.
+    func setInterfaceStyle(_ style: InterfaceStyle) {
+        interfaceStyle = style
+        reapply()
     }
 
     func prepareToShowWindow() {
+        // Tray style must never show a Dock icon, even transiently while a window opens.
+        guard interfaceStyle != .tray else { return }
         apply(.regular)
     }
 
-    func windowBecameVisible(_ role: WindowRole) {
-        visibleWindows.insert(role)
-        apply(.regular)
-    }
-
-    func windowBecameHidden(_ role: WindowRole) {
-        visibleWindows.remove(role)
-
-        if visibleWindows.isEmpty {
-            apply(.accessory)
-        }
+    private func reapply() {
+        apply(interfaceStyle == .tray ? .accessory : .regular)
     }
 
     private func apply(_ policy: NSApplication.ActivationPolicy) {

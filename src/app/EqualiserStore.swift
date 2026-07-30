@@ -98,6 +98,18 @@ final class EqualiserStore: ObservableObject {
         }
     }
 
+    /// User preference for whether the app shows a Dock icon, a menu bar (tray) icon, or both.
+    @Published var interfaceStyle: InterfaceStyle = .both {
+        didSet {
+            onInterfaceStyleChanged?(interfaceStyle)
+        }
+    }
+
+    /// Set externally (by EqualiserMain) so the store can notify WindowActivationController
+    /// without owning a reference to it. Same pattern as `compareModeTimer.onRevert` /
+    /// `routingCoordinator.eqStager.onBandCoefficientsStaged`.
+    var onInterfaceStyleChanged: ((InterfaceStyle) -> Void)?
+
     /// Live normalised system volume gain (0.0–1.0), updated whenever the volume changes.
     /// Published so SwiftUI views (e.g. the loudness contour preview) re-render on volume change.
     @Published var liveSystemVolumeGain: Float = 1.0
@@ -753,6 +765,7 @@ final class EqualiserStore: ObservableObject {
             outputDeviceID: routingCoordinator.selectedOutputDeviceID,
             bandwidthDisplayMode: bandwidthDisplayMode.rawValue,
             appearanceMode: appearanceMode.rawValue,
+            interfaceStyle: interfaceStyle.rawValue,
             manualModeEnabled: manualModeEnabled,
             captureMode: routingCoordinator.captureMode.rawValue,
             dynamicsConfig: eqConfiguration.dynamicsConfig,
@@ -1131,6 +1144,7 @@ final class EqualiserStore: ObservableObject {
         logger.debug("Loading from snapshot: outputDeviceID=\(snapshot.outputDeviceID ?? "nil"), manualMode=\(snapshot.manualModeEnabled)")
         _bandwidthDisplayMode = Published(initialValue: BandwidthDisplayMode(rawValue: snapshot.bandwidthDisplayMode) ?? .qFactor)
         _appearanceMode = Published(initialValue: AppearanceMode(rawValue: snapshot.appearanceMode) ?? .system)
+        _interfaceStyle = Published(initialValue: InterfaceStyle(rawValue: snapshot.interfaceStyle) ?? .both)
 
         // Restore capture mode preference
         routingCoordinator.captureMode = CaptureMode(rawValue: snapshot.captureMode) ?? .sharedMemory

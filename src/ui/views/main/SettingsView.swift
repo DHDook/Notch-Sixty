@@ -65,17 +65,12 @@ struct SettingsView: View {
         }
         .frame(width: 760, height: 640)
         .onAppear {
-            windowActivation.windowBecameVisible(.settings)
-
             // Auto-select Driver tab if update required
             if let initialTab = initialTab {
                 selectedTab = initialTab
                 // Clear the flag so user doesn't get forced back on subsequent opens
                 store.clearDriverUpdateRequired()
             }
-        }
-        .onDisappear {
-            windowActivation.windowBecameHidden(.settings)
         }
     }
 }
@@ -96,6 +91,22 @@ struct DisplaySettingsTab: View {
 
     var body: some View {
         Form {
+            Section {
+                HStack {
+                    Spacer()
+                    Picker("Interface Style", selection: $store.interfaceStyle) {
+                        ForEach(InterfaceStyle.allCases, id: \.self) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Spacer()
+                }
+            } header: {
+                Text("Interface Style")
+            }
+
             Section {
                 HStack {
                     Spacer()

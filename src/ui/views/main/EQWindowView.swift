@@ -409,7 +409,6 @@ struct EQWindowView: View {
             }
         )
         .onAppear {
-            windowActivation.windowBecameVisible(.equaliser)
             store.meterStore.windowBecameVisible()
             metersEnabledUI = store.meterStore.metersEnabled
             showStateResetAlert = store.didResetStateOnLaunch
@@ -421,7 +420,6 @@ struct EQWindowView: View {
             if metersEnabledUI != value { metersEnabledUI = value }
         }
         .onDisappear {
-            windowActivation.windowBecameHidden(.equaliser)
             store.meterStore.windowBecameHidden()
         }
         .sheet(isPresented: $showDriverSheet) {
