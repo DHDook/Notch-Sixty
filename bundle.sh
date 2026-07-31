@@ -11,7 +11,7 @@ INFO_PLIST_SRC="$ROOT_DIR/src/app/Info.plist"
 ENTITLEMENTS="$ROOT_DIR/resources/Equaliser.entitlements"
 ICON_SVG="$ROOT_DIR/resources/AppIcon-light.svg"
 ICON_DARK_SVG="$ROOT_DIR/resources/AppIcon-dark.svg"
-MENUBAR_PNG="$ROOT_DIR/resources/MenuBarIcon.png"
+TRAYICON_SVG="$ROOT_DIR/resources/TrayIcon.xcassets/TrayIcon.imageset/notch_sixty_tray_icon_final_tightcrop.svg"
 ICONSET_DIR="$ROOT_DIR/.build/AppIcon.iconset"
 ICON_ICNS="$ROOT_DIR/.build/AppIcon.icns"
 ASSETS_CAR="$ROOT_DIR/.build/actool-out/Assets.car"
@@ -25,10 +25,10 @@ fi
 generate_icon() {
   local LIGHT_SVG="$ROOT_DIR/resources/AppIcon-light.svg"
   local DARK_SVG="$ROOT_DIR/resources/AppIcon-dark.svg"
-  local MENUBAR_PNG="$ROOT_DIR/resources/MenuBarIcon.png"
+  local TRAYICON_SVG="$ROOT_DIR/resources/TrayIcon.xcassets/TrayIcon.imageset/notch_sixty_tray_icon_final_tightcrop.svg"
   local APPICONSET="$ROOT_DIR/resources/AppIcon.xcassets/AppIcon.appiconset"
 
-  for f in "$LIGHT_SVG" "$DARK_SVG" "$MENUBAR_PNG"; do
+  for f in "$LIGHT_SVG" "$DARK_SVG" "$TRAYICON_SVG"; do
     if [[ ! -f "$f" ]]; then
       echo "Error: Missing icon file: $f" >&2; exit 1
     fi
@@ -120,9 +120,10 @@ build_app() {
     echo "AppIcon.icns copied to app bundle"
   fi
 
-  # Menu bar template icon at 1× and 2× — NSImage(named:"MenuBarIcon") picks these up
-  sips -z 16 16 "$MENUBAR_PNG" --out "$APP_BUNDLE/Contents/Resources/MenuBarIcon.png" >/dev/null
-  sips -z 32 32 "$MENUBAR_PNG" --out "$APP_BUNDLE/Contents/Resources/MenuBarIcon@2x.png" >/dev/null
+  # Menu bar template icon at 1× and 2× — NSImage(named:"TrayIcon") picks these up
+  # Generate from SVG at native 22:18 aspect ratio (22×18 for 1×, 44×36 for 2×)
+  rsvg-convert -w 22 -h 18 "$TRAYICON_SVG" -o "$APP_BUNDLE/Contents/Resources/TrayIcon.png"
+  rsvg-convert -w 44 -h 36 "$TRAYICON_SVG" -o "$APP_BUNDLE/Contents/Resources/TrayIcon@2x.png"
   echo "Menu bar icon generated"
 
   # Runtime-loadable full-resolution icons for Dock icon override (Part 2.2)
