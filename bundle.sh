@@ -11,7 +11,7 @@ INFO_PLIST_SRC="$ROOT_DIR/src/app/Info.plist"
 ENTITLEMENTS="$ROOT_DIR/resources/Equaliser.entitlements"
 ICON_SVG="$ROOT_DIR/resources/AppIcon-light.svg"
 ICON_DARK_SVG="$ROOT_DIR/resources/AppIcon-dark.svg"
-MENUBAR_SVG="$ROOT_DIR/resources/MenuBarIcon.svg"
+MENUBAR_PNG="$ROOT_DIR/resources/MenuBarIcon.png"
 ICONSET_DIR="$ROOT_DIR/.build/AppIcon.iconset"
 ICON_ICNS="$ROOT_DIR/.build/AppIcon.icns"
 ASSETS_CAR="$ROOT_DIR/.build/Assets.car"
@@ -25,10 +25,10 @@ fi
 generate_icon() {
   local LIGHT_SVG="$ROOT_DIR/resources/AppIcon-light.svg"
   local DARK_SVG="$ROOT_DIR/resources/AppIcon-dark.svg"
-  local MENUBAR_SVG="$ROOT_DIR/resources/MenuBarIcon.svg"
+  local MENUBAR_PNG="$ROOT_DIR/resources/MenuBarIcon.png"
   local APPICONSET="$ROOT_DIR/resources/AppIcon.xcassets/AppIcon.appiconset"
 
-  for f in "$LIGHT_SVG" "$DARK_SVG" "$MENUBAR_SVG"; do
+  for f in "$LIGHT_SVG" "$DARK_SVG" "$MENUBAR_PNG"; do
     if [[ ! -f "$f" ]]; then
       echo "Error: Missing icon file: $f" >&2; exit 1
     fi
@@ -121,10 +121,8 @@ build_app() {
   fi
 
   # Menu bar template icon at 1× and 2× — NSImage(named:"MenuBarIcon") picks these up
-  rsvg-convert -w 16 -h 16 "$ROOT_DIR/resources/MenuBarIcon.svg" \
-    -o "$APP_BUNDLE/Contents/Resources/MenuBarIcon.png"
-  rsvg-convert -w 32 -h 32 "$ROOT_DIR/resources/MenuBarIcon.svg" \
-    -o "$APP_BUNDLE/Contents/Resources/MenuBarIcon@2x.png"
+  sips -z 16 16 "$MENUBAR_PNG" --out "$APP_BUNDLE/Contents/Resources/MenuBarIcon.png" >/dev/null
+  sips -z 32 32 "$MENUBAR_PNG" --out "$APP_BUNDLE/Contents/Resources/MenuBarIcon@2x.png" >/dev/null
   echo "Menu bar icon generated"
 
   codesign --force --sign - --options runtime \
