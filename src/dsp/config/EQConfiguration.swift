@@ -57,11 +57,21 @@ struct EQBandConfiguration: Codable, Sendable {
         case slope
         case isDynamic
         case dynamicParams
+        case firKernelDisplayName
+        case firKernelLeft    // large — omitted from default encode path
+        case firKernelRight   // large — omitted from default encode path
+        case constantQ
+        case linkwitzTargetHz
     }
 
     init(frequency: Float, q: Float, gain: Float, filterType: FilterType, bypass: Bool, slope: FilterSlope = .db12,
          isDynamic: Bool = false,
-         dynamicParams: DynamicBandParams = DynamicBandParams()) {
+         dynamicParams: DynamicBandParams = DynamicBandParams(),
+         firKernelLeft: [Float]? = nil,
+         firKernelRight: [Float]? = nil,
+         firKernelDisplayName: String? = nil,
+         constantQ: Bool = false,
+         linkwitzTargetHz: Float? = nil) {
         self.frequency     = frequency
         self.q             = q
         self.gain          = gain
@@ -70,6 +80,11 @@ struct EQBandConfiguration: Codable, Sendable {
         self.slope         = slope
         self.isDynamic     = isDynamic
         self.dynamicParams = dynamicParams
+        self.firKernelLeft        = firKernelLeft
+        self.firKernelRight       = firKernelRight
+        self.firKernelDisplayName = firKernelDisplayName
+        self.constantQ            = constantQ
+        self.linkwitzTargetHz     = linkwitzTargetHz
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +116,11 @@ struct EQBandConfiguration: Codable, Sendable {
 
         isDynamic     = (try container.decodeIfPresent(Bool.self,             forKey: .isDynamic))     ?? false
         dynamicParams = (try container.decodeIfPresent(DynamicBandParams.self, forKey: .dynamicParams)) ?? DynamicBandParams()
+        firKernelDisplayName = try container.decodeIfPresent(String.self,  forKey: .firKernelDisplayName)
+        firKernelLeft        = try container.decodeIfPresent([Float].self, forKey: .firKernelLeft)
+        firKernelRight       = try container.decodeIfPresent([Float].self, forKey: .firKernelRight)
+        constantQ            = (try container.decodeIfPresent(Bool.self,   forKey: .constantQ))         ?? false
+        linkwitzTargetHz     = try container.decodeIfPresent(Float.self,   forKey: .linkwitzTargetHz)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -115,6 +135,25 @@ struct EQBandConfiguration: Codable, Sendable {
         if isDynamic {
             try container.encode(dynamicParams, forKey: .dynamicParams)
         }
+        if constantQ { try container.encode(constantQ, forKey: .constantQ) }
+        try container.encodeIfPresent(linkwitzTargetHz, forKey: .linkwitzTargetHz)
+        // Encode display name only — kernel arrays are large and excluded from the
+        // standard path. Use encodeIncludingKernels(to:) for full persistence.
+        try container.encodeIfPresent(firKernelDisplayName, forKey: .firKernelDisplayName)
+        // firKernelLeft and firKernelRight intentionally omitted here.
+    }
+
+    /// Encodes this band configuration including the FIR kernel arrays.
+    ///
+    /// Use when saving a standalone preset file that must be self-contained
+    /// (i.e. the user does not want to reload the IR from the original file).
+    /// Results in a larger preset file.
+    func encodeIncludingKernels(to encoder: Encoder) throws {
+        // Encode everything from encode(to:) plus the kernel arrays.
+        try encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(firKernelLeft,  forKey: .firKernelLeft)
+        try container.encodeIfPresent(firKernelRight, forKey: .firKernelRight)
     }
 
     var frequency: Float
@@ -128,6 +167,29 @@ struct EQBandConfiguration: Codable, Sendable {
     var isDynamic: Bool = false
     /// Dynamic envelope parameters. Ignored when `isDynamic == false`.
     var dynamicParams: DynamicBandParams = DynamicBandParams()
+
+    /// Left-channel FIR kernel samples. Non-nil only when filterType == .fir.
+    /// Not encoded in the standard band serialisation path to keep preset files small.
+    /// Use encodeIncludingKernels(to:) to persist kernel data.
+    var firKernelLeft: [Float]? = nil
+
+    /// Right-channel FIR kernel. When nil and filterType == .fir, the left kernel
+    /// is used for both channels (mono IR).
+    var firKernelRight: [Float]? = nil
+
+    /// Display name for the loaded FIR kernel (filename without extension).
+    /// Encoded in the standard path so the UI shows the name even if the kernel
+    /// is not embedded in the preset.
+    var firKernelDisplayName: String? = nil
+
+    /// When true, uses constant-Q (Orfanidis) parametric formula which preserves
+    /// bandwidth at all gain values. When false (default), uses RBJ proportional-Q.
+    /// Only applies when filterType == .parametric.
+    var constantQ: Bool = false
+
+    /// Target frequency for Linkwitz-Transform filter (fp). Only used when filterType == .linkwitzTransform.
+    /// When nil, defaults to frequency * 0.7.
+    var linkwitzTargetHz: Float? = nil
 
     /// Default parametric band configuration.
     static func parametric(frequency: Float, q: Float = EQConfiguration.defaultQ) -> EQBandConfiguration {
@@ -786,6 +848,33 @@ final class EQConfiguration: ObservableObject {
                 rightState.userEQ.bands[index].slope = slope
             }
         }
+
+        objectWillChange.send()
+    }
+
+    func updateBandConstantQ(index: Int, constantQ: Bool) {
+        guard isValidIndex(index) else { return }
+        if channelMode == .linked {
+            leftState.userEQ.bands[index].constantQ = constantQ
+            rightState.userEQ.bands[index].constantQ = constantQ
+        } else {
+            let editLeft = (channelFocus == .left || channelFocus == .mid)
+            if editLeft { leftState.userEQ.bands[index].constantQ = constantQ }
+            else         { rightState.userEQ.bands[index].constantQ = constantQ }
+        }
+        objectWillChange.send()
+    }
+
+    func updateBandLinkwitzTargetHz(index: Int, targetHz: Float?) {
+        guard isValidIndex(index) else { return }
+        if channelMode == .linked {
+            leftState.userEQ.bands[index].linkwitzTargetHz = targetHz
+            rightState.userEQ.bands[index].linkwitzTargetHz = targetHz
+        } else {
+            let editLeft = (channelFocus == .left || channelFocus == .mid)
+            if editLeft { leftState.userEQ.bands[index].linkwitzTargetHz = targetHz }
+            else         { rightState.userEQ.bands[index].linkwitzTargetHz = targetHz }
+        }
         objectWillChange.send()
     }
 
@@ -837,6 +926,57 @@ final class EQConfiguration: ObservableObject {
                 rightState.userEQ.bands[index].dynamicParams = params
             }
         }
+        objectWillChange.send()
+    }
+
+    /// Updates the FIR kernel data for a specific EQ band.
+    ///
+    /// In linked mode, the same kernels are stored on both channels (L kernel → left,
+    /// R kernel → right). In stereo / midSide mode, the kernel is stored on
+    /// the focused channel only; pass `nil` for the right kernel to share the left
+    /// kernel on both channels (mono IR).
+    func updateFIRBandKernel(
+        index: Int,
+        leftKernel: [Float]?,
+        rightKernel: [Float]?,
+        displayName: String?
+    ) {
+        guard isValidIndex(index) else { return }
+        leftState.userEQ.bands[index].firKernelLeft        = leftKernel
+        leftState.userEQ.bands[index].firKernelRight       = rightKernel
+        leftState.userEQ.bands[index].firKernelDisplayName = displayName
+        if channelMode == .linked {
+            rightState.userEQ.bands[index].firKernelLeft        = leftKernel
+            rightState.userEQ.bands[index].firKernelRight       = rightKernel
+            rightState.userEQ.bands[index].firKernelDisplayName = displayName
+        }
+        objectWillChange.send()
+    }
+}
+
+// MARK: - Room Correction Layer
+
+extension EQConfiguration {
+    /// Updates the room correction model layer on both channels.
+    /// Called by `EQCoefficientStager` after staging bands to the render pipeline (Task 6).
+    func setRoomCorrectionLayer(_ state: EQLayerState) {
+        leftState.roomCorrection  = state
+        rightState.roomCorrection = state
+        objectWillChange.send()
+    }
+
+    /// Resets the room correction model layer to passthrough on both channels.
+    func clearRoomCorrectionLayer() {
+        let cleared = EQLayerState.passthrough(label: "Room Correction")
+        leftState.roomCorrection  = cleared
+        rightState.roomCorrection = cleared
+        objectWillChange.send()
+    }
+
+    /// Updates the bypass flag on the room correction model layer without changing bands.
+    func setRoomCorrectionLayerBypass(_ bypass: Bool) {
+        leftState.roomCorrection.bypass  = bypass
+        rightState.roomCorrection.bypass = bypass
         objectWillChange.send()
     }
 }

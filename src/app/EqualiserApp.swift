@@ -5,9 +5,24 @@ import SwiftUI
 @MainActor
 final class AppCleanupDelegate: NSObject, NSApplicationDelegate {
     private weak var store: EqualiserStore?
+    var openEqualiserWindow: (() -> Void)?
 
     func setStore(_ store: EqualiserStore) {
         self.store = store
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Notch Sixty is a tray/menu-bar utility app: closing the window (traffic lights)
+        // must never quit the app, in any interface style. The user quits explicitly via
+        // Cmd+Q, the tray's Quit button, or the Dock icon's context menu.
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            openEqualiserWindow?()
+        }
+        return true
     }
 }
 
@@ -16,7 +31,9 @@ final class AppCleanupDelegate: NSObject, NSApplicationDelegate {
 @main
 struct EqualiserMain: App {
     @StateObject private var store = EqualiserStore()
+    @StateObject private var windowActivation = WindowActivationController()
     @NSApplicationDelegateAdaptor(AppCleanupDelegate.self) var appDelegate
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         // IMPORTANT: Do NOT access @StateObject (self.store) here.
@@ -24,11 +41,6 @@ struct EqualiserMain: App {
         // Accessing it in init() causes SwiftUI to create two instances.
         // Wire appDelegate.setStore(store) in body using .onAppear instead.
 
-        // Hide dock icon permanently - this is a menu bar app
-        // Defer until NSApp is available (it's nil during init)
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.accessory)
-        }
         // Note: Microphone permission is NOT requested here.
         // It's only requested when needed (HAL input capture mode or manual mode).
         // Shared memory capture (default) does NOT require microphone permission.
@@ -39,10 +51,15 @@ struct EqualiserMain: App {
         Window("Notch Sixty", id: "equaliser") {
             EQWindowView()
                 .environmentObject(store)
+                .environmentObject(windowActivation)
+                .onAppear {
+                    bootstrapAppDelegate()
+                }
         }
         .defaultPosition(.center)
         .defaultSize(width: 1060, height: 530)
         .windowResizability(.contentMinSize)
+        .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {
             // Cmd+B: Toggle bypass
             CommandGroup(replacing: .toolbar) {
@@ -59,13 +76,15 @@ struct EqualiserMain: App {
         }
 
         // Menu bar popover (always available)
-        MenuBarExtra {
+        MenuBarExtra(isInserted: Binding(
+            get: { store.interfaceStyle != .dock },
+            set: { _ in } // presence is controlled by the picker, not by user dismissal
+        )) {
             MenuBarContentView()
                 .environmentObject(store)
+                .environmentObject(windowActivation)
                 .onAppear {
-                    // Wire up appDelegate reference after @StateObject is initialized.
-                    // MenuBarExtra is always visible, so this will always fire.
-                    appDelegate.setStore(store)
+                    bootstrapAppDelegate()
                 }
         } label: {
             Image(nsImage: {
@@ -82,7 +101,20 @@ struct EqualiserMain: App {
         Settings {
             SettingsView()
                 .environmentObject(store)
+                .environmentObject(windowActivation)
+                .onAppear {
+                    bootstrapAppDelegate()
+                }
         }
+    }
+
+    private func bootstrapAppDelegate() {
+        appDelegate.setStore(store)
+        appDelegate.openEqualiserWindow = { openWindow(id: "equaliser") }
+        store.onInterfaceStyleChanged = { [weak windowActivation] style in
+            windowActivation?.setInterfaceStyle(style)
+        }
+        windowActivation.setInterfaceStyle(store.interfaceStyle)
     }
 }
 

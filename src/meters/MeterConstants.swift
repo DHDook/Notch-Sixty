@@ -26,9 +26,9 @@ enum MeterConstants {
     // MARK: - Display Range
     
     /// The dB range for meter display.
-    /// -36 dB to 0 dB is a common range for audio meters.
+    /// -60 dB to 0 dB is a common range for professional audio meters.
     /// Values outside this range are clamped to the range boundaries.
-    static let meterRange: ClosedRange<Float> = -36...0
+    static let meterRange: ClosedRange<Float> = -60...0
     
     // MARK: - Timing
     
@@ -62,12 +62,6 @@ enum MeterConstants {
     /// Controls how fast the held peak drops after hold duration.
     static let peakHoldDecayPerTick: Float = 0.02
     
-    // MARK: - Display Gamma
-    
-    /// Gamma value for perceptual scaling of meter display.
-    /// Values < 1.0 emphasize lower levels, making quiet sounds more visible.
-    /// This provides a more natural perceptual response from -60dB to 0dB.
-    static let gamma: Float = 0.5
     
     // MARK: - Channel Limits
     
@@ -86,12 +80,13 @@ enum MeterConstants {
     
     /// Standard dB tick values for meter scale marks.
     /// These are the labeled positions on the meter scale.
-    static let standardTickValues: [Float] = [0, -6, -12, -18, -24, -30, -36]
+    /// Uses industry-standard 3/6 dB increments near the top, doubling from there.
+    static let standardTickValues: [Float] = [0, -3, -6, -12, -18, -24, -30, -36, -48, -60]
     
     // MARK: - Normalization
     
     /// Converts a dB value to a normalized position (0-1) for meter display.
-    /// Uses gamma correction for perceptual uniformity.
+    /// Linear in dB (not gamma-corrected) — matches conventional PPM meter behavior.
     ///
     /// - Parameter db: The dBFS value to normalize.
     /// - Returns: Normalized value 0-1 where 0 is minimum and 1 is maximum.
@@ -99,10 +94,6 @@ enum MeterConstants {
     static func normalizedPosition(for db: Float) -> Float {
         if db <= meterRange.lowerBound { return 0 }
         if db >= meterRange.upperBound { return 1 }
-        let amp = AudioMath.dbToLinear(db)
-        let minAmp = AudioMath.dbToLinear(meterRange.lowerBound)
-        let maxAmp = AudioMath.dbToLinear(meterRange.upperBound)
-        let normalizedAmp = (amp - minAmp) / (maxAmp - minAmp)
-        return powf(normalizedAmp, gamma)
+        return (db - meterRange.lowerBound) / (meterRange.upperBound - meterRange.lowerBound)
     }
 }

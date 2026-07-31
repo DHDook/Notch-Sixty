@@ -80,6 +80,25 @@ final class EQChain {
 
     // MARK: - Main Thread API
 
+    /// Returns `sections` unchanged if every coefficient in every section is finite;
+    /// otherwise returns a single identity (passthrough) section. Defense-in-depth
+    /// backstop — coefficient calculation should already guarantee finite values (see
+    /// BiquadMath's internal guards), but this prevents any malformed filter from ever
+    /// reaching the live audio-thread filter state regardless of how it was produced.
+    private func sanitizedSections(_ sections: [BiquadCoefficients]) -> [BiquadCoefficients] {
+        for section in sections {
+            guard section.b0.isFinite, section.b1.isFinite, section.b2.isFinite,
+                  section.a1.isFinite, section.a2.isFinite
+            else {
+                #if DEBUG
+                print("EQChain: rejected non-finite biquad coefficients, substituting identity")
+                #endif
+                return [.identity]
+            }
+        }
+        return sections
+    }
+
     /// Stages new coefficients for a single band (called from main thread).
     ///
     /// This is the incremental update path — used for slider drags and single-parameter changes.
@@ -92,9 +111,12 @@ final class EQChain {
     ///   - needsDoublePrecision: Whether this band requires double-precision processing.
     func stageBandUpdate(index: Int, sections: [BiquadCoefficients], bypass: Bool, needsDoublePrecision: Bool = false) {
         guard index >= 0 && index < Self.maxBandCount else { return }
-        pendingCoefficients[index] = sections
+        pendingCoefficients[index] = sanitizedSections(sections)
         pendingBypassFlags[index] = bypass
         filters[index].useDoublePrecision = needsDoublePrecision
+        // Build the vDSP setup here, on the main thread. The audio thread only does the
+        // pointer swap (BiquadFilter.applyPendingSetup(), called from EQChain.process()).
+        filters[index].stageCoefficients(pendingCoefficients[index], resetState: false)
         hasPendingUpdate.store(true, ordering: .releasing)
     }
 
@@ -116,9 +138,13 @@ final class EQChain {
         needsDoublePrecision: [Bool] = [Bool](repeating: false, count: maxBandCount)
     ) {
         for i in 0..<Self.maxBandCount {
-            pendingCoefficients[i] = i < sections.count ? sections[i] : [.identity]
+            let raw = i < sections.count ? sections[i] : [.identity]
+            pendingCoefficients[i] = sanitizedSections(raw)
             pendingBypassFlags[i] = i < bypassFlags.count ? bypassFlags[i] : false
             filters[i].useDoublePrecision = i < needsDoublePrecision.count ? needsDoublePrecision[i] : false
+            // Build the vDSP setup here, on the main thread — same reasoning as stageBandUpdate.
+            // Full updates always reset delay state (clean start for preset loads / rate changes).
+            filters[i].stageCoefficients(pendingCoefficients[i], resetState: true)
         }
         pendingActiveBandCount = min(activeBandCount, Self.maxBandCount)
         pendingLayerBypass = layerBypass
@@ -137,12 +163,14 @@ final class EQChain {
     /// Applies any pending coefficient updates.
     /// Call once per render cycle before processing.
     ///
-    /// Only rebuilds vDSP setups for bands whose sections actually changed.
+    /// vDSP setups were already built on the main thread (in `stageBandUpdate` /
+    /// `stageFullUpdate`). This only updates plain-value bookkeeping — no allocation,
+    /// no vDSP calls. The actual pointer swap happens in `process()` via
+    /// `BiquadFilter.applyPendingSetup()`.
     @inline(__always)
     func applyPendingUpdates() {
         guard hasPendingUpdate.exchange(false, ordering: .acquiringAndReleasing) else { return }
 
-        let fullReset = pendingFullReset
         pendingFullReset = false
 
         activeBandCount = pendingActiveBandCount
@@ -150,14 +178,7 @@ final class EQChain {
 
         for i in 0..<Self.maxBandCount {
             bypassFlags[i] = pendingBypassFlags[i]
-
-            let pending = pendingCoefficients[i]
-            if pending != activeCoefficients[i] {
-                activeCoefficients[i] = pending
-                filters[i].stageCoefficients(pending, resetState: fullReset)
-            } else if fullReset {
-                filters[i].stageCoefficients(pending, resetState: true)
-            }
+            activeCoefficients[i] = pendingCoefficients[i]
         }
     }
 

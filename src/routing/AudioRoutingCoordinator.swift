@@ -25,7 +25,10 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     /// Output channel matrix configuration for multi-device routing
     @Published var outputChannelMatrix: OutputChannelMatrixConfig = .default {
-        didSet { saveOutputChannelMatrix() }
+        didSet {
+            saveOutputChannelMatrix()
+            pipelineManager.renderPipeline?.applyOutputChannelMatrix(outputChannelMatrix)
+        }
     }
 
     /// Multi-device synchronisation mode
@@ -131,8 +134,8 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     // MARK: - Listening RTA (Mic Capture)
 
-    /// HAL manager for listening RTA mic capture.
-    private var listeningRTAHALManager: HALIOManager?
+    /// Mic capture session for listening RTA.
+    private var listeningRTAMicSession: MicCaptureSession?
 
     /// Updates listening RTA mic capture based on enabled state and mic device selection.
     private func updateListeningRTACapture(enabled: Bool, micDeviceID: String?) {
@@ -150,7 +153,7 @@ final class AudioRoutingCoordinator: ObservableObject {
         }
 
         // Start capture if not already running
-        if listeningRTAHALManager == nil {
+        if listeningRTAMicSession == nil {
             startListeningRTACapture(deviceID: micDeviceID)
         }
     }
@@ -159,51 +162,26 @@ final class AudioRoutingCoordinator: ObservableObject {
     private func startListeningRTACapture(deviceID: AudioDeviceID) {
         logger.info("Starting listening RTA capture for device \(deviceID)")
 
-        let manager = HALIOManager(mode: .inputOnly)
-        switch manager.configure(deviceID: deviceID) {
-        case .success:
-            listeningRTAHALManager = manager
+        let sr = pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let session = MicCaptureSession(deviceID: deviceID, sampleRate: sr, channelCount: 1)
 
-            // Initialize the audio unit
-            if case .failure(let error) = manager.initialize() {
-                logger.error("Listening RTA: failed to initialize audio unit: \(error.localizedDescription)")
-                listeningRTAHALManager = nil
-                return
-            }
-
-            // Set up input callback to write to RTA analyzer's input ring buffer
-            // Note: This requires a C callback function which is complex to implement in Swift
-            // For now, we'll start the audio unit without the callback
-            // The callback wiring would require:
-            // 1. Creating a callback context structure with the ring buffer reference
-            // 2. Implementing a C-compatible AURenderCallback function
-            // 3. Registering it with setInputCallback
-            // 4. Managing the callback lifecycle
-
-            if case .failure(let error) = manager.start() {
-                logger.error("Listening RTA: failed to start audio unit: \(error.localizedDescription)")
-                listeningRTAHALManager = nil
-                return
-            }
-
-            logger.info("Listening RTA capture started (callback wiring not yet implemented)")
-        case .failure(let error):
-            logger.error("Listening RTA capture failed: \(error.localizedDescription)")
-            listeningRTAHALManager = nil
+        session.start { [weak self] audioBuffer in
+            guard let self = self,
+                  let samples = audioBuffer[0] else { return }
+            // Deliver to RTA analyser ring buffer — use the existing tap point
+            self.pipelineManager.renderPipeline?.deliverMicSamplesToRTA(samples)
         }
+
+        listeningRTAMicSession = session
+        logger.info("Listening RTA capture started via MicCaptureSession")
     }
 
     /// Stops mic capture for listening RTA.
     private func stopListeningRTACapture() {
-        guard listeningRTAHALManager != nil else { return }
+        guard listeningRTAMicSession != nil else { return }
         logger.info("Stopping listening RTA capture")
-
-        // Clear input callback if set
-        // listeningRTAHALManager?.clearInputCallback()
-
-        // Stop and dispose
-        listeningRTAHALManager?.stop()
-        listeningRTAHALManager = nil
+        listeningRTAMicSession?.stop()
+        listeningRTAMicSession = nil
     }
 
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "AudioRoutingCoordinator")
@@ -661,6 +639,12 @@ final class AudioRoutingCoordinator: ObservableObject {
             // Update sample rate for coefficient calculations
             eqStager.setCurrentSampleRate(sampleRate)
 
+            // Push the current output channel matrix into the freshly started pipeline.
+            // The didSet only fires on changes; at startup we must push explicitly.
+            if outputChannelMatrix.isEnabled {
+                pipelineManager.renderPipeline?.applyOutputChannelMatrix(outputChannelMatrix)
+            }
+
         case .configurationFailed(let error):
             routingStatus = .error("Configuration failed: \(error)")
             logger.error("Pipeline configuration failed: \(error)")
@@ -765,6 +749,9 @@ final class AudioRoutingCoordinator: ObservableObject {
         if granted {
             deviceProvider.enumerateInputDevices()
             captureMode = .halInput
+            if !manualModeEnabled && routingStatus != .idle {
+                reconfigureRouting()
+            }
             logger.info("Microphone permission granted, switched to HAL capture")
         } else {
             logger.warning("Microphone permission denied, staying with shared memory capture")
@@ -1018,8 +1005,22 @@ final class AudioRoutingCoordinator: ObservableObject {
 
             self.logger.info("Output device sample rate changed to \(newRate) Hz, re-syncing driver")
 
-            // Sync driver to new rate
-            if let setRate = driverAccess.setDriverSampleRate(matching: newRate) {
+            // Validate rate against device's supported rates
+            let syncRate: Float64
+            if let availableRates = self.sampleRateService.getAvailableSampleRates(deviceID: outputDeviceID) {
+                if self.rateIsSupported(newRate, in: availableRates) {
+                    syncRate = newRate
+                } else {
+                    let adjusted = self.closestRate(to: newRate, in: availableRates)
+                    self.logger.warning("Output device doesn't support \(newRate) Hz after change, using \(adjusted) Hz")
+                    syncRate = adjusted
+                }
+            } else {
+                syncRate = newRate
+            }
+
+            // Sync driver to validated rate
+            if let setRate = driverAccess.setDriverSampleRate(matching: syncRate) {
                 self.logger.info("Driver re-synced to \(setRate) Hz")
 
                 // Reconfigure pipeline after rate change settles
@@ -1028,6 +1029,18 @@ final class AudioRoutingCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Sample Rate Validation Helpers
+
+    /// Checks whether a sample rate is in the list of available rates.
+    private func rateIsSupported(_ rate: Float64, in availableRates: [Float64]) -> Bool {
+        return availableRates.contains { abs($0 - rate) < 0.1 }
+    }
+
+    /// Returns the closest available sample rate to the requested rate.
+    private func closestRate(to requestedRate: Float64, in availableRates: [Float64]) -> Float64 {
+        return availableRates.min(by: { abs($0 - requestedRate) < abs($1 - requestedRate) }) ?? requestedRate
     }
 
     private func setupVolumeListener(for outputDeviceID: AudioDeviceID) {

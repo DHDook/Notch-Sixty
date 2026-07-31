@@ -33,6 +33,13 @@ final class MeterStore: ObservableObject {
         }
     }
 
+    /// Per-visualization enable/disable flags
+    @Published var rtaEnabled: Bool = true
+    @Published var goniometerEnabled: Bool = true
+    @Published var analyticsMetersEnabled: Bool = true
+    @Published var gainStructureEnabled: Bool = true
+    @Published var levelMetersEnabled: Bool = true
+
     // MARK: - Per-Output Channel Metering (Part 2 Task AG)
 
     /// Per-output channel level data (polled at MeterStore's standard 30 Hz rate)
@@ -70,9 +77,19 @@ final class MeterStore: ObservableObject {
     }
     
     // MARK: - Initialization
-    
-    init(metersEnabled: Bool = true) {
+
+    init(metersEnabled: Bool = true,
+         rtaEnabled: Bool = true,
+         goniometerEnabled: Bool = true,
+         analyticsMetersEnabled: Bool = true,
+         gainStructureEnabled: Bool = true,
+         levelMetersEnabled: Bool = true) {
         self.metersEnabled = metersEnabled
+        self.rtaEnabled = rtaEnabled
+        self.goniometerEnabled = goniometerEnabled
+        self.analyticsMetersEnabled = analyticsMetersEnabled
+        self.gainStructureEnabled = gainStructureEnabled
+        self.levelMetersEnabled = levelMetersEnabled
     }
     
     // MARK: - Observer Registration
@@ -185,8 +202,8 @@ final class MeterStore: ObservableObject {
     }
     
     // MARK: - Update Cycle
-    
-    private func refreshMeterSnapshot() {
+
+    func refreshMeterSnapshot() {
         guard metersEnabled else {
             notifyAllObserversSilent()
             return
@@ -222,60 +239,62 @@ final class MeterStore: ObservableObject {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        // Process each meter type
-        let interval = MeterConstants.meterInterval
-        
-        // Input Peak - Left
-        updateMeter(
-            type: .inputPeakLeft,
-            dbValue: snapshot.inputDB.indices.contains(0) ? snapshot.inputDB[0] : MeterConstants.meterRange.lowerBound,
-            interval: interval
-        )
-        
-        // Input Peak - Right
-        updateMeter(
-            type: .inputPeakRight,
-            dbValue: snapshot.inputDB.indices.contains(1) ? snapshot.inputDB[1] : MeterConstants.meterRange.lowerBound,
-            interval: interval
-        )
-        
-        // Output Peak - Left
-        updateMeter(
-            type: .outputPeakLeft,
-            dbValue: snapshot.outputDB.indices.contains(0) ? snapshot.outputDB[0] : MeterConstants.meterRange.lowerBound,
-            interval: interval
-        )
-        
-        // Output Peak - Right
-        updateMeter(
-            type: .outputPeakRight,
-            dbValue: snapshot.outputDB.indices.contains(1) ? snapshot.outputDB[1] : MeterConstants.meterRange.lowerBound,
-            interval: interval
-        )
-        
-        // Input RMS - Left
-        updateRMSMeter(
-            type: .inputRMSLeft,
-            dbValue: snapshot.inputRmsDB.indices.contains(0) ? snapshot.inputRmsDB[0] : MeterConstants.meterRange.lowerBound
-        )
-        
-        // Input RMS - Right
-        updateRMSMeter(
-            type: .inputRMSRight,
-            dbValue: snapshot.inputRmsDB.indices.contains(1) ? snapshot.inputRmsDB[1] : MeterConstants.meterRange.lowerBound
-        )
-        
-        // Output RMS - Left
-        updateRMSMeter(
-            type: .outputRMSLeft,
-            dbValue: snapshot.outputRmsDB.indices.contains(0) ? snapshot.outputRmsDB[0] : MeterConstants.meterRange.lowerBound
-        )
-        
-        // Output RMS - Right
-        updateRMSMeter(
-            type: .outputRMSRight,
-            dbValue: snapshot.outputRmsDB.indices.contains(1) ? snapshot.outputRmsDB[1] : MeterConstants.meterRange.lowerBound
-        )
+        // Process each meter type (shared by Level Meters and Analytics)
+        if levelMetersEnabled || analyticsMetersEnabled {
+            let interval = MeterConstants.meterInterval
+
+            // Input Peak - Left
+            updateMeter(
+                type: .inputPeakLeft,
+                dbValue: snapshot.inputDB.indices.contains(0) ? snapshot.inputDB[0] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Input Peak - Right
+            updateMeter(
+                type: .inputPeakRight,
+                dbValue: snapshot.inputDB.indices.contains(1) ? snapshot.inputDB[1] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Output Peak - Left
+            updateMeter(
+                type: .outputPeakLeft,
+                dbValue: snapshot.outputDB.indices.contains(0) ? snapshot.outputDB[0] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Output Peak - Right
+            updateMeter(
+                type: .outputPeakRight,
+                dbValue: snapshot.outputDB.indices.contains(1) ? snapshot.outputDB[1] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Input RMS - Left
+            updateRMSMeter(
+                type: .inputRMSLeft,
+                dbValue: snapshot.inputRmsDB.indices.contains(0) ? snapshot.inputRmsDB[0] : MeterConstants.meterRange.lowerBound
+            )
+
+            // Input RMS - Right
+            updateRMSMeter(
+                type: .inputRMSRight,
+                dbValue: snapshot.inputRmsDB.indices.contains(1) ? snapshot.inputRmsDB[1] : MeterConstants.meterRange.lowerBound
+            )
+
+            // Output RMS - Left
+            updateRMSMeter(
+                type: .outputRMSLeft,
+                dbValue: snapshot.outputRmsDB.indices.contains(0) ? snapshot.outputRmsDB[0] : MeterConstants.meterRange.lowerBound
+            )
+
+            // Output RMS - Right
+            updateRMSMeter(
+                type: .outputRMSRight,
+                dbValue: snapshot.outputRmsDB.indices.contains(1) ? snapshot.outputRmsDB[1] : MeterConstants.meterRange.lowerBound
+            )
+        }
 
         // MARK: - Per-Output Channel Metering (Part 2 Task AG)
         let outputChannelMeters = pipeline.currentOutputChannelMeters()

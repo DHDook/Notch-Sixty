@@ -38,7 +38,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // Dynamic EQ and Sub-EQ state buffer sizes
     private static let maxDynamicEQStateFloats: Int = DynamicEQConfig.maxDynamicEQBands * 5  // 5 coeffs per band
-    private static let maxDynamicEQParamsFloats: Int = DynamicEQConfig.maxDynamicEQBands * 9  // 9 params per band (thresholdDB, ratio, attackMs, releaseMs, rangeDB, direction, boostThresholdDB, boostRatio, maxBoostDB)
+    private static let maxDynamicEQParamsFloats: Int = DynamicEQConfig.maxDynamicEQBands * 11  // 11 params: thresholdDB, ratio, attackMs, releaseMs, rangeDB, direction, boostThresholdDB, boostRatio, maxBoostDB, detectorMode, rmsWindowMs
     private static let maxSubEQStateFloats: Int = BassManagementConfig.maxSubEQBands * 5  // 5 coeffs per band
 
     // MARK: - Audio-Thread State
@@ -48,6 +48,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Current sample rate. Written by the main thread before audio starts (or on
     /// quiescent reconfigure). Read only on the audio thread during processing.
     nonisolated(unsafe) var storedSampleRate: Double
+    /// Mirrors DynamicsConfig.advanced.coefficientDecouplingEnabled at the time of the
+    /// last applyConfig() call. Used by stageBassManagementCrossover() and
+    /// stageMainsHighPassCrossover() to build decoupled coefficients at high sample rates.
+    /// Written from the main thread before staging; read in the staging functions on the
+    /// main thread. Not accessed from the audio thread.
+    nonisolated(unsafe) var storedDecouplingEnabled: Bool = true
     /// Maximum frame count for per-callback scratch buffers.
     nonisolated(unsafe) var storedMaxFrameCount: Int = 4096
     /// Effective sample rate for clipper/limiter (accounts for oversampling).
@@ -79,16 +85,24 @@ final class DynamicsProcessor: @unchecked Sendable {
     nonisolated(unsafe) var mbGainLow: Float  = 1.0
     nonisolated(unsafe) var mbGainMid: Float  = 1.0
     nonisolated(unsafe) var mbGainHigh: Float = 1.0
-    /// Precomputed sidechain HPF coefficients (b0, b1, b2, na1, na2). Updated in applyConfig().
-    nonisolated(unsafe) var mbSidechainHPFCoeffs: (Float, Float, Float, Float, Float) = (1.0, 0.0, 0.0, 0.0, 0.0)
-    /// Sidechain HPF filter state per channel [chIdx * 2 for w1, chIdx * 2 + 1 for w2].
-    nonisolated(unsafe) var mbSidechainHPFState: [Float]
+    /// Precomputed sidechain HPF coefficients per band (b0, b1, b2, na1, na2). Updated in applyConfig().
+    nonisolated(unsafe) var mbSidechainHPFCoeffsLow:  (Float, Float, Float, Float, Float) = (1.0, 0.0, 0.0, 0.0, 0.0)
+    nonisolated(unsafe) var mbSidechainHPFCoeffsMid:  (Float, Float, Float, Float, Float) = (1.0, 0.0, 0.0, 0.0, 0.0)
+    nonisolated(unsafe) var mbSidechainHPFCoeffsHigh: (Float, Float, Float, Float, Float) = (1.0, 0.0, 0.0, 0.0, 0.0)
+    /// Sidechain HPF filter state per channel per band [chIdx * 2] (w1, w2).
+    nonisolated(unsafe) var mbSidechainHPFStateLow:  [Float]
+    nonisolated(unsafe) var mbSidechainHPFStateMid:  [Float]
+    nonisolated(unsafe) var mbSidechainHPFStateHigh: [Float]
     /// Pre-allocated per-band temp buffers [bandIdx 0-2][chIdx].
     private let mbBandBufs: [[UnsafeMutablePointer<Float>]]
 
     // ── Compressor ────────────────────────────────────────────────────────
     /// Smoothed gain-reduction dB (≤ 0). Audio thread only.
     nonisolated(unsafe) var compEnvDB: Float = 0.0
+    /// Short-term RMS power accumulator for program-dependent release.
+    nonisolated(unsafe) private var compPDRRMSState: Float = 0.0
+    /// Previous short-term RMS (one callback ago) for trend detection.
+    nonisolated(unsafe) private var compPDRPrevRMS: Float = 0.0
 
     // ── Expander ──────────────────────────────────────────────────────────
     /// Smoothed gain-reduction dB (≤ 0). Audio thread only.
@@ -106,6 +120,17 @@ final class DynamicsProcessor: @unchecked Sendable {
     // ── Stereo Widener + LUFS ─────────────────────────────────────────────
     let stereoWidener:  StereoWidener
     let lufsProcessor:  LoudnessMatchProcessor
+    let dialogueLeveler: DialogueRelativeLeveler
+
+    /// Active crossover engine — splits the fully-processed mains signal into up to
+    /// 3 bands per channel for bi-amp/tri-amp speaker systems.
+    /// Nil when `activeCrossover.isEnabled` is false (zero CPU cost).
+    nonisolated(unsafe) var activeCrossoverEngine: ActiveCrossoverEngine?
+
+    /// Tracks the last-applied active crossover config for change detection.
+    private var lastActiveCrossoverConfig: ActiveCrossoverConfig = .default
+    /// Sample rate at which active crossover coefficients were last staged.
+    private var lastActiveCrossoverSampleRate: Double = 0
 
     // ── Look-ahead limiter (extracted from inline implementation) ─────────────
     private let mainLimiter: LookAheadLimiter
@@ -124,6 +149,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Crest factor: running peak and RMS power envelopes.
     nonisolated(unsafe) var crestPeakEnv:   Float = 0.0
     nonisolated(unsafe) var crestRmsEnv:    Float = 0.0
+    /// Phase correlation: exponentially-decayed L/R power and cross-power accumulators
+    /// (≈300 ms time constant), plus the smoothed output coefficient (≈100 ms time constant).
+    nonisolated(unsafe) var corrAccLL:      Double = 0.0
+    nonisolated(unsafe) var corrAccRR:      Double = 0.0
+    nonisolated(unsafe) var corrAccLR:      Double = 0.0
+    nonisolated(unsafe) var corrSmoothed:   Float  = 0.0
     /// Right-channel time-delay circular buffer; one pointer per channel.
     private let timeDelayBufs: [UnsafeMutablePointer<Float>]
     private static let maxDelaySamples: Int = 8192
@@ -221,14 +252,31 @@ final class DynamicsProcessor: @unchecked Sendable {
     private var lastBassCrossoverType: CrossoverType = .linkwitzRiley
     /// Last applied mains high-pass frequency (for change detection).
     private var lastMainsHighPassHz: Float = 80.0
+    /// Sample rate at which bass management crossover coefficients were last staged.
+    /// Used to detect sample rate changes that require re-staging.
+    nonisolated(unsafe) var lastBassCrossoverSampleRate: Double = 0
+    /// Sample rate at which mains high-pass crossover coefficients were last staged.
+    nonisolated(unsafe) var lastMainsHighPassSampleRate: Double = 0
     /// Last applied infrasonic filter config (for change detection).
     private var previousInfrasonicFilter: InfrasonicFilterConfig?
+    /// Last applied FIR config (for change detection).
+    private var previousFIRConfig: FIRImpulseResponseConfig?
+    /// Last applied Dynamic EQ config (for change detection).
+    private var previousDynamicEQConfig: DynamicEQConfig?
+    /// Last sample rate used for Dynamic EQ (for change detection).
+    private var previousDynamicEQSampleRate: Double = 0.0
+    /// Last applied Sub EQ bands (for change detection).
+    private var previousSubEQBands: [SubEQBand]?
+    /// Last sample rate used for Sub EQ (for change detection).
+    private var previousSubEQSampleRate: Double = 0.0
     /// Bass Management enabled flag (atomic).
     private let _bassManagementEnabled: ManagedAtomic<Int32>
     /// Asymmetric crossover enabled flag (atomic).
     private let _asymmetricCrossoverEnabled: ManagedAtomic<Int32>
     /// Dynamic EQ enabled flag (atomic).
     private let _dynamicEQEnabled: ManagedAtomic<Int32>
+    /// Dialogue-Relative Leveler enabled flag (atomic).
+    private let _dialogueLevelerEnabled: ManagedAtomic<Int32>
     /// Bass Management crossover frequency in Hz (atomic, stored as float bits).
     private let _bassManagementCrossoverHzBits: ManagedAtomic<Int32>
     /// Bass Management slope (atomic, stored as raw Int32).
@@ -267,6 +315,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     // Dynamic EQ — runs on full-band signal before other processing
     nonisolated(unsafe) var dynamicEQFilterState: [Float]  // 2 × maxDynamicEQBands state vars (w1, w2 per band)
     nonisolated(unsafe) var dynamicEQEnvelopeState: [Float]  // maxDynamicEQBands envelope follower state
+    /// Per-channel, per-band RMS power accumulator for the RMS detector mode.
+    /// Only used when detectorMode == .rms; always 0 in peak mode.
+    nonisolated(unsafe) var dynamicEQRMSState: [Float]
     nonisolated(unsafe) var dynamicEQGainReductionDB: [Float]  // maxDynamicEQBands current GR in dB
     // Cached per-callback attack/release coefficients for Dynamic EQ (pre-allocated buffers)
     private let dynamicEQAttackCoeffsBuf: UnsafeMutablePointer<Float>  // maxBands
@@ -300,7 +351,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     // FIR Impulse Response — runs on full-band signal
     // Uses ConvolutionEngine for FFT-based partitioned convolution
-    private let firConvolutionEngine: ConvolutionEngine
+    let firConvolutionEngine: ConvolutionEngine
     private let _firEnabled: ManagedAtomic<Int32>
 
     // Speaker IR alignment per-channel ring buffers (same pattern as timeDelayBufs)
@@ -351,8 +402,14 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _mbKneeLowDBBits:     ManagedAtomic<Int32>
     private let _mbKneeMidDBBits:     ManagedAtomic<Int32>
     private let _mbKneeHighDBBits:    ManagedAtomic<Int32>
-    // NEW — sidechain HPF frequency (applied to all three bands)
-    private let _mbSidechainHPFHzBits: ManagedAtomic<Int32>
+    // NEW — sidechain HPF frequency (per band)
+    private let _mbSidechainHPFLowHzBits:  ManagedAtomic<Int32>
+    private let _mbSidechainHPFMidHzBits:  ManagedAtomic<Int32>
+    private let _mbSidechainHPFHighHzBits: ManagedAtomic<Int32>
+    // NEW — per-band makeup gain (linear)
+    private let _mbMakeupLowBits:  ManagedAtomic<Int32>
+    private let _mbMakeupMidBits:  ManagedAtomic<Int32>
+    private let _mbMakeupHighBits: ManagedAtomic<Int32>
 
     // Compressor
     private let _compEnabled:        ManagedAtomic<Int32>
@@ -367,6 +424,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _compProgramDependentRelease: ManagedAtomic<Int32>
     /// Sidechain high-pass filter frequency in Hz.
     private let _compSidechainHighPassBits: ManagedAtomic<Int32>
+    /// Compressor topology: 0 = feedForward, 1 = feedBack.
+    private let _compTopologyBits: ManagedAtomic<Int32>
     /// Per-channel sidechain high-pass filter state for the compressor.
     /// Layout: [ch * 2 + 0] = w1,  [ch * 2 + 1] = w2.
     nonisolated(unsafe) private var compSidechainHPState: [Float]
@@ -379,6 +438,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _expThreshBits: ManagedAtomic<Int32>       // dB
     private let _expRatioBits:  ManagedAtomic<Int32>       // expansion factor
     private let _expRangeDBBits: ManagedAtomic<Int32>      // dB ceiling (negative)
+    private let _expAttackMsBits:  ManagedAtomic<Int32>    // attack ms (float bits)
+    private let _expReleaseMsBits: ManagedAtomic<Int32>    // release ms (float bits)
 
     // Soft clipper
     private let _softClipperEnabled:   ManagedAtomic<Int32>
@@ -416,6 +477,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _dcOffsetEnabled:        ManagedAtomic<Int32>
     private let _dialogueGateEnabled:    ManagedAtomic<Int32>
     private let _loudnessContourEnabled: ManagedAtomic<Int32>
+    private let _loudnessStrengthBits:   ManagedAtomic<Int32>  // Float bits, 0.0–1.0
     private let _loudnessRefPhonBits:    ManagedAtomic<Int32>  // Float bits, phons
     private let _loudnessRefVolBits:     ManagedAtomic<Int32>  // Float bits, 0–1
     private let _volumeDependentBits:    ManagedAtomic<Int32>
@@ -423,6 +485,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _asymmetryTrimBits:      ManagedAtomic<Int32>  // Float bits, dB
     private let _deharshEnabled:         ManagedAtomic<Int32>
     private let _deharshTiltBits:        ManagedAtomic<Int32>  // Float bits, dB
+    private let _deharshFreqBits:        ManagedAtomic<Int32>  // Float bits, Hz
     private let _balanceBits:            ManagedAtomic<Int32>  // Float bits, −1 to +1
     private let _symmetryBalanceEnabled: ManagedAtomic<Int32>
     private let _channelBalanceBits:     ManagedAtomic<Int32>  // Float bits, −1 to +1 (linear L/R)
@@ -439,6 +502,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     // Crosstalk cancellation atomics
     private let _crosstalkEnabled:    ManagedAtomic<Int32>
     private let _crosstalkAmountBits: ManagedAtomic<Int32>  // Float bits, 0.0–0.5
+    private let _crosstalkHSHzBits:   ManagedAtomic<Int32>  // Float bits, head-shadow Hz
 
     // Linear denoising atomics
     private let _denoisingEnabled:      ManagedAtomic<Int32>
@@ -494,6 +558,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     private let _balanceMeterBits:       ManagedAtomic<Int32>  // Float bits, −1 to +1
     private let _truePeakClipperTripped: ManagedAtomic<Int32>  // sticky 0 / 1
     private let _truePeakLimiterTripped: ManagedAtomic<Int32>  // sticky 0 / 1
+    private let _truePeakDBBits:         ManagedAtomic<Int32>  // Float bits, dBTP, final output
 
     // MARK: - Public GR Accessors
 
@@ -547,6 +612,38 @@ final class DynamicsProcessor: @unchecked Sendable {
     var truePeakLimiterTripped: Bool {
         _truePeakLimiterTripped.load(ordering: .relaxed) != 0
     }
+    /// Continuous inter-sample true-peak level (dBTP) measured on the final output signal,
+    /// via 4-point FIR interpolation (ITU-R BS.1770-4 Annex 2). Updated every callback,
+    /// independent of whether the limiter's own true-peak guard is engaged.
+    var liveTruePeakDB: Float {
+        Float(bitPattern: UInt32(bitPattern: _truePeakDBBits.load(ordering: .relaxed)))
+    }
+    /// Whether the signal path is currently running through the 4× oversampled clipper/limiter.
+    /// When false, `liveTruePeakDB` is a same-rate FIR-interpolated approximation rather than
+    /// a measurement on a genuinely oversampled signal.
+    var isOversamplingActive: Bool {
+        _oversamplingEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Whether the brickwall limiter is enabled.
+    var isLimiterEnabled: Bool {
+        _limiterEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Whether the FIR convolution stage is enabled.
+    var isFIREnabled: Bool {
+        _firEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Whether speaker IR alignment is enabled.
+    var isIRAlignmentEnabled: Bool {
+        _irAlignEnabled.load(ordering: .relaxed) != 0
+    }
+    /// IR alignment delay in milliseconds (0–5 ms, clamped). Valid only when isIRAlignmentEnabled is true.
+    var irAlignmentDelayMs: Float {
+        Float(bitPattern: UInt32(bitPattern: _irAlignDelayBits.load(ordering: .relaxed)))
+    }
+    /// Returns the FIR convolution engine's loaded IR delay in samples.
+    var firConvolutionEngineDelaySamples: Double {
+        firConvolutionEngine.loadedIRDelaySamples
+    }
     /// Resets the sticky true-peak trip flags. Call from the main thread after showing the indicator.
     func clearTruePeakFlags() {
         _truePeakClipperTripped.store(0, ordering: .relaxed)
@@ -583,8 +680,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.mbFilterState      = Array(repeating: 0.0, count: ch * 16)
         // Steep extra stages: 16 state vars per channel (steep stages 2-3)
         self.mbFilterStateSteep = Array(repeating: 0.0, count: ch * 16)
-        // Sidechain HPF: 2 state vars per channel (w1, w2)
-        self.mbSidechainHPFState = Array(repeating: 0.0, count: ch * 2)
+        // Sidechain HPF: 2 state vars per channel per band (w1, w2)
+        self.mbSidechainHPFStateLow  = Array(repeating: 0.0, count: ch * 2)
+        self.mbSidechainHPFStateMid  = Array(repeating: 0.0, count: ch * 2)
+        self.mbSidechainHPFStateHigh = Array(repeating: 0.0, count: ch * 2)
 
         // Multiband temp band buffers: [3 bands][channelCount]
         var bandBufs: [[UnsafeMutablePointer<Float>]] = []
@@ -615,6 +714,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stereo widener + LUFS processor
         self.stereoWidener = StereoWidener(maxFrameCount: maxFrameCount)
         self.lufsProcessor = LoudnessMatchProcessor()
+        self.dialogueLeveler = DialogueRelativeLeveler()
 
         // Look-ahead limiter (extracted from inline implementation)
         self.mainLimiter = LookAheadLimiter(channelCount: ch, sampleRate: sampleRate, lookAheadMs: 2.0)
@@ -653,7 +753,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         _mbKneeLowDBBits     = ManagedAtomic(floatBits(6.0))
         _mbKneeMidDBBits     = ManagedAtomic(floatBits(6.0))
         _mbKneeHighDBBits    = ManagedAtomic(floatBits(6.0))
-        _mbSidechainHPFHzBits = ManagedAtomic(floatBits(0.0))
+        _mbSidechainHPFLowHzBits  = ManagedAtomic(floatBits(0.0))
+        _mbSidechainHPFMidHzBits  = ManagedAtomic(floatBits(0.0))
+        _mbSidechainHPFHighHzBits = ManagedAtomic(floatBits(0.0))
+        _mbMakeupLowBits  = ManagedAtomic(floatBits(1.0))
+        _mbMakeupMidBits  = ManagedAtomic(floatBits(1.0))
+        _mbMakeupHighBits = ManagedAtomic(floatBits(1.0))
 
         // Atomics — compressor
         _compEnabled      = ManagedAtomic(0)
@@ -665,13 +770,16 @@ final class DynamicsProcessor: @unchecked Sendable {
         _compKneeWidthBits = ManagedAtomic(floatBits(6.0))
         _compProgramDependentRelease = ManagedAtomic(0)
         _compSidechainHighPassBits = ManagedAtomic(floatBits(0.0))
+        _compTopologyBits = ManagedAtomic(0)  // feedForward
         self.compSidechainHPState = Array(repeating: 0.0, count: Int(channelCount) * 2)
 
         // Atomics — expander
         _expEnabled     = ManagedAtomic(0)
-        _expThreshBits  = ManagedAtomic(floatBits(-50.0))  // Lower threshold for less aggressive expansion
-        _expRatioBits   = ManagedAtomic(floatBits(2.0))   // Higher ratio for more effective noise reduction
-        _expRangeDBBits = ManagedAtomic(floatBits(-24.0)) // Wider range for more dynamic range
+        _expThreshBits  = ManagedAtomic(floatBits(-50.0))
+        _expRatioBits   = ManagedAtomic(floatBits(2.0))
+        _expRangeDBBits = ManagedAtomic(floatBits(-24.0))
+        _expAttackMsBits  = ManagedAtomic(floatBits(5.0))
+        _expReleaseMsBits = ManagedAtomic(floatBits(200.0))
 
         // Atomics — soft clipper
         _softClipperEnabled   = ManagedAtomic(0)
@@ -747,6 +855,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         let defaultStateSize = defaultSectionCount * 4  // 2 state vars * 2 paths per section
         self.bassManagementStateSize = defaultStateSize
         self.pendingBassManagementStateSize = defaultStateSize
+        // NOTE: coefficientDecouplingEnabled is omitted here (defaults to false).
+        // applyConfig() is called immediately after init by RenderCallbackContext,
+        // staging a correctly-decoupled replacement before any audio is processed.
         self.bassManagementCrossover = BassManagementCrossover(
             crossoverHz: 80.0,
             slope: defaultSlope,
@@ -767,6 +878,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         self.mainsHighPassStateSize = defaultStateSize
         self.pendingMainsHighPassStateSize = defaultStateSize
+        // NOTE: coefficientDecouplingEnabled is omitted here (defaults to false).
+        // applyConfig() is called immediately after init by RenderCallbackContext,
+        // staging a correctly-decoupled replacement before any audio is processed.
         self.mainsHighPassCrossover = BassManagementCrossover(
             crossoverHz: 80.0,
             slope: defaultSlope,
@@ -817,6 +931,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let maxBands = DynamicEQConfig.maxDynamicEQBands
         self.dynamicEQFilterState = Array(repeating: 0.0, count: maxCh * maxBands * 2)
         self.dynamicEQEnvelopeState = Array(repeating: 0.0, count: maxCh * maxBands)
+        self.dynamicEQRMSState = Array(repeating: 0.0, count: maxCh * maxBands)
         self.dynamicEQGainReductionDB = Array(repeating: 0.0, count: maxCh * maxBands)
 
         // Allocate Dynamic EQ coefficient and parameter buffers (pre-allocated to avoid audio-thread heap allocation)
@@ -891,6 +1006,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _dcOffsetEnabled        = ManagedAtomic(0)
         _dialogueGateEnabled    = ManagedAtomic(0)
         _loudnessContourEnabled = ManagedAtomic(0)
+        _loudnessStrengthBits   = ManagedAtomic(floatBits(1.0))
         _loudnessRefPhonBits    = ManagedAtomic(floatBits(83.0))
         _loudnessRefVolBits     = ManagedAtomic(floatBits(0.85))
         _volumeDependentBits    = ManagedAtomic(0)
@@ -898,6 +1014,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _asymmetryTrimBits      = ManagedAtomic(floatBits(0.0))
         _deharshEnabled         = ManagedAtomic(0)
         _deharshTiltBits        = ManagedAtomic(floatBits(-1.5))
+        _deharshFreqBits        = ManagedAtomic(floatBits(3500.0))
         _balanceBits            = ManagedAtomic(floatBits(0.0))
         _symmetryBalanceEnabled = ManagedAtomic(0)
         _channelBalanceBits     = ManagedAtomic(floatBits(0.0))
@@ -908,6 +1025,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _irAlignDelayBits     = ManagedAtomic(floatBits(0.0))
         _crosstalkEnabled     = ManagedAtomic(0)
         _crosstalkAmountBits  = ManagedAtomic(floatBits(0.5))
+        _crosstalkHSHzBits    = ManagedAtomic(floatBits(700.0))
         _denoisingEnabled       = ManagedAtomic(0)
         _denoisingThresholdBits = ManagedAtomic(floatBits(-60.0))
         _denoisingWienerFloorBits = ManagedAtomic(floatBits(0.01))
@@ -944,6 +1062,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _bassManagementEnabled = ManagedAtomic(0)
         _asymmetricCrossoverEnabled = ManagedAtomic(0)
         _dynamicEQEnabled = ManagedAtomic(0)
+        _dialogueLevelerEnabled = ManagedAtomic(0)
         _bassManagementCrossoverHzBits = ManagedAtomic(floatBits(80.0))
         _bassManagementSlopeBits = ManagedAtomic(Int32(BassCrossoverSlope.lr4.rawValue))
         _lowBandGainDBBits = ManagedAtomic(floatBits(0.0))
@@ -1029,6 +1148,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         _balanceMeterBits       = ManagedAtomic(floatBits(0.0))
         _truePeakClipperTripped = ManagedAtomic(0)
         _truePeakLimiterTripped = ManagedAtomic(0)
+        _truePeakDBBits         = ManagedAtomic(floatBits(-90.0))
 
         // Initialize cached coefficients after all properties are set
         recomputeCompSidechainHPCoeffs()
@@ -1191,7 +1311,21 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setMBKneeLowDB(_ db: Float)        { _mbKneeLowDBBits.store(floatBits(max(0.0, min(24.0, db))), ordering: .relaxed) }
     func setMBKneeMidDB(_ db: Float)        { _mbKneeMidDBBits.store(floatBits(max(0.0, min(24.0, db))), ordering: .relaxed) }
     func setMBKneeHighDB(_ db: Float)       { _mbKneeHighDBBits.store(floatBits(max(0.0, min(24.0, db))), ordering: .relaxed) }
-    func setMBSidechainHPFHz(_ hz: Float)   { _mbSidechainHPFHzBits.store(floatBits(max(0.0, hz)), ordering: .relaxed) }
+    func setMBSidechainHPFLowHz(_ hz: Float)  {
+        _mbSidechainHPFLowHzBits.store(floatBits(max(0.0, hz)), ordering: .relaxed)
+        mbSidechainHPFCoeffsLow  = hz > 0 ? Self.hpfCoeffs(fc: hz, sr: storedSampleRate) : (1,0,0,0,0)
+    }
+    func setMBSidechainHPFMidHz(_ hz: Float)  {
+        _mbSidechainHPFMidHzBits.store(floatBits(max(0.0, hz)), ordering: .relaxed)
+        mbSidechainHPFCoeffsMid  = hz > 0 ? Self.hpfCoeffs(fc: hz, sr: storedSampleRate) : (1,0,0,0,0)
+    }
+    func setMBSidechainHPFHighHz(_ hz: Float) {
+        _mbSidechainHPFHighHzBits.store(floatBits(max(0.0, hz)), ordering: .relaxed)
+        mbSidechainHPFCoeffsHigh = hz > 0 ? Self.hpfCoeffs(fc: hz, sr: storedSampleRate) : (1,0,0,0,0)
+    }
+    func setMBMakeupGainLowDB(_ db: Float)  { _mbMakeupLowBits.store(floatBits(Self.dbToLinear(max(-12, min(12, db)))), ordering: .relaxed) }
+    func setMBMakeupGainMidDB(_ db: Float)  { _mbMakeupMidBits.store(floatBits(Self.dbToLinear(max(-12, min(12, db)))), ordering: .relaxed) }
+    func setMBMakeupGainHighDB(_ db: Float) { _mbMakeupHighBits.store(floatBits(Self.dbToLinear(max(-12, min(12, db)))), ordering: .relaxed) }
 
     func setCompressorEnabled(_ v: Bool)     { _compEnabled.store(v ? 1 : 0, ordering: .relaxed) }
     func setCompressorThresholdDB(_ db: Float) { _compThreshBits.store(floatBits(db), ordering: .relaxed) }
@@ -1245,6 +1379,17 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setExpanderThresholdDB(_ db: Float) { _expThreshBits.store(floatBits(db), ordering: .relaxed) }
     func setExpanderRatio(_ r: Float)        { _expRatioBits.store(floatBits(max(1.0, r)), ordering: .relaxed) }
     func setExpanderRangeDB(_ db: Float)     { _expRangeDBBits.store(floatBits(min(0.0, db)), ordering: .relaxed) }
+    func setCompressorTopology(_ topology: CompressorTopology) {
+        _compTopologyBits.store(topology == .feedBack ? 1 : 0, ordering: .relaxed)
+    }
+    func setExpanderAttackMs(_ ms: Float, sampleRate: Double) {
+        _expAttackMsBits.store(floatBits(max(0.1, min(100.0, ms))), ordering: .relaxed)
+        expanderAlphaAttack = Self.computeAlpha(tauSeconds: max(ms, 0.1) / 1000.0, sampleRate: sampleRate)
+    }
+    func setExpanderReleaseMs(_ ms: Float, sampleRate: Double) {
+        _expReleaseMsBits.store(floatBits(max(10.0, min(1000.0, ms))), ordering: .relaxed)
+        expanderAlphaRelease = Self.computeAlpha(tauSeconds: max(ms, 10.0) / 1000.0, sampleRate: sampleRate)
+    }
 
     func setSoftClipperEnabled(_ enabled: Bool) { _softClipperEnabled.store(enabled ? 1 : 0, ordering: .relaxed) }
     func setSoftClipperDriveDB(_ db: Float) {
@@ -1321,6 +1466,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setLoudnessContourEnabled(_ v: Bool) {
         _loudnessContourEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
+    func setLoudnessContourStrength(_ v: Float) {
+        _loudnessStrengthBits.store(floatBits(max(0.0, min(1.0, v))), ordering: .relaxed)
+    }
     func setLoudnessReferencePhon(_ v: Float) {
         _loudnessRefPhonBits.store(floatBits(v), ordering: .relaxed)
     }
@@ -1341,6 +1489,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
     func setDeharshTiltAmountDB(_ db: Float) {
         _deharshTiltBits.store(floatBits(max(-6.0, min(0.0, db))), ordering: .relaxed)
+    }
+    func setDeharshFrequencyHz(_ hz: Float) {
+        _deharshFreqBits.store(floatBits(max(500.0, min(10000.0, hz))), ordering: .relaxed)
     }
     func setStereoBalancePosition(_ balance: Float) {
         _balanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
@@ -1366,6 +1517,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setCrosstalkAmount(_ amount: Float) {
         _crosstalkAmountBits.store(floatBits(max(0.0, min(0.5, amount))), ordering: .relaxed)
     }
+    func setCrosstalkHeadShadowHz(_ hz: Float) {
+        _crosstalkHSHzBits.store(floatBits(max(100.0, min(5000.0, hz))), ordering: .relaxed)
+    }
     func setDenoisingEnabled(_ v: Bool) {
         _denoisingEnabled.store(v ? 1 : 0, ordering: .relaxed)
         if !v { denoisers.forEach { $0.reset() } }
@@ -1380,7 +1534,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         denoisers.forEach { $0.setWienerFloor(floor) }
     }
     func setDenoisingPreset(_ preset: DenoiserPreset) {
-        let (noiseFloorDB, wienerFloor) = preset.parameters
+        guard let (noiseFloorDB, wienerFloor) = preset.parameters else { return }
         setDenoisingThresholdDB(noiseFloorDB)
         setDenoisingWienerFloor(wienerFloor)
     }
@@ -1540,6 +1694,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setDynamicEQEnabled(_ v: Bool) {
         _dynamicEQEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
+    func setDialogueLevelerEnabled(_ v: Bool) {
+        _dialogueLevelerEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
     func setFIREnabled(_ v: Bool) {
         _firEnabled.store(v ? 1 : 0, ordering: .relaxed)
     }
@@ -1586,20 +1743,26 @@ final class DynamicsProcessor: @unchecked Sendable {
             pendingDynEQCoeffsBuf[idx * 5 + 3] = Float(c.a1)
             pendingDynEQCoeffsBuf[idx * 5 + 4] = Float(c.a2)
             pendingDynEQBypassBuf[idx] = band.bypass ? 1 : 0
-            pendingDynEQParamsBuf[idx * 9 + 0] = band.thresholdDB
-            pendingDynEQParamsBuf[idx * 9 + 1] = band.ratio
-            pendingDynEQParamsBuf[idx * 9 + 2] = band.attackMs
-            pendingDynEQParamsBuf[idx * 9 + 3] = band.releaseMs
-            pendingDynEQParamsBuf[idx * 9 + 4] = band.rangeDB
-            pendingDynEQParamsBuf[idx * 9 + 5] = band.direction == .cutOnly ? 0.0 : (band.direction == .boostOnly ? 1.0 : 2.0)
-            pendingDynEQParamsBuf[idx * 9 + 6] = band.boostThresholdDB
-            pendingDynEQParamsBuf[idx * 9 + 7] = band.boostRatio
-            pendingDynEQParamsBuf[idx * 9 + 8] = band.maxBoostDB
+            pendingDynEQParamsBuf[idx * 11 + 0] = band.thresholdDB
+            pendingDynEQParamsBuf[idx * 11 + 1] = band.ratio
+            pendingDynEQParamsBuf[idx * 11 + 2] = band.attackMs
+            pendingDynEQParamsBuf[idx * 11 + 3] = band.releaseMs
+            pendingDynEQParamsBuf[idx * 11 + 4] = band.rangeDB
+            pendingDynEQParamsBuf[idx * 11 + 5] = band.direction == .cutOnly ? 0.0 : (band.direction == .boostOnly ? 1.0 : 2.0)
+            pendingDynEQParamsBuf[idx * 11 + 6] = band.boostThresholdDB
+            pendingDynEQParamsBuf[idx * 11 + 7] = band.boostRatio
+            pendingDynEQParamsBuf[idx * 11 + 8] = band.maxBoostDB
+            pendingDynEQParamsBuf[idx * 11 + 9]  = band.detectorMode == .rms ? 1.0 : 0.0
+            pendingDynEQParamsBuf[idx * 11 + 10] = band.rmsWindowMs
 
             // Create vDSP_biquad setup for vectorized detector filter
             // Coefficients format: [b0, b1, b2, a1, a2] for single-section biquad
             // vDSP_biquad_CreateSetup expects Double coefficients
             var coeffsD = [c.b0, c.b1, c.b2, c.a1, c.a2]
+            // Destroy existing setup before creating new one to prevent memory leak
+            if let existingSetup = dynamicEQBiquadSetups[idx] {
+                vDSP_biquad_DestroySetup(existingSetup)
+            }
             dynamicEQBiquadSetups[idx] = vDSP_biquad_CreateSetup(&coeffsD, 1)
         }
         pendingDynamicEQBandCount = n
@@ -1618,10 +1781,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
     }
     func setBassManagementCrossoverHz(_ hz: Float) {
-        _bassManagementCrossoverHzBits.store(floatBits(max(20.0, min(200.0, hz))), ordering: .relaxed)
+        let clamped = max(20.0, min(200.0, hz))
+        stageBassManagementCrossover(crossoverHz: clamped, slope: lastBassCrossoverSlope, crossoverType: lastBassCrossoverType)
+        lastBassCrossoverHz = clamped
     }
     func setBassManagementSlope(_ slope: BassCrossoverSlope) {
-        _bassManagementSlopeBits.store(Int32(slope.rawValue), ordering: .relaxed)
+        stageBassManagementCrossover(crossoverHz: lastBassCrossoverHz, slope: slope, crossoverType: lastBassCrossoverType)
+        lastBassCrossoverSlope = slope
     }
     func setLowBandGainDB(_ db: Float) {
         _lowBandGainDBBits.store(floatBits(max(-12.0, min(12.0, db))), ordering: .relaxed)
@@ -1665,9 +1831,16 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// Applies a full config snapshot atomically (main thread).
     func applyConfig(_ config: DynamicsConfig, sampleRate: Double) {
         storedSampleRate = sampleRate
+        storedDecouplingEnabled = config.advanced.coefficientDecouplingEnabled
 
         stereoWidener.applyConfig(config.stereoWidener)
+        stereoWidener.stageCoefficients(
+            lowMidHz: config.stereoWidener.crossoverLowMidHz,
+            midHighHz: config.stereoWidener.crossoverMidHighHz,
+            sampleRate: sampleRate
+        )
         lufsProcessor.applyConfig(config.loudnessMatch)
+        dialogueLeveler.applyConfig(config.advanced.dialogueRelativeLeveler)
 
         setDeEsserEnabled(config.deEsser.isEnabled)
         setDeEsserFrequencyHz(config.deEsser.frequencyHz)
@@ -1698,11 +1871,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         setMBKneeLowDB(config.multibandCompressor.kneeWidthLowDB)
         setMBKneeMidDB(config.multibandCompressor.kneeWidthMidDB)
         setMBKneeHighDB(config.multibandCompressor.kneeWidthHighDB)
-        setMBSidechainHPFHz(config.multibandCompressor.sidechainHighPassHz)
-
-        // Precompute sidechain HPF coefficients
-        let hpfHz = config.multibandCompressor.sidechainHighPassHz
-        mbSidechainHPFCoeffs = Self.hpfCoeffs(fc: hpfHz, sr: sampleRate)
+        setMBSidechainHPFLowHz(config.multibandCompressor.sidechainHighPassLowHz)
+        setMBSidechainHPFMidHz(config.multibandCompressor.sidechainHighPassMidHz)
+        setMBSidechainHPFHighHz(config.multibandCompressor.sidechainHighPassHighHz)
+        setMBMakeupGainLowDB(config.multibandCompressor.makeupGainLowDB)
+        setMBMakeupGainMidDB(config.multibandCompressor.makeupGainMidDB)
+        setMBMakeupGainHighDB(config.multibandCompressor.makeupGainHighDB)
 
         setCompressorEnabled(config.compressor.isEnabled)
         setCompressorThresholdDB(config.compressor.thresholdDB)
@@ -1713,13 +1887,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         setCompressorSidechainHighPassHz(config.compressor.sidechainHighPassHz, sampleRate: sampleRate)
         setCompressorMakeupGainDB(config.compressor.makeupGainDB)
         setCompressorKneeWidthDB(config.compressor.kneeWidthDB)
+        setCompressorTopology(config.compressor.topology)
 
         setExpanderEnabled(config.expander.isEnabled)
         setExpanderThresholdDB(config.expander.thresholdDB)
         setExpanderRatio(config.expander.ratio)
         setExpanderRangeDB(config.expander.rangeDB)
-        expanderAlphaAttack  = Self.computeAlpha(tauSeconds: 0.005, sampleRate: sampleRate)
-        expanderAlphaRelease = Self.computeAlpha(tauSeconds: 0.200, sampleRate: sampleRate)
+        setExpanderAttackMs(config.expander.attackMs, sampleRate: sampleRate)
+        setExpanderReleaseMs(config.expander.releaseMs, sampleRate: sampleRate)
 
         setSoftClipperEnabled(config.softClipper.isEnabled)
         setSoftClipperDriveDB(config.softClipper.driveDB)
@@ -1740,12 +1915,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         let adv = config.advanced
         setStereoMode(adv.stereoMode)
         setDCOffsetFilterEnabled(adv.dcOffsetFilterEnabled)
+        // Named presets are authoritative: setDenoisingPreset pushes both threshold and
+        // wiener-floor from the preset's bundle. For .custom, the stored individual fields
+        // are used directly so the user's hand-tuned values persist and apply correctly.
         setDenoisingPreset(adv.linearDenoisingPreset)
-        // Allow the user's manual threshold slider to override the preset's noise floor
-        // only if it differs from the preset's seeded value; otherwise the preset wins.
-        // (The store always writes the most recently set value, so call threshold last
-        // to let it win over the preset if the user has diverged from it.)
-        setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
+        if adv.linearDenoisingPreset == .custom {
+            setDenoisingThresholdDB(adv.linearDenoisingThresholdDB)
+            setDenoisingWienerFloor(adv.denoiserWienerFloor)
+        }
         // Only call setMode() when the mode or sample rate actually changed.
         // setMode() blocks the main thread briefly; calling it on every applyConfig()
         // (which fires on every UI parameter change) causes repeated main-thread stalls
@@ -1760,11 +1937,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         }
         for d in denoisers {
             d.setReductionAmount(adv.denoiserReductionAmount)
+            d.setGainSmoothingMs(attackMs: adv.denoiserAttackMs, releaseMs: adv.denoiserReleaseMs, sampleRate: storedSampleRate)
         }
         // Enable after buffers are confirmed initialised for the current mode.
         setDenoisingEnabled(adv.linearDenoisingEnabled)
         setDialogueGateEnabled(adv.loudnessDialogueGateEnabled)
         setLoudnessContourEnabled(adv.loudnessContourEnabled)
+        setLoudnessContourStrength(adv.loudnessContourStrength)
         setLoudnessReferencePhon(adv.loudnessReferencePhon)
         setLoudnessReferenceVolume(adv.loudnessReferenceVolume)
         setVolumeDependentLoudnessEnabled(adv.volumeDependentLoudnessEnabled)
@@ -1772,6 +1951,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setClipperAsymmetryTrimDB(adv.clipperAsymmetryTrimDB)
         setDeharshFilterEnabled(adv.deharshFilterEnabled)
         setDeharshTiltAmountDB(adv.deharshTiltAmountDB)
+        setDeharshFrequencyHz(adv.deharshFrequencyHz)
         setStereoBalancePosition(adv.stereoBalancePosition)
         setSymmetryBalanceEnabled(adv.symmetryBalanceEnabled)
         setLimiterTruePeakGuardEnabled(adv.limiterTruePeakGuardEnabled)
@@ -1790,6 +1970,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setPanningCrossfeedAmount(adv.panningCrossfeedAmount)
         setCrosstalkEnabled(adv.crosstalkCancellationEnabled)
         setCrosstalkAmount(adv.crosstalkCancellationAmount)
+        setCrosstalkHeadShadowHz(adv.crosstalkHeadShadowHz)
         setDeltaSoloActive(adv.deltaSoloActive)
         setLatencyMode(adv.latencyMode)
         setPauseGateEnabled(adv.pauseGateEnabled)
@@ -1816,8 +1997,13 @@ final class DynamicsProcessor: @unchecked Sendable {
         setBassManagementEnabled(adv.bassManagement.enabled)
         setAsymmetricCrossoverEnabled(adv.bassManagement.asymmetricCrossoverEnabled)
         setDynamicEQEnabled(adv.dynamicEQ.enabled)
+        setDialogueLevelerEnabled(adv.dialogueRelativeLeveler.isEnabled)
         setFIREnabled(adv.firImpulseResponse.enabled)
-        setFIRConfig(adv.firImpulseResponse)
+        // FIR — only rebuild the convolution engine's IR when the config actually changed.
+        if adv.firImpulseResponse != previousFIRConfig {
+            setFIRConfig(adv.firImpulseResponse)
+            previousFIRConfig = adv.firImpulseResponse
+        }
         setBassManagementCrossoverHz(adv.bassManagement.crossoverHz)
         setBassManagementSlope(adv.bassManagement.slope)
         setLowBandGainDB(adv.bassManagement.lowBandGainDB)
@@ -1826,42 +2012,141 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLowBandLowShelfFreqHz(adv.bassManagement.lowBandLowShelfFreqHz)
         setLowBandLowShelfGainDB(adv.bassManagement.lowBandLowShelfGainDB)
         setLowBandDelaySamples(adv.bassManagement.lowBandDelaySamples)
-        setSubEQBands(adv.bassManagement.subEQBands, sampleRate: sampleRate)
-        setDynamicEQConfig(adv.dynamicEQ, sampleRate: sampleRate)
+        // Sub EQ bands — only recompute when bands or sample rate actually changed.
+        if adv.bassManagement.subEQBands != previousSubEQBands || storedSampleRate != previousSubEQSampleRate {
+            setSubEQBands(adv.bassManagement.subEQBands, sampleRate: sampleRate)
+            previousSubEQBands = adv.bassManagement.subEQBands
+            previousSubEQSampleRate = storedSampleRate
+        }
+        // Dynamic EQ — only recompute coefficients/vDSP setups when bands or sample rate actually changed.
+        if adv.dynamicEQ != previousDynamicEQConfig || storedSampleRate != previousDynamicEQSampleRate {
+            setDynamicEQConfig(adv.dynamicEQ, sampleRate: sampleRate)
+            previousDynamicEQConfig = adv.dynamicEQ
+            previousDynamicEQSampleRate = storedSampleRate
+        }
 
         // Stage bass management crossover update if parameters changed
         if adv.bassManagement.crossoverHz != lastBassCrossoverHz
             || adv.bassManagement.slope != lastBassCrossoverSlope
-            || adv.bassManagement.crossoverType != lastBassCrossoverType {
+            || adv.bassManagement.crossoverType != lastBassCrossoverType
+            || storedSampleRate != lastBassCrossoverSampleRate {
             stageBassManagementCrossover(crossoverHz: adv.bassManagement.crossoverHz,
                                        slope: adv.bassManagement.slope,
                                        crossoverType: adv.bassManagement.crossoverType)
             lastBassCrossoverHz = adv.bassManagement.crossoverHz
             lastBassCrossoverSlope = adv.bassManagement.slope
             lastBassCrossoverType = adv.bassManagement.crossoverType
+            lastBassCrossoverSampleRate = storedSampleRate
         }
 
         // Stage mains high-pass crossover update if asymmetric mode is enabled and parameters changed
         if adv.bassManagement.asymmetricCrossoverEnabled {
             if adv.bassManagement.mainsHighPassHz != lastMainsHighPassHz
                 || adv.bassManagement.slope != lastBassCrossoverSlope
-                || adv.bassManagement.crossoverType != lastBassCrossoverType {
+                || adv.bassManagement.crossoverType != lastBassCrossoverType
+                || storedSampleRate != lastMainsHighPassSampleRate {
                 stageMainsHighPassCrossover(crossoverHz: adv.bassManagement.mainsHighPassHz,
                                           slope: adv.bassManagement.slope,
                                           crossoverType: adv.bassManagement.crossoverType)
                 lastMainsHighPassHz = adv.bassManagement.mainsHighPassHz
+                lastMainsHighPassSampleRate = storedSampleRate
             }
+        }
+
+        // Stage active crossover update only when config or sample rate actually changed —
+        // prevents 4× BiquadMath.calculateSections calls on every unrelated Advanced
+        // Processing setting change (A3 fix).
+        if adv.activeCrossover != lastActiveCrossoverConfig || storedSampleRate != lastActiveCrossoverSampleRate {
+            stageActiveCrossover(adv.activeCrossover)
+            lastActiveCrossoverConfig = adv.activeCrossover
+            lastActiveCrossoverSampleRate = storedSampleRate
         }
     }
 
-    /// Stage a bass management crossover update for thread-safe application.
+    // MARK: - Active Crossover Engine Integration
+
+    /// Stages a new active crossover configuration on the main thread.
+    /// If isEnabled is false, the engine is set to nil (zero CPU cost when disabled).
+    /// If isEnabled is true, computes IIR coefficients from the config and stages them.
+    func stageActiveCrossover(_ config: ActiveCrossoverConfig) {
+        guard config.isEnabled, config.bandCount != .fullRange else {
+            // Disable: release the engine reference so the audio thread sees nil
+            activeCrossoverEngine = nil
+            return
+        }
+
+        // Create engine if needed (only allocates once)
+        if activeCrossoverEngine == nil {
+            activeCrossoverEngine = ActiveCrossoverEngine(maxFrameCount: storedMaxFrameCount)
+        }
+
+        let bandCount = config.bandCount == .triAmp ? 3 : 2
+        let sr = storedSampleRate
+
+        // Build IIR coefficients from CrossoverPointConfig using BiquadMath.
+        // Linkwitz-Riley crossover = cascaded Butterworth sections on LP and HP.
+        let lowerLP = buildCrossoverSections(point: config.lowerPoint, isLowPass: true, sampleRate: sr)
+        let lowerHP = buildCrossoverSections(point: config.lowerPoint, isLowPass: false, sampleRate: sr)
+        let upperLP = buildCrossoverSections(point: config.upperPoint, isLowPass: true, sampleRate: sr)
+        let upperHP = buildCrossoverSections(point: config.upperPoint, isLowPass: false, sampleRate: sr)
+
+        // Stage onto the engine — the audio thread will pick these up atomically
+        activeCrossoverEngine?.pendingLowerLP = lowerLP
+        activeCrossoverEngine?.pendingLowerHP = lowerHP
+        activeCrossoverEngine?.pendingUpperLP = upperLP
+        activeCrossoverEngine?.pendingUpperHP = upperHP
+        activeCrossoverEngine?.pendingBandCount = bandCount
+        activeCrossoverEngine?.hasIIRPendingUpdate.store(true, ordering: .releasing)
+    }
+
+    /// Converts a CrossoverPointConfig to a SectionArray for the ActiveCrossoverEngine.
+    /// Uses BiquadMath sections (Butterworth or Linkwitz-Riley as appropriate).
+    private func buildCrossoverSections(
+        point: CrossoverPointConfig,
+        isLowPass: Bool,
+        sampleRate: Double
+    ) -> ActiveCrossoverEngine.SectionArray {
+        let identity: (b0: Float, b1: Float, b2: Float, na1: Float, na2: Float) = (1, 0, 0, 0, 0)
+        let maxSections = ActiveCrossoverEngine.maxSections
+
+        let slope    = isLowPass ? point.lpSlope : point.hpSlope
+        let freqHz   = isLowPass ? Double(point.lpHz) : Double(point.hpHz)
+        let filterType: FilterType = isLowPass ? .lowPass : .highPass
+
+        // Only IIR (LR / Butterworth) types are handled here; FIR is managed via ConvolutionEngine
+        guard point.lpType != .firLinearPhase else {
+            return Array(repeating: identity, count: maxSections)
+        }
+
+        let biquadSections = BiquadMath.calculateSections(
+            type: filterType,
+            sampleRate: sampleRate,
+            frequency: min(freqHz, sampleRate * 0.499),
+            q: 0.7071067811865476,  // Butterworth Q — LR4 = two cascaded Butterworth sections
+            gain: 0.0,
+            slope: slope
+        )
+
+        // Convert BiquadCoefficients (Double) to the engine's Float tuple format
+        // BiquadCoefficients.a1/a2 are NOT pre-negated — must negate for DF2T recursion
+        var result = Array(repeating: identity, count: maxSections)
+        for (i, c) in biquadSections.prefix(maxSections).enumerated() {
+            result[i] = (b0:  Float(c.b0),
+                         b1:  Float(c.b1),
+                         b2:  Float(c.b2),
+                         na1: Float(-c.a1),
+                         na2: Float(-c.a2))
+        }
+        return result
+    }
     /// Called from the main thread when bass management parameters change.
-    private func stageBassManagementCrossover(crossoverHz: Float, slope: BassCrossoverSlope, crossoverType: CrossoverType) {
+    internal func stageBassManagementCrossover(crossoverHz: Float, slope: BassCrossoverSlope, crossoverType: CrossoverType) {
         let newCrossover = BassManagementCrossover(
             crossoverHz: crossoverHz,
             slope: slope,
             sampleRate: storedSampleRate,
-            crossoverType: crossoverType
+            crossoverType: crossoverType,
+            coefficientDecouplingEnabled: storedDecouplingEnabled
         )
         let newStateSize = newCrossover.stateSizePerChannel
         pendingBassCrossover = newCrossover
@@ -1876,7 +2161,8 @@ final class DynamicsProcessor: @unchecked Sendable {
             crossoverHz: crossoverHz,
             slope: slope,
             sampleRate: storedSampleRate,
-            crossoverType: crossoverType
+            crossoverType: crossoverType,
+            coefficientDecouplingEnabled: storedDecouplingEnabled
         )
         let newStateSize = newCrossover.stateSizePerChannel
         pendingMainsHighPassCrossover = newCrossover
@@ -2006,13 +2292,13 @@ final class DynamicsProcessor: @unchecked Sendable {
                 guard dynamicEQBypassBuf[idx] == 0 else { continue }
 
                 // Get parameters for this band
-                let thresholdDB = dynamicEQParamsBuf[idx * 9 + 0]
-                let ratio = dynamicEQParamsBuf[idx * 9 + 1]
-                let rangeDB = dynamicEQParamsBuf[idx * 9 + 4]
-                let directionRaw = dynamicEQParamsBuf[idx * 9 + 5]
-                let boostThresholdDB = dynamicEQParamsBuf[idx * 9 + 6]
-                let boostRatio = dynamicEQParamsBuf[idx * 9 + 7]
-                let maxBoostDB = dynamicEQParamsBuf[idx * 9 + 8]
+                let thresholdDB = dynamicEQParamsBuf[idx * 11 + 0]
+                let ratio = dynamicEQParamsBuf[idx * 11 + 1]
+                let rangeDB = dynamicEQParamsBuf[idx * 11 + 4]
+                let directionRaw = dynamicEQParamsBuf[idx * 11 + 5]
+                let boostThresholdDB = dynamicEQParamsBuf[idx * 11 + 6]
+                let boostRatio = dynamicEQParamsBuf[idx * 11 + 7]
+                let maxBoostDB = dynamicEQParamsBuf[idx * 11 + 8]
 
                 let attackCoeff = dynamicEQAttackCoeffsBuf[idx]
                 let releaseCoeff = dynamicEQReleaseCoeffsBuf[idx]
@@ -2028,21 +2314,43 @@ final class DynamicsProcessor: @unchecked Sendable {
                 // Save delay state
                 dynamicEQBiquadDelays[delayIdx] = delay
 
-                // Step 2: Vectorized abs() for envelope follower
-                let absPtr = dynamicEQAbsScratch.advanced(by: idx * count)
-                vDSP_vabs(detectorPtr, 1, absPtr, 1, vDSP_Length(count))
+                // Step 2: Envelope detection — peak or RMS depending on per-band detectorMode param
+                let useRMS = dynamicEQParamsBuf[idx * 11 + 9] > 0.5
+                let rmsWindowMs = dynamicEQParamsBuf[idx * 11 + 10]
 
-                // Step 2 continued: Scalar envelope follower recursion (sequential by design)
+                let absPtr = dynamicEQAbsScratch.advanced(by: idx * count)
                 let envPtr = dynamicEQEnvScratch.advanced(by: idx * count)
                 var env = dynamicEQEnvelopeState[ch * maxBands + idx]
-                for i in 0..<count {
-                    let absVal = absPtr[i]
-                    if absVal > env {
-                        env = attackCoeff * env + (1.0 - attackCoeff) * absVal
-                    } else {
-                        env = releaseCoeff * env + (1.0 - releaseCoeff) * absVal
+
+                if useRMS {
+                    // RMS detector: one-pole leaky integrator on the squared signal.
+                    // Responds to signal power rather than instantaneous peaks — smoother on transients.
+                    let rmsAlpha = Float(exp(-1.0 / (Double(max(rmsWindowMs, 1.0)) * 0.001 * storedSampleRate)))
+                    let rmsStateIdx = ch * maxBands + idx
+                    for i in 0..<count {
+                        let x = detectorPtr[i]
+                        dynamicEQRMSState[rmsStateIdx] = rmsAlpha * dynamicEQRMSState[rmsStateIdx]
+                                                       + (1.0 - rmsAlpha) * (x * x)
+                        let envInput = sqrt(max(0.0, dynamicEQRMSState[rmsStateIdx]))
+                        if envInput > env {
+                            env = attackCoeff * env + (1.0 - attackCoeff) * envInput
+                        } else {
+                            env = releaseCoeff * env + (1.0 - releaseCoeff) * envInput
+                        }
+                        envPtr[i] = env
                     }
-                    envPtr[i] = env
+                } else {
+                    // Peak detector: vectorized abs() then scalar attack/release (existing path).
+                    vDSP_vabs(detectorPtr, 1, absPtr, 1, vDSP_Length(count))
+                    for i in 0..<count {
+                        let absVal = absPtr[i]
+                        if absVal > env {
+                            env = attackCoeff * env + (1.0 - attackCoeff) * absVal
+                        } else {
+                            env = releaseCoeff * env + (1.0 - releaseCoeff) * absVal
+                        }
+                        envPtr[i] = env
+                    }
                 }
                 dynamicEQEnvelopeState[ch * maxBands + idx] = env
 
@@ -2177,19 +2485,26 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Keep tracking vars in sync so applyConfig() doesn't re-trigger setMode()
         // immediately after a sample rate change.
         denoisersConfiguredSampleRate = sampleRate
+
+        // Reset dialogue leveler state for new sample rate
+        dialogueLeveler.resetState(sampleRate: sampleRate)
         limiterGainCurrent  = 1.0
         for i in 0..<deEsserFilterState.count  { deEsserFilterState[i]  = 0 }
         for i in 0..<mbFilterState.count        { mbFilterState[i]        = 0 }
         for i in 0..<mbFilterStateSteep.count   { mbFilterStateSteep[i]   = 0 }
-        for i in 0..<mbSidechainHPFState.count  { mbSidechainHPFState[i]  = 0 }
+        for i in 0..<mbSidechainHPFStateLow.count  { mbSidechainHPFStateLow[i]  = 0 }
+        for i in 0..<mbSidechainHPFStateMid.count  { mbSidechainHPFStateMid[i]  = 0 }
+        for i in 0..<mbSidechainHPFStateHigh.count { mbSidechainHPFStateHigh[i] = 0 }
         compEnvDB   = 0.0
         expEnvDB    = 0.0
         deEsserEnvDB = 0.0
         mbGainLow   = 1.0
         mbGainMid   = 1.0
         mbGainHigh  = 1.0
-        expanderAlphaAttack  = Self.computeAlpha(tauSeconds: 0.005, sampleRate: sampleRate)
-        expanderAlphaRelease = Self.computeAlpha(tauSeconds: 0.200, sampleRate: sampleRate)
+        expanderAlphaAttack  = Self.computeAlpha(tauSeconds: max(bitsToFloat(_expAttackMsBits.load(ordering: .relaxed)),  0.1) / 1000.0, sampleRate: sampleRate)
+        expanderAlphaRelease = Self.computeAlpha(tauSeconds: max(bitsToFloat(_expReleaseMsBits.load(ordering: .relaxed)), 10.0) / 1000.0, sampleRate: sampleRate)
+        compPDRRMSState = 0.0
+        compPDRPrevRMS  = 0.0
         setLimiterAttackMs(attackMs, sampleRate: sampleRate)
         setLimiterReleaseMs(releaseMs, sampleRate: sampleRate)
         stereoWidener.resetState()
@@ -2201,6 +2516,12 @@ final class DynamicsProcessor: @unchecked Sendable {
         for i in 0..<contourState.count  { contourState[i]  = 0 }
         crestPeakEnv    = 0.0
         crestRmsEnv     = 0.0
+        corrAccLL       = 0.0
+        corrAccRR       = 0.0
+        corrAccLR       = 0.0
+        corrSmoothed    = 0.0
+        _phaseCorrelationBits.store(floatBits(0.0), ordering: .relaxed)
+        _truePeakDBBits.store(floatBits(-90.0), ordering: .relaxed)
         pauseGateLevel  = 0.0
         pauseGateIsOpen = true
         ditherPrevRand  = 0.0
@@ -2318,11 +2639,33 @@ final class DynamicsProcessor: @unchecked Sendable {
         let denoisingOn  = _denoisingEnabled.load(ordering: .relaxed) != 0
         let bassMgmtOn  = _bassManagementEnabled.load(ordering: .relaxed) != 0
         let dynamicEQOn = _dynamicEQEnabled.load(ordering: .relaxed) != 0
+        let dialogueLevelerOn = _dialogueLevelerEnabled.load(ordering: .relaxed) != 0
         let firOn       = _firEnabled.load(ordering: .relaxed) != 0
         guard stereoModeRaw != 0 || dcOn || subPhaseOn || symBalanceOn || panningOn || irAlignOn || crosstalkOn || denoisingOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
-                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || firOn else {
+                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || dialogueLevelerOn || firOn else {
+            // The entire chain is idle this callback. Zero every per-stage meter rather
+            // than just the limiter's, so the gain-structure meter doesn't freeze on the
+            // last nonzero reading from before the stages were disabled.
             _gainReductionBits.store(floatBits(0.0), ordering: .relaxed)
+            _deEsserGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _mbLowGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _mbMidGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _mbHighGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _compGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _expGRBits.store(floatBits(0.0), ordering: .relaxed)
+            _clipperGRBits.store(floatBits(0.0), ordering: .relaxed)
+            deEsserEnvDB = 0.0
+            mbGainLow  = 1.0
+            mbGainMid  = 1.0
+            mbGainHigh = 1.0
+            compEnvDB  = 0.0
+            expEnvDB   = 0.0
+            // Crest factor and phase correlation still reflect the (unprocessed) signal
+            // passing straight through, so measure them rather than zeroing outright.
+            measureCrestFactor(abl: abl, numCh: numCh, count: count)
+            measurePhaseCorrelation(abl: abl, numCh: numCh, count: count)
+            measureTruePeak(abl: abl, numCh: numCh, count: count)
             return
         }
 
@@ -2334,6 +2677,9 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Stage −1.5: Dynamic EQ.
         if dynamicEQOn { processDynamicEQ(abl: abl, numCh: numCh, count: count) }
+
+        // Stage −1.5b: Dialogue-Relative Leveler.
+        if dialogueLevelerOn { dialogueLeveler.process(abl: abl, numCh: numCh, count: count) }
 
         // Stage −1.4: FIR Impulse Response.
         if firOn { processFIR(abl: abl, numCh: numCh, count: count) }
@@ -2383,6 +2729,10 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Bass Management (before limiter, replaces mains high-pass and mono bass)
         processBassManagement(abl: abl, numCh: numCh, count: count)
+        // Defensive: if the crossover cascade ever diverges, zero NaN/Inf before it
+        // reaches the limiter or propagates further downstream — mirrors the safety
+        // net already used after processInfrasonicFilter / processSubBassPhaseAlignment.
+        DSPSafety.sanitizeAudioBufferList(abl.unsafeMutablePointer)
 
         // Stage 5: Soft Clipper + Brickwall Limiter.
         let oversampleOn = _oversamplingEnabled.load(ordering: .relaxed) != 0
@@ -2399,6 +2749,14 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Stage 7: Balance Matrix + Inter-Channel Time Delay.
         processBalanceAndDelay(abl: abl, numCh: numCh, count: count)
 
+        // Phase correlation measurement on the final stereo image (post balance/delay).
+        // Runs unconditionally, independent of which stages are enabled, so the meter
+        // always reflects the true output — mirroring how crest factor is measured above.
+        measurePhaseCorrelation(abl: abl, numCh: numCh, count: count)
+
+        // True-peak measurement on the same final signal, for the continuous True Peak meter.
+        measureTruePeak(abl: abl, numCh: numCh, count: count)
+
         // Stage 7.5: Panning Gain Matrix crossfeed.
         if panningOn { processPanningMatrix(abl: abl, numCh: numCh, count: count) }
 
@@ -2413,6 +2771,15 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Stage 10: Delta Solo (subtract original from processed).
         if deltaSoloOn { processDeltaSolo(abl: abl, numCh: numCh, count: count) }
+
+        // Stage 11: Active crossover band split.
+        // Runs after all main-chain processing so all downstream outputs (Active Crossover
+        // analysis view, output channel matrix) see the fully-processed mains signal.
+        if numCh >= 2, activeCrossoverEngine != nil,
+           let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+           let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) {
+            activeCrossoverEngine?.process(leftIn: bufL, rightIn: bufR, frameCount: count)
+        }
 
         // Report per-stage GR to main thread.
         _deEsserGRBits.store(floatBits(deEsserEnvDB), ordering: .relaxed)
@@ -2447,10 +2814,22 @@ final class DynamicsProcessor: @unchecked Sendable {
         guard numCh >= 2 else { return }
         guard let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
               let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else { return }
-        for i in 0..<count {
-            let mid = 0.5 * (bufL[i] + bufR[i])
-            bufL[i] = mid
-            bufR[i] = mid
+        let mode = StereoModeSelection(rawValue: Int(_stereoMode.load(ordering: .relaxed))) ?? .stereo
+        switch mode {
+        case .stereo:
+            return
+        case .trueMono:
+            // Sum L+R, multiply by 0.5 — preserves loudness relative to source.
+            for i in 0..<count {
+                let m = 0.5 * (bufL[i] + bufR[i])
+                bufL[i] = m; bufR[i] = m
+            }
+        case .wideMono:
+            // Mid only, uncorrected — louder than trueMono by 6 dB but preserves mid energy.
+            for i in 0..<count {
+                let m = bufL[i] + bufR[i]
+                bufL[i] = m; bufR[i] = m
+            }
         }
     }
 
@@ -2492,14 +2871,24 @@ final class DynamicsProcessor: @unchecked Sendable {
         let deltaDB       = 20.0 * log10(volumeScl)
         let listeningPhon = max(20.0, refPhon + deltaDB)
 
-        let (lowShelfGain, highShelfGain): (Float, Float) =
+        let strength = bitsToFloat(_loudnessStrengthBits.load(ordering: .relaxed))
+
+        let (rawLowGain, rawHighGain): (Float, Float) =
             bitsToFloat(_volumeDependentBits.load(ordering: .relaxed)) != 0
                 ? Self.iso226CorrectionGains(listeningPhon: listeningPhon, referencePhon: refPhon)
                 : (3.0 * Float(1.0 - Double(volume) * 0.5),   // legacy linear mode when vol-dep off
                    1.5 * Float(1.0 - Double(volume) * 0.5))
 
-        let (b0ls, b1ls, b2ls, a1ls, a2ls) = Self.lowShelfCoeffs(fc: 80.0, gainDB: lowShelfGain, sr: sr)
-        let (b0hs, b1hs, b2hs, a1hs, a2hs) = Self.highShelfCoeffs(fc: 6000.0, gainDB: highShelfGain, sr: sr)
+        // Scale correction by strength (0 = flat, 1 = full ISO 226 correction).
+        let lowShelfGain  = rawLowGain  * strength
+        let highShelfGain = rawHighGain * strength
+
+        // Bass shelf at 60 Hz: centres the correction in the most sharply curved
+        // region of the ISO 226 equal-loudness contour (40–70 Hz band).
+        // Treble shelf at 9 kHz: captures the high-frequency roll-off region where
+        // sensitivity reduction at lower levels is most audible (8–12 kHz band).
+        let (b0ls, b1ls, b2ls, a1ls, a2ls) = Self.lowShelfCoeffs(fc: 60.0,   gainDB: lowShelfGain,  sr: sr)
+        let (b0hs, b1hs, b2hs, a1hs, a2hs) = Self.highShelfCoeffs(fc: 9000.0, gainDB: highShelfGain, sr: sr)
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             var w1ls = contourState[ch * 4]
@@ -2542,13 +2931,65 @@ final class DynamicsProcessor: @unchecked Sendable {
         _crestFactorBits.store(floatBits(max(0.0, peakDB - rmsDB)), ordering: .relaxed)
     }
 
+    /// Smoothed Pearson L/R phase correlation, measured on the final post-chain signal.
+    /// Mirrors `StereoWidener`'s correlation meter (≈300 ms accumulator decay, ≈100 ms
+    /// output smoothing) but runs unconditionally so it reflects the true output even
+    /// when the widener itself is disabled. Mono input (or a missing channel) reports
+    /// a neutral 0.0 (uncorrelated) since correlation is undefined for a single channel.
+    @inline(__always)
+    private func measurePhaseCorrelation(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        guard numCh >= 2,
+              let bufL = abl[0].mData?.assumingMemoryBound(to: Float.self),
+              let bufR = abl[1].mData?.assumingMemoryBound(to: Float.self) else {
+            corrSmoothed = 0.0
+            _phaseCorrelationBits.store(floatBits(0.0), ordering: .relaxed)
+            return
+        }
+
+        let decay = max(0.0, 1.0 - 1.0 / (storedSampleRate * 0.3))
+        for i in 0..<count {
+            let l = Double(bufL[i])
+            let r = Double(bufR[i])
+            corrAccLL = corrAccLL * decay + l * l
+            corrAccRR = corrAccRR * decay + r * r
+            corrAccLR = corrAccLR * decay + l * r
+        }
+        let denom = (corrAccLL * corrAccRR).squareRoot()
+        let corrRaw: Float = denom > 1e-12 ? Float(corrAccLR / denom) : 0.0
+        let corrAlpha: Float = Float(exp(-1.0 / (storedSampleRate * 0.1)))
+        corrSmoothed = corrAlpha * corrSmoothed + (1.0 - corrAlpha) * max(-1.0, min(1.0, corrRaw))
+        _phaseCorrelationBits.store(floatBits(corrSmoothed), ordering: .relaxed)
+    }
+
+    /// Continuous inter-sample true-peak measurement on the final output signal, using the
+    /// same 4-point FIR interpolator (`scanPeak`) as the main-chain limiter's true-peak guard.
+    /// Runs unconditionally so the True Peak meter always reflects the true output, regardless
+    /// of which stages (including the limiter's own guard) are enabled.
+    @inline(__always)
+    private func measureTruePeak(
+        abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
+    ) {
+        guard count > 1 else { return }
+        var peak: Float = 0.0
+        for ch in 0..<numCh {
+            guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let p = scanPeak(buf, size: count)
+            if p > peak { peak = p }
+        }
+        let db: Float = peak > 1e-9 ? 20.0 * log10(peak) : -90.0
+        _truePeakDBBits.store(floatBits(db), ordering: .relaxed)
+    }
+
     /// High-frequency tilt filter applied after the brickwall limiter (de-harsh mode).
     @inline(__always)
     private func processDeHarsh(
         abl: UnsafeMutableAudioBufferListPointer, numCh: Int, count: Int
     ) {
         let tiltDB = bitsToFloat(_deharshTiltBits.load(ordering: .relaxed))
-        let (b0, b1, b2, na1, na2) = Self.highShelfCoeffs(fc: 3500.0, gainDB: tiltDB, sr: storedSampleRate)
+        let freq   = bitsToFloat(_deharshFreqBits.load(ordering: .relaxed))
+        let (b0, b1, b2, na1, na2) = Self.highShelfCoeffs(fc: freq, gainDB: tiltDB, sr: storedSampleRate)
         for ch in 0..<numCh {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
             var w1 = deharshState[ch * 2]
@@ -2602,33 +3043,84 @@ final class DynamicsProcessor: @unchecked Sendable {
             ordering: .relaxed
         )
 
-        // Inter-channel time delay (signed: positive = delay R relative to L, negative = delay L relative to R).
-        let delayMs      = bitsToFloat(_timeDelayBits.load(ordering: .relaxed))
+        // Inter-channel time delay — 4th-order Lagrange fractional delay.
+        // Positive delayMs = delay R relative to L, negative = delay L relative to R.
+        let delayMs     = bitsToFloat(_timeDelayBits.load(ordering: .relaxed))
         let absDelayMs  = abs(delayMs)
-        let newDelay     = Int((absDelayMs / 1000.0) * Float(storedSampleRate) + 0.5)
-        let delaySamples = min(newDelay, Self.maxDelaySamples - 1)
+        let delaySamplesFloat = (absDelayMs / 1000.0) * Float(storedSampleRate)
+        let intDelay    = Int(delaySamplesFloat)
+        let fracDelay   = delaySamplesFloat - Float(intDelay)
+        let delaySamples = min(intDelay, Self.maxDelaySamples - 3)  // -3 for 5-tap headroom
         timeDelaySamples = delaySamples
         guard delaySamples > 0 else { return }
 
-        let bufSize  = Self.maxDelaySamples
+        // Lagrange 4th-order (5-tap) coefficients — copied from processIRAlignment.
+        var lagCoeffs: (Float, Float, Float, Float, Float)
+        if fracDelay < 0.001 {
+            // Pure integer delay — identity Lagrange (tap 2 = 1, others = 0)
+            lagCoeffs = (0, 0, 1, 0, 0)
+        } else {
+            let d = Double(fracDelay)
+            var c = [Double](repeating: 0, count: 5)
+            for k in 0..<5 {
+                var h = 1.0
+                for n in 0..<5 where n != k { h *= (d - Double(n - 2)) / Double(k - n) }
+                c[k] = h
+            }
+            lagCoeffs = (Float(c[0]), Float(c[1]), Float(c[2]), Float(c[3]), Float(c[4]))
+        }
+        let (lc0, lc1, lc2, lc3, lc4) = lagCoeffs
+        let bufSize = Self.maxDelaySamples
+
         if delayMs > 0 {
             // Delay right channel relative to left
             let delayBuf = timeDelayBufs[1]
+            var writeIdx = timeDelayWriteIdx
             for i in 0..<count {
-                delayBuf[timeDelayWriteIdx] = bufR[i]
-                let readIdx = (timeDelayWriteIdx - delaySamples + bufSize) % bufSize
-                bufR[i] = delayBuf[readIdx]
-                timeDelayWriteIdx = (timeDelayWriteIdx + 1) % bufSize
+                delayBuf[writeIdx] = bufR[i]
+                // 5-tap Lagrange read centred on delaySamples
+                var interpolated: Float = 0
+                for tap in 0..<5 {
+                    let offset = delaySamples + 2 - tap
+                    let rIdx = (writeIdx - offset + bufSize) % bufSize
+                    let coeff: Float
+                    switch tap {
+                    case 0: coeff = lc0
+                    case 1: coeff = lc1
+                    case 2: coeff = lc2
+                    case 3: coeff = lc3
+                    default: coeff = lc4
+                    }
+                    interpolated += coeff * delayBuf[rIdx]
+                }
+                bufR[i] = interpolated
+                writeIdx = (writeIdx + 1) % bufSize
             }
+            timeDelayWriteIdx = writeIdx
         } else {
             // Delay left channel relative to right
             let delayBuf = timeDelayBufs[0]
+            var writeIdx = timeDelayWriteIdx
             for i in 0..<count {
-                delayBuf[timeDelayWriteIdx] = bufL[i]
-                let readIdx = (timeDelayWriteIdx - delaySamples + bufSize) % bufSize
-                bufL[i] = delayBuf[readIdx]
-                timeDelayWriteIdx = (timeDelayWriteIdx + 1) % bufSize
+                delayBuf[writeIdx] = bufL[i]
+                var interpolated: Float = 0
+                for tap in 0..<5 {
+                    let offset = delaySamples + 2 - tap
+                    let rIdx = (writeIdx - offset + bufSize) % bufSize
+                    let coeff: Float
+                    switch tap {
+                    case 0: coeff = lc0
+                    case 1: coeff = lc1
+                    case 2: coeff = lc2
+                    case 3: coeff = lc3
+                    default: coeff = lc4
+                    }
+                    interpolated += coeff * delayBuf[rIdx]
+                }
+                bufL[i] = interpolated
+                writeIdx = (writeIdx + 1) % bufSize
             }
+            timeDelayWriteIdx = writeIdx
         }
     }
 
@@ -2734,8 +3226,8 @@ final class DynamicsProcessor: @unchecked Sendable {
         let beta = bitsToFloat(_crosstalkAmountBits.load(ordering: .relaxed))
 
         // First-order LP: y[n] = (1−α)·x[n] + α·y[n−1]
-        // α = exp(−2π·fc/sr), fc = 700 Hz
-        let fc: Double = 700.0
+        // α = exp(−2π·fc/sr), fc configurable (default 700 Hz for ~60° speaker separation)
+        let fc = Double(bitsToFloat(_crosstalkHSHzBits.load(ordering: .relaxed)))
         let alpha = Float(exp(-2.0 * Double.pi * fc / storedSampleRate))
         let oneMinusAlpha = 1.0 - alpha
 
@@ -2966,11 +3458,14 @@ final class DynamicsProcessor: @unchecked Sendable {
     private static func iso226SPL(freqHz: Double, phonDB: Double) -> Double? {
         let table = iso226Table
         guard freqHz >= table.first!.f && freqHz <= table.last!.f else { return nil }
-        // Linear interpolation of table parameters at freqHz.
+        // Logarithmic interpolation of table parameters at freqHz.
+        // The ISO 226 table is defined at 1/3-octave steps; log interpolation follows the
+        // smooth shape of the equal-loudness curves between entries more accurately than
+        // linear interpolation over unequal linear frequency spans.
         var af = 0.0, lu = 0.0
         for i in 0..<(table.count - 1) {
             if freqHz >= table[i].f && freqHz <= table[i+1].f {
-                let t  = (freqHz - table[i].f) / (table[i+1].f - table[i].f)
+                let t = log(freqHz / table[i].f) / log(table[i+1].f / table[i].f)
                 af = table[i].af + t * (table[i+1].af - table[i].af)
                 lu = table[i].Lu + t * (table[i+1].Lu - table[i].Lu)
                 break
@@ -2987,24 +3482,27 @@ final class DynamicsProcessor: @unchecked Sendable {
         return Lp
     }
 
-    /// Computes the ISO 226 loudness correction gains at bass and treble shelf frequencies.
-    /// Returns (bassGainDB, trebleGainDB) — the additional EQ correction to apply
-    /// relative to the reference level.
+    /// Computes the ISO 226 loudness correction gains at the bass and treble shelf frequencies.
     ///
-    /// - Parameters:
-    ///   - listeningPhon: Estimated listening level in phons (derived from volume scalar).
-    ///   - referencePhon: Phon level at which the system is calibrated (no correction applied).
-    private static func iso226CorrectionGains(
+    /// Anchor frequencies: 60 Hz (bass shelf) and 9000 Hz (treble shelf).
+    /// These match the shelf corner frequencies applied in processLoudnessContour() exactly,
+    /// so the computed gain is appropriate for the shelf being driven.
+    ///
+    /// Returns (bassGainDB, trebleGainDB) — the EQ correction to apply relative to refPhon.
+    /// Positive values mean the ear needs more of that frequency at the listening level.
+    static func iso226CorrectionGains(
         listeningPhon: Double,
         referencePhon: Double
     ) -> (bass: Float, treble: Float) {
-        // Compute SPL at the bass shelf and treble shelf frequencies.
-        // Bass: 80 Hz (representative low-frequency anchor).
-        // Treble: 6000 Hz (representative high-frequency anchor).
-        let refBass   = iso226SPL(freqHz: 80,   phonDB: referencePhon) ?? 0
-        let lisBass   = iso226SPL(freqHz: 80,   phonDB: listeningPhon) ?? 0
-        let refTreble = iso226SPL(freqHz: 6000, phonDB: referencePhon) ?? 0
-        let lisTreble = iso226SPL(freqHz: 6000, phonDB: listeningPhon) ?? 0
+        // Anchor frequencies match the shelf frequencies used in processLoudnessContour:
+        // Bass shelf at 60 Hz (set by Chunk 5 from 80 Hz) and treble shelf at 9000 Hz (from 6000 Hz).
+        // The ISO 226 correction must be evaluated at the same frequency as the shelf it will drive,
+        // otherwise the gain computed at 80 Hz would be applied at 60 Hz where the equal-loudness
+        // contour has a different curvature.
+        let refBass    = iso226SPL(freqHz: 60,   phonDB: referencePhon) ?? 0
+        let lisBass    = iso226SPL(freqHz: 60,   phonDB: listeningPhon) ?? 0
+        let refTreble  = iso226SPL(freqHz: 9000, phonDB: referencePhon) ?? 0
+        let lisTreble  = iso226SPL(freqHz: 9000, phonDB: listeningPhon) ?? 0
         let refMid    = iso226SPL(freqHz: 1000, phonDB: referencePhon) ?? referencePhon
         let lisMid    = iso226SPL(freqHz: 1000, phonDB: listeningPhon) ?? listeningPhon
 
@@ -3018,6 +3516,47 @@ final class DynamicsProcessor: @unchecked Sendable {
         let bassGain   = Float(max(-12.0, min(12.0, -bassCorr)))
         let trebleGain = Float(max(-12.0, min(12.0, -trebleCorr)))
         return (bassGain, trebleGain)
+    }
+
+    #if DEBUG
+    /// Test-only exposure of iso226SPL. Not callable from production paths.
+    static func iso226SPLPublic(freqHz: Double, phonDB: Double) -> Double? {
+        iso226SPL(freqHz: freqHz, phonDB: phonDB)
+    }
+    #endif
+
+    /// Delta solo: outputs the difference (processed − original) so you can hear what the chain adds.
+
+    /// Returns the loudness correction gains that would be applied at the given volume,
+    /// using the current reference phon and reference volume settings.
+    ///
+    /// Main-thread read of current stored parameters — safe because only the audio thread
+    /// writes to `_systemVolumeBits`, and this method is only called from the main thread
+    /// for display purposes.
+    ///
+    /// - Parameter volume: Normalised volume scalar (0.0–1.0). Pass nil to use the
+    ///   current stored system volume.
+    /// - Returns: `(bass, treble)` in dB — positive values indicate a boost is being applied.
+    ///   Returns `(0, 0)` when the loudness contour is disabled.
+    func previewContourGains(at volume: Float? = nil) -> (bass: Float, treble: Float) {
+        guard _loudnessContourEnabled.load(ordering: .relaxed) != 0 else { return (0, 0) }
+
+        let vol      = volume ?? bitsToFloat(_systemVolumeBits.load(ordering: .relaxed))
+        let refPhon  = Double(bitsToFloat(_loudnessRefPhonBits.load(ordering: .relaxed)))
+        let refVol   = bitsToFloat(_loudnessRefVolBits.load(ordering: .relaxed))
+        let strength = bitsToFloat(_loudnessStrengthBits.load(ordering: .relaxed))
+
+        let volumeScl     = max(0.001, Double(vol) / max(Double(refVol), 0.001))
+        let deltaDB       = 20.0 * log10(volumeScl)
+        let listeningPhon = max(20.0, refPhon + deltaDB)
+
+        let (rawBass, rawTreble): (Float, Float) =
+            _volumeDependentBits.load(ordering: .relaxed) != 0
+                ? Self.iso226CorrectionGains(listeningPhon: listeningPhon, referencePhon: refPhon)
+                : (3.0 * Float(1.0 - Double(vol) * 0.5),
+                   1.5 * Float(1.0 - Double(vol) * 0.5))
+
+        return (rawBass * strength, rawTreble * strength)
     }
 
     /// Delta solo: outputs the difference (processed − original) so you can hear what the chain adds.
@@ -3131,9 +3670,38 @@ final class DynamicsProcessor: @unchecked Sendable {
             bassManagementCrossover.processHighPass(bmHighR, count: count, state: bassManagementStateBuf, channelIndex: 1)
         }
 
-        // Sum low bands to get mono low
+        // Defense-in-depth: if crossover state becomes non-finite, reset it to prevent
+        // persistent corruption that would re-poison every future block.
+        let stateSize = bassManagementStateSize
+        let totalStateSize = stateSize * 2   // both channels
+        var needsReset = false
+        for i in 0..<totalStateSize {
+            if !bassManagementStateBuf[i].isFinite {
+                needsReset = true
+                break
+            }
+        }
+        if needsReset {
+            bassManagementStateBuf.initialize(repeating: 0, count: totalStateSize)
+        }
+        if asymmetricEnabled {
+            let hpStateSize = mainsHighPassStateSize
+            let hpTotalStateSize = hpStateSize * 2   // both channels
+            var hpNeedsReset = false
+            for i in 0..<hpTotalStateSize {
+                if !mainsHighPassStateBuf[i].isFinite {
+                    hpNeedsReset = true
+                    break
+                }
+            }
+            if hpNeedsReset {
+                mainsHighPassStateBuf.initialize(repeating: 0, count: hpTotalStateSize)
+            }
+        }
+
+        // Sum low bands to get mono low (average to prevent +6 dB level bump)
         for i in 0..<count {
-            bmMonoLow[i] = bmLowL[i] + bmLowR[i]
+            bmMonoLow[i] = (bmLowL[i] + bmLowR[i]) * 0.5
         }
 
         // Apply infrasonic filter to sub path if target is .subOutputOnly or .both
@@ -3304,6 +3872,21 @@ final class DynamicsProcessor: @unchecked Sendable {
                                       softOn: softOn, limOn: limOn)
     }
 
+    /// Copies the current mono-low bass signal to an output buffer.
+    /// Called by RenderCallbackContext to populate monoLowOutputBuffer for .subMono output channels.
+    /// - Parameters:
+    ///   - dest: Destination buffer to copy the mono-low signal to.
+    ///   - frameCount: Number of frames to copy.
+    func copyMonoLowSignal(to dest: UnsafeMutablePointer<Float>, frameCount: Int) {
+        guard _bassManagementEnabled.load(ordering: .relaxed) != 0 else {
+            // If bass management is disabled, zero the output
+            dest.initialize(repeating: 0, count: frameCount)
+            return
+        }
+        let count = min(frameCount, storedMaxFrameCount)
+        memcpy(dest, bmMonoLow, count * MemoryLayout<Float>.size)
+    }
+
     // MARK: - Module 1: De-Esser
 
     @inline(__always)
@@ -3404,9 +3987,18 @@ final class DynamicsProcessor: @unchecked Sendable {
         let aAttH = Self.computeAlpha(tauSeconds: Float(attH) / 1000.0, sampleRate: sr)
         let aRelH = Self.computeAlpha(tauSeconds: Float(relH) / 1000.0, sampleRate: sr)
 
-        // Sidechain HPF coefficients (precomputed in applyConfig)
-        let (hpfb0, hpfb1, hpfb2, hpfna1, hpfna2) = mbSidechainHPFCoeffs
-        let hpfEnabled = mbSidechainHPFCoeffs.0 != 1.0  // b0 != 1.0 means HPF is active
+        // Per-band sidechain HPF coefficients (precomputed in applyConfig)
+        let (hpfLb0, hpfLb1, hpfLb2, hpfLna1, hpfLna2) = mbSidechainHPFCoeffsLow
+        let (hpfMb0, hpfMb1, hpfMb2, hpfMna1, hpfMna2) = mbSidechainHPFCoeffsMid
+        let (hpfHb0, hpfHb1, hpfHb2, hpfHna1, hpfHna2) = mbSidechainHPFCoeffsHigh
+        let hpfLowEnabled  = mbSidechainHPFCoeffsLow.0  != 1.0
+        let hpfMidEnabled  = mbSidechainHPFCoeffsMid.0  != 1.0
+        let hpfHighEnabled = mbSidechainHPFCoeffsHigh.0 != 1.0
+
+        // Per-band makeup gains (read once before frame loop)
+        let makeupL = bitsToFloat(_mbMakeupLowBits.load(ordering: .relaxed))
+        let makeupM = bitsToFloat(_mbMakeupMidBits.load(ordering: .relaxed))
+        let makeupH = bitsToFloat(_mbMakeupHighBits.load(ordering: .relaxed))
 
         let (lpLMb0, lpLMb1, lpLMb2, lpLMa1, lpLMa2) = Self.lpfCoeffs(fc: crossLM, sr: sr)
         let (hpLMb0, hpLMb1, hpLMb2, hpLMa1, hpLMa2) = Self.hpfCoeffs(fc: crossLM, sr: sr)
@@ -3530,18 +4122,24 @@ final class DynamicsProcessor: @unchecked Sendable {
                 var vM = mbBandBufs[1][ch][frame]
                 var vH = mbBandBufs[2][ch][frame]
 
-                // Apply sidechain HPF if enabled
-                if hpfEnabled {
+                // Apply per-band sidechain HPF
+                if hpfLowEnabled {
                     let hpBase = ch * 2
-                    var w1 = mbSidechainHPFState[hpBase], w2 = mbSidechainHPFState[hpBase + 1]
-                    vL = Self.processBiquad(vL, b0: hpfb0, b1: hpfb1, b2: hpfb2, na1: hpfna1, na2: hpfna2, w1: &w1, w2: &w2)
-                    mbSidechainHPFState[hpBase] = w1; mbSidechainHPFState[hpBase + 1] = w2
-                    w1 = mbSidechainHPFState[hpBase]; w2 = mbSidechainHPFState[hpBase + 1]
-                    vM = Self.processBiquad(vM, b0: hpfb0, b1: hpfb1, b2: hpfb2, na1: hpfna1, na2: hpfna2, w1: &w1, w2: &w2)
-                    mbSidechainHPFState[hpBase] = w1; mbSidechainHPFState[hpBase + 1] = w2
-                    w1 = mbSidechainHPFState[hpBase]; w2 = mbSidechainHPFState[hpBase + 1]
-                    vH = Self.processBiquad(vH, b0: hpfb0, b1: hpfb1, b2: hpfb2, na1: hpfna1, na2: hpfna2, w1: &w1, w2: &w2)
-                    mbSidechainHPFState[hpBase] = w1; mbSidechainHPFState[hpBase + 1] = w2
+                    var w1 = mbSidechainHPFStateLow[hpBase], w2 = mbSidechainHPFStateLow[hpBase + 1]
+                    vL = Self.processBiquad(vL, b0: hpfLb0, b1: hpfLb1, b2: hpfLb2, na1: hpfLna1, na2: hpfLna2, w1: &w1, w2: &w2)
+                    mbSidechainHPFStateLow[hpBase] = w1; mbSidechainHPFStateLow[hpBase + 1] = w2
+                }
+                if hpfMidEnabled {
+                    let hpBase = ch * 2
+                    var w1 = mbSidechainHPFStateMid[hpBase], w2 = mbSidechainHPFStateMid[hpBase + 1]
+                    vM = Self.processBiquad(vM, b0: hpfMb0, b1: hpfMb1, b2: hpfMb2, na1: hpfMna1, na2: hpfMna2, w1: &w1, w2: &w2)
+                    mbSidechainHPFStateMid[hpBase] = w1; mbSidechainHPFStateMid[hpBase + 1] = w2
+                }
+                if hpfHighEnabled {
+                    let hpBase = ch * 2
+                    var w1 = mbSidechainHPFStateHigh[hpBase], w2 = mbSidechainHPFStateHigh[hpBase + 1]
+                    vH = Self.processBiquad(vH, b0: hpfHb0, b1: hpfHb1, b2: hpfHb2, na1: hpfHna1, na2: hpfHna2, w1: &w1, w2: &w2)
+                    mbSidechainHPFStateHigh[hpBase] = w1; mbSidechainHPFStateHigh[hpBase + 1] = w2
                 }
 
                 let aL = vL < 0 ? -vL : vL; if aL > pkL { pkL = aL }
@@ -3553,9 +4151,9 @@ final class DynamicsProcessor: @unchecked Sendable {
             gH = mbSmoothedGain(peak: pkH, threshDB: threshH, gain: gH, alphaAtt: aAttH, alphaRel: aRelH, ratio: ratioH, kneeDB: kneeH)
             for ch in 0..<numCh {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                buf[frame] = mbBandBufs[0][ch][frame] * gL
-                           + mbBandBufs[1][ch][frame] * gM
-                           + mbBandBufs[2][ch][frame] * gH
+                buf[frame] = mbBandBufs[0][ch][frame] * gL * makeupL
+                           + mbBandBufs[1][ch][frame] * gM * makeupM
+                           + mbBandBufs[2][ch][frame] * gH * makeupH
             }
         }
         mbGainLow = gL; mbGainMid = gM; mbGainHigh = gH
@@ -3601,6 +4199,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let kneeW    = bitsToFloat(_compKneeWidthBits.load(ordering: .relaxed))
         let halfKnee = kneeW * 0.5
         let progDepRelease = _compProgramDependentRelease.load(ordering: .relaxed) != 0
+        let feedBack = _compTopologyBits.load(ordering: .relaxed) != 0
         let sidechainHPHz = bitsToFloat(_compSidechainHighPassBits.load(ordering: .relaxed))
         var env = compEnvDB
 
@@ -3611,11 +4210,35 @@ final class DynamicsProcessor: @unchecked Sendable {
         let hpA1 = compSidechainHPCoeffs.a1
         let hpA2 = compSidechainHPCoeffs.a2
 
+        // Improved program-dependent release: compute per-callback block RMS for trend detection.
+        // RMS alpha ≈ 100 ms time constant. Only computed when progDepRelease is enabled.
+        if progDepRelease {
+            var blockPower: Float = 0.0
+            for ch in 0..<numCh {
+                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                var chPower: Float = 0.0
+                vDSP_measqv(buf, 1, &chPower, vDSP_Length(count))
+                blockPower += chPower
+            }
+            blockPower /= Float(max(numCh, 1))
+            let rmsAlpha = Float(exp(-1.0 / (storedSampleRate * 0.1)))
+            compPDRRMSState = rmsAlpha * compPDRRMSState + (1.0 - rmsAlpha) * blockPower
+        }
+
+        // Feed-back topology: track the previous frame's output gain.
+        var lastOutputGain: Float = pow(10.0, env * 0.05) * makeup
+
         for frame in 0..<count {
             var peak: Float = 0.0
             for ch in 0..<numCh {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                var v = buf[frame]
+                var v: Float
+                if feedBack {
+                    // Feed-back: measure input scaled by previous output gain
+                    v = buf[frame] * lastOutputGain
+                } else {
+                    v = buf[frame]
+                }
 
                 // Apply sidechain high-pass filter if enabled
                 if sidechainHPHz > 0.0 {
@@ -3645,13 +4268,16 @@ final class DynamicsProcessor: @unchecked Sendable {
                 target = (thresh + (xDB - thresh) / ratio) - xDB
             }
 
-            // Program-dependent release: adapt release time based on signal dynamics
+            // Program-dependent release: use short-term RMS trend for more musical behaviour.
+            // Rising signal (rmsTrend > 0) → use nominal release to avoid pumping.
+            // Falling signal (rmsTrend < 0) → allow up to 2× faster release for natural decay.
             let alphaRel: Float
             if progDepRelease {
-                // Faster release for transients (large gain reduction changes)
-                let delta = abs(target - env)
-                let adaptiveFactor = min(1.0, delta / 10.0) // Scale based on GR change
-                alphaRel = baseAlphaRel * (1.0 - adaptiveFactor * 0.5) // Up to 2x faster
+                let rmsTrend = compPDRRMSState - compPDRPrevRMS
+                let trendFactor = max(-1.0, min(1.0, rmsTrend / (compPDRRMSState + 1e-10)))
+                alphaRel = trendFactor > 0
+                    ? baseAlphaRel
+                    : baseAlphaRel * (1.0 - min(0.5, -trendFactor * 2.0))
             } else {
                 alphaRel = baseAlphaRel
             }
@@ -3660,12 +4286,14 @@ final class DynamicsProcessor: @unchecked Sendable {
                 ? alphaAtt * env + (1.0 - alphaAtt) * target
                 : alphaRel * env + (1.0 - alphaRel) * target
             let gain = pow(10.0, env * 0.05) * makeup
+            lastOutputGain = gain  // save for next frame's feed-back measurement
             for ch in 0..<numCh {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                 buf[frame] *= gain
             }
         }
         compEnvDB = env
+        if progDepRelease { compPDRPrevRMS = compPDRRMSState }
     }
 
     // MARK: - Module 4: Expander
@@ -3983,7 +4611,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     /// 2nd-order low shelf (Audio EQ Cookbook, S=1 matched slope).
     /// Returns (b0, b1, b2, na1, na2) where na1/na2 are pre-negated for processBiquad.
-    private static func lowShelfCoeffs(fc: Float, gainDB: Float, sr: Double) -> (Float, Float, Float, Float, Float) {
+    static func lowShelfCoeffs(fc: Float, gainDB: Float, sr: Double) -> (Float, Float, Float, Float, Float) {
         let A    = pow(10.0, Double(gainDB) / 40.0)
         let w0   = 2.0 * Double.pi * Double(max(fc, 10.0)) / sr
         let cosW = cos(w0); let sinW = sin(w0)
@@ -4003,7 +4631,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
     /// 2nd-order high shelf (Audio EQ Cookbook, S=1 matched slope).
     /// Returns (b0, b1, b2, na1, na2) where na1/na2 are pre-negated for processBiquad.
-    private static func highShelfCoeffs(fc: Float, gainDB: Float, sr: Double) -> (Float, Float, Float, Float, Float) {
+    static func highShelfCoeffs(fc: Float, gainDB: Float, sr: Double) -> (Float, Float, Float, Float, Float) {
         let A    = pow(10.0, Double(gainDB) / 40.0)
         let w0   = 2.0 * Double.pi * Double(max(fc, 10.0)) / sr
         let cosW = cos(w0); let sinW = sin(w0)
@@ -4033,6 +4661,19 @@ final class DynamicsProcessor: @unchecked Sendable {
     static func computeAlpha(tauSeconds: Float, sampleRate: Double) -> Float {
         Float(exp(-1.0 / (Double(tauSeconds) * sampleRate)))
     }
+
+    // MARK: - Test Helpers
+
+#if DEBUG
+    /// Test-only entry point for processLoudnessContour.
+    /// Not callable from production code paths.
+    func processLoudnessContourForTest(
+        abl: inout AudioBufferList, count: Int
+    ) {
+        let ptr = UnsafeMutableAudioBufferListPointer(&abl)
+        processLoudnessContour(abl: ptr, numCh: ptr.count, count: count)
+    }
+#endif
 }
 
 // MARK: - Bit-casting helpers (inline, no boxing)

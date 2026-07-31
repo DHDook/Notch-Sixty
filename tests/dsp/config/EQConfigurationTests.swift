@@ -1,5 +1,6 @@
-import XCTest
+ import XCTest
 @testable import Equaliser
+import SwiftUI
 
 final class EQConfigurationTests: XCTestCase {
     // MARK: - Frequency Generation Tests
@@ -441,9 +442,17 @@ final class EQConfigurationTests: XCTestCase {
             inputDeviceID: nil,
             outputDeviceID: "test-device",
             bandwidthDisplayMode: "octaves",
+            appearanceMode: AppearanceMode.system.rawValue,
+            interfaceStyle: InterfaceStyle.both.rawValue,
             manualModeEnabled: false,
             captureMode: 0,
-            metersEnabled: true
+            dynamicsConfig: .default,
+            metersEnabled: true,
+            rtaEnabled: true,
+            goniometerEnabled: true,
+            analyticsMetersEnabled: true,
+            gainStructureEnabled: true,
+            levelMetersEnabled: true
         )
 
         // Create new config from snapshot
@@ -453,8 +462,8 @@ final class EQConfigurationTests: XCTestCase {
         XCTAssertEqual(restored.globalBypass, true)
         XCTAssertEqual(restored.inputGain, 3.5, accuracy: 0.001)
         XCTAssertEqual(restored.outputGain, -2.0, accuracy: 0.001)
-        XCTAssertEqual(restored.channelMode, .stereo)
-        XCTAssertEqual(restored.channelFocus, .right)
+        XCTAssertEqual(restored.channelMode, ChannelMode.stereo)
+        XCTAssertEqual(restored.channelFocus, ChannelFocus.right)
         XCTAssertEqual(restored.leftState.userEQ.bands[0].gain, 6.0, accuracy: 0.001)
         XCTAssertEqual(restored.rightState.userEQ.bands[0].gain, -3.0, accuracy: 0.001)
     }
@@ -482,9 +491,17 @@ final class EQConfigurationTests: XCTestCase {
             inputDeviceID: nil,
             outputDeviceID: nil,
             bandwidthDisplayMode: "octaves",
+            appearanceMode: AppearanceMode.system.rawValue,
+            interfaceStyle: InterfaceStyle.both.rawValue,
             manualModeEnabled: false,
             captureMode: 0,
-            metersEnabled: true
+            dynamicsConfig: .default,
+            metersEnabled: true,
+            rtaEnabled: true,
+            goniometerEnabled: true,
+            analyticsMetersEnabled: true,
+            gainStructureEnabled: true,
+            levelMetersEnabled: true
         )
 
         // Restore from snapshot
@@ -493,6 +510,6 @@ final class EQConfigurationTests: XCTestCase {
         // Verify both channels preserved
         XCTAssertEqual(restored.leftState.userEQ.bands[0].gain, 6.0, accuracy: 0.001)
         XCTAssertEqual(restored.rightState.userEQ.bands[0].gain, -3.0, accuracy: 0.001)
-        XCTAssertEqual(restored.channelMode, .stereo)
+        XCTAssertEqual(restored.channelMode, ChannelMode.stereo)
     }
 }

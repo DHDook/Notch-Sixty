@@ -17,6 +17,14 @@ struct EQBandSliderView: View {
     var onNavigateLeft: (() -> Void)? = nil
     var onNavigateRight: (() -> Void)? = nil
     var startEditing: Bool = false
+    /// Called when the user taps "Load IR…" for a .fir band.
+    var onLoadFIRKernel: (() -> Void)? = nil
+    /// Called when the user taps "Clear" for a .fir band.
+    var onClearFIRKernel: (() -> Void)? = nil
+    /// True when the EQ is in linear-phase mode (needed to show the FIR warning).
+    var isLinearPhaseActive: Bool = false
+    var constantQUpdate: ((Bool) -> Void)? = nil
+    var linkwitzTargetHzUpdate: ((Float?) -> Void)? = nil
 
     @State private var isShowingDetail = false
     @State private var dragStartGain: Float? = nil
@@ -41,16 +49,6 @@ struct EQBandSliderView: View {
                 onAdjust: AudioConstants.clampGain
             )
             .font(.system(size: 10, weight: .bold, design: .monospaced))
-            if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .bold))
-                        .padding(4)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Delete band")
-            }
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
@@ -64,13 +62,12 @@ struct EQBandSliderView: View {
 
     private var header: some View {
         VStack(alignment: .center, spacing: 4) {
-            Text("\(bandNumber)")
-                .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundStyle(band.isDynamic ? Color.accentColor : Color.secondary)
-                .monospacedDigit()
+            HStack(spacing: 4) {
+                Text("\(bandNumber)")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(band.isDynamic ? Color.accentColor : Color.secondary)
+                    .monospacedDigit()
 
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
                 Button {
                     isShowingDetail = true
                 } label: {
@@ -96,11 +93,16 @@ struct EQBandSliderView: View {
                         dynamicParamsUpdate: { params in
                             dynamicParamsUpdate?(params)
                         },
-                        onClose: { isShowingDetail = false }
+                        onClose: { isShowingDetail = false },
+                        onDelete: onDelete,
+                        onLoadFIRKernel: onLoadFIRKernel,
+                        onClearFIRKernel: onClearFIRKernel,
+                        isLinearPhaseActive: isLinearPhaseActive,
+                        constantQUpdate: constantQUpdate,
+                        linkwitzTargetHzUpdate: linkwitzTargetHzUpdate
                     )
                     .frame(width: 240)
                 }
-                Spacer(minLength: 0)
             }
 
             InlineEditableValue(
@@ -187,6 +189,7 @@ struct EQBandSliderView: View {
 struct EQBandDetailPopover: View {
     @EnvironmentObject var store: EqualiserStore
 
+    let band: EQBandConfiguration
     let gainUpdate: (Float) -> Void
     let frequencyUpdate: (Float) -> Void
     let qUpdate: (Float) -> Void
@@ -196,6 +199,14 @@ struct EQBandDetailPopover: View {
     let isDynamicUpdate: (Bool) -> Void
     let dynamicParamsUpdate: (DynamicBandParams) -> Void
     let onClose: () -> Void
+    var onLoadFIRKernel: (() -> Void)? = nil
+    var onClearFIRKernel: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
+    var constantQUpdate: ((Bool) -> Void)? = nil
+    var linkwitzTargetHzUpdate: ((Float?) -> Void)? = nil
+    /// True when the EQ is in linear-phase mode. Shown as a hint when .fir is selected
+    /// without linear-phase mode active.
+    var isLinearPhaseActive: Bool = false
 
     @State private var gain: Float
     @State private var frequency: Float
@@ -241,7 +252,13 @@ struct EQBandDetailPopover: View {
          bypassUpdate: @escaping (Bool) -> Void,
          isDynamicUpdate: @escaping (Bool) -> Void,
          dynamicParamsUpdate: @escaping (DynamicBandParams) -> Void,
-         onClose: @escaping () -> Void) {
+         onClose: @escaping () -> Void,
+         onDelete: (() -> Void)? = nil,
+         onLoadFIRKernel: (() -> Void)? = nil,
+         onClearFIRKernel: (() -> Void)? = nil,
+         isLinearPhaseActive: Bool = false,
+         constantQUpdate: ((Bool) -> Void)? = nil,
+         linkwitzTargetHzUpdate: ((Float?) -> Void)? = nil) {
         _gain = State(initialValue: band.gain)
         _frequency = State(initialValue: band.frequency)
         _q = State(initialValue: band.q)
@@ -278,6 +295,13 @@ struct EQBandDetailPopover: View {
         self.isDynamicUpdate = isDynamicUpdate
         self.dynamicParamsUpdate = dynamicParamsUpdate
         self.onClose = onClose
+        self.onDelete = onDelete
+        self.band = band
+        self.onLoadFIRKernel = onLoadFIRKernel
+        self.onClearFIRKernel = onClearFIRKernel
+        self.isLinearPhaseActive = isLinearPhaseActive
+        self.constantQUpdate = constantQUpdate
+        self.linkwitzTargetHzUpdate = linkwitzTargetHzUpdate
     }
 
     var body: some View {
@@ -327,7 +351,7 @@ struct EQBandDetailPopover: View {
 
             // Frequency
             HStack {
-                Text("Frequency (Hz)")
+                Text(filterType == .linkwitzTransform ? "Resonance (f0)" : "Frequency (Hz)")
                 Spacer()
                 TextField("1000", text: $frequencyText)
                     .textFieldStyle(.roundedBorder)
@@ -352,40 +376,70 @@ struct EQBandDetailPopover: View {
                         return .handled
                     }
             }
+            .disabled(filterType == .fir)
 
             // Gain
             HStack {
-                Text("Gain (dB)")
+                Text(filterType == .linkwitzTransform ? "Target Q (Qp)" : "Gain (dB)")
                 Spacer()
-                TextField("0.0", text: $gainText)
+                TextField(filterType == .linkwitzTransform ? "0.58" : "0.0", text: $gainText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 70)
                     .multilineTextAlignment(.trailing)
                     .focused($focusedField, equals: .gain)
                     .onSubmit {
                         if let value = Float(gainText) {
-                            let clamped = AudioConstants.clampGain(value)
+                            let clamped: Float
+                            if filterType == .linkwitzTransform {
+                                clamped = max(0.1, min(5.0, value))  // Qp: 0.1–5.0, never zero
+                            } else {
+                                clamped = AudioConstants.clampGain(value)
+                            }
                             gain = clamped
-                            gainText = String(format: "%.1f", clamped)
+                            gainText = filterType == .linkwitzTransform
+                                ? String(format: "%.2f", clamped)
+                                : String(format: "%.1f", clamped)
                             gainUpdate(clamped)
                         }
                         focusedField = .bandwidth
                     }
                     .onKeyPress(.upArrow) {
-                        adjustGain(by: 0.1)
+                        adjustGain(by: filterType == .linkwitzTransform ? 0.01 : 0.1)
                         return .handled
                     }
                     .onKeyPress(.downArrow) {
-                        adjustGain(by: -0.1)
+                        adjustGain(by: filterType == .linkwitzTransform ? -0.01 : -0.1)
                         return .handled
                     }
+            }
+            .disabled(filterType == .fir)
+
+            // Linkwitz-Transform: Target Frequency (fp)
+            if filterType == .linkwitzTransform {
+                let effectiveFp = band.linkwitzTargetHz ?? (band.frequency * 0.7)
+                HStack {
+                    Text("Target Freq (fp)")
+                    Spacer()
+                    Text(String(format: "%.0f Hz", effectiveFp))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Stepper("", value: Binding(
+                        get: { Double(effectiveFp) },
+                        set: { v in
+                            let clamped = Float(max(10.0, min(v, Double(frequency) * 0.99)))
+                            linkwitzTargetHzUpdate?(clamped)
+                        }
+                    ), in: 10.0...500.0, step: 1.0)
+                    .labelsHidden()
+                }
+                .help("Target resonance frequency. Leave near the default (f0 × 0.7) for a Butterworth-aligned extension, or set to your desired −3 dB point.")
             }
 
             // Bandwidth / Q Factor
             // UI displays bandwidth or Q based on user preference, but model stores Q.
             // Conversion happens at the boundary.
             HStack {
-                Text(bandwidthLabel)
+                Text(filterType == .linkwitzTransform ? "Box Q (Q0)" : bandwidthLabel)
                 Spacer()
                 TextField("1.0", text: $bandwidthText)
                     .textFieldStyle(.roundedBorder)
@@ -418,11 +472,31 @@ struct EQBandDetailPopover: View {
                         return .handled
                     }
             }
+            .disabled(filterType == .fir)
             .onAppear {
                 bandwidthText = BandwidthConverter.formatForInput(q: q, mode: store.bandwidthDisplayMode)
             }
             .onChange(of: store.bandwidthDisplayMode) { _, newMode in
                 bandwidthText = BandwidthConverter.formatForInput(q: q, mode: newMode)
+            }
+
+            // Constant-Q toggle — parametric bands only
+            if filterType == .parametric {
+                Toggle("Constant-Q", isOn: Binding(
+                    get: { band.constantQ },
+                    set: { v in constantQUpdate?(v) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("When on, bandwidth stays fixed regardless of gain (Orfanidis constant-Q). When off, bandwidth narrows as gain approaches zero (standard RBJ proportional-Q).")
+            }
+
+            // Linkwitz-Transform info caption
+            if filterType == .linkwitzTransform {
+                Text("Redesigns a sealed-box speaker's roll-off. f0/Q0 = existing alignment, fp/Qp = target.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Dynamic EQ parameters (shown only when mode == Dynamic)
@@ -620,6 +694,43 @@ struct EQBandDetailPopover: View {
                 filterTypeUpdate(newValue)
             }
 
+            // FIR kernel load controls — shown when filterType == .fir
+            if filterType == .fir {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let name = band.firKernelDisplayName {
+                        Text(name)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text("No IR loaded")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                    HStack(spacing: 6) {
+                        Button("Load IR…") {
+                            onLoadFIRKernel?()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        if band.firKernelDisplayName != nil {
+                            Button("Clear") {
+                                onClearFIRKernel?()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+                    }
+                    if !isLinearPhaseActive {
+                        Text("⚠ FIR bands require Linear Phase mode")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.top, 4)
+            }
+
             Picker("Slope", selection: $slope) {
                 ForEach(FilterSlope.allCases, id: \.self) { s in
                     Text(s.displayName)
@@ -627,15 +738,46 @@ struct EQBandDetailPopover: View {
                 }
             }
             .pickerStyle(.menu)
-            .disabled(filterType == .allPass)
+            .disabled(filterType == .allPass || filterType == .fir)
             .onChange(of: slope) { _, newValue in
                 slopeUpdate(newValue)
             }
 
-            Toggle("Bypass Band", isOn: $bypass)
-                .onChange(of: bypass) { _, newValue in
-                    bypassUpdate(newValue)
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Text("Bypass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Toggle("", isOn: $bypass)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: bypass) { _, newValue in
+                            bypassUpdate(newValue)
+                        }
                 }
+
+                Spacer()
+
+                if let onDelete {
+                    HStack(spacing: 4) {
+                        Text("Delete")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            onDelete()
+                            onClose()
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 15, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Delete band")
+                    }
+                }
+            }
         }
         .padding(16)
         .onKeyPress(.escape) {

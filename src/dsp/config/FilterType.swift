@@ -1,6 +1,8 @@
 /// Custom filter type enum replacing AVAudioUnitEQFilterType.
 /// Lives in domain layer — no framework dependencies.
-/// Raw values 0-7 cover all filter types. Q/resonance is controlled via parameter.
+/// Raw values 0-7 cover IIR filter types; 11 is reserved for per-band FIR;
+/// 12 = Linkwitz-Transform; 13 = Tilt EQ.
+/// Q/resonance is controlled via parameter.
 enum FilterType: Int, Codable, Sendable, CaseIterable {
     case parametric = 0   // Peaking EQ (bell)
     case lowPass = 1      // 2nd-order low pass (Q controls resonance)
@@ -8,8 +10,11 @@ enum FilterType: Int, Codable, Sendable, CaseIterable {
     case lowShelf = 3     // Low shelf (Q controls slope)
     case highShelf = 4    // High shelf (Q controls slope)
     case bandPass = 5     // Band pass (constant 0 dB peak gain)
-    case notch = 6       // Band stop / notch
+    case notch = 6        // Band stop / notch
     case allPass = 7      // Allpass (unity magnitude, configurable phase)
+    case fir = 11         // Per-band FIR (user-loaded IR); processed by LinearPhaseEQEngine
+    case linkwitzTransform = 12  // Linkwitz-Transform for sealed-box speaker alignment
+    case tiltEQ = 13             // Simultaneous complementary low/high shelf around a pivot frequency
 
     /// Creates a FilterType from a raw value.
     /// Returns nil if the raw value is outside the valid range.
@@ -18,14 +23,15 @@ enum FilterType: Int, Codable, Sendable, CaseIterable {
         // Migrate legacy resonant filter types
         let migratedValue: Int
         switch rawValue {
-        case 7: migratedValue = 1  // resonantLowPass → lowPass
-        case 8: migratedValue = 2  // resonantHighPass → highPass
-        case 9: migratedValue = 3  // resonantLowShelf → lowShelf
-        case 10: migratedValue = 4 // resonantHighShelf → highShelf
+        case 7:  migratedValue = 1  // resonantLowPass  → lowPass
+        case 8:  migratedValue = 2  // resonantHighPass → highPass
+        case 9:  migratedValue = 3  // resonantLowShelf → lowShelf
+        case 10: migratedValue = 4  // resonantHighShelf → highShelf
         default: migratedValue = rawValue
         }
 
-        guard (0...7).contains(migratedValue) else { return nil }
+        // Valid raw values: 0–7 (IIR types), 11 (FIR), 12 (Linkwitz-Transform), 13 (Tilt EQ)
+        guard (0...7).contains(migratedValue) || migratedValue == 11 || migratedValue == 12 || migratedValue == 13 else { return nil }
         self.init(rawValue: migratedValue)
     }
 }
@@ -52,6 +58,12 @@ extension FilterType {
             return "Notch"
         case .allPass:
             return "All-Pass"
+        case .fir:
+            return "FIR"
+        case .linkwitzTransform:
+            return "Linkwitz"
+        case .tiltEQ:
+            return "Tilt"
         }
     }
 
@@ -74,12 +86,18 @@ extension FilterType {
             return "Notch"
         case .allPass:
             return "AP"
+        case .fir:
+            return "FIR"
+        case .linkwitzTransform:
+            return "LT"
+        case .tiltEQ:
+            return "Tilt"
         }
     }
 
     /// All filter types in UI display order.
     static var allCasesInUIOrder: [FilterType] {
-        [.parametric, .lowPass, .highPass, .lowShelf, .highShelf, .bandPass, .notch, .allPass]
+        [.parametric, .lowPass, .highPass, .lowShelf, .highShelf, .bandPass, .notch, .allPass, .fir, .linkwitzTransform, .tiltEQ]
     }
 }
 
@@ -104,6 +122,9 @@ extension FilterType {
         case "RHP": self = .highPass
         case "RLS": self = .lowShelf
         case "RHS": self = .highShelf
+        case "FIR": self = .fir
+        case "LT": self = .linkwitzTransform
+        case "Tilt": self = .tiltEQ
         default: self = .parametric
         }
     }

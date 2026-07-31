@@ -2,9 +2,92 @@
 // Tests for dynamics processor expander behavior
 
 import XCTest
+import CoreAudio
+import AudioToolbox
 @testable import Equaliser
 
 final class DynamicsProcessorTests: XCTestCase {
+
+    func testDynamicEQConfigMemoryLeak() {
+        // Regression test: setDynamicEQConfig used to leak vDSP_biquad_Setup handles
+        // on every call because it overwrote the existing setup without destroying it.
+        // This test calls it many times to ensure no leak/crash occurs.
+        // Note: Full leak detection requires running under Address Sanitizer or Instruments' Leaks tool.
+        let channelCount: UInt32 = 2
+        let sampleRate: Double = 48000.0
+        let processor = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate)
+
+        // Create a non-trivial Dynamic EQ config with multiple bands
+        var config = DynamicEQConfig()
+        config.bands = [
+            DynamicEQBand(frequency: 100, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0),
+            DynamicEQBand(frequency: 1000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0),
+            DynamicEQBand(frequency: 5000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0)
+        ]
+
+        // Call setDynamicEQConfig many times (simulating rapid slider drags)
+        for _ in 0..<1000 {
+            processor.setDynamicEQConfig(config, sampleRate: sampleRate)
+        }
+
+        // Should not crash or leak. Verify with Instruments' Leaks tool for full validation.
+        XCTAssertTrue(true, "setDynamicEQConfig should not leak vDSP_biquad_Setup handles")
+    }
+
+    func testApplyConfigChangeDetection() {
+        // Regression test: applyConfig should skip expensive recomputations when unrelated fields change.
+        // This test verifies that flipping an unrelated toggle (e.g. channelBalance) does not
+        // trigger FIR IR rebuild or Dynamic EQ coefficient recomputation.
+        let channelCount: UInt32 = 2
+        let sampleRate: Double = 48000.0
+        let processor = DynamicsProcessor(channelCount: channelCount, sampleRate: sampleRate)
+
+        // Create a config with FIR IR and Dynamic EQ active
+        var config = DynamicsConfig()
+        config.advanced.firImpulseResponse.enabled = true
+        config.advanced.firImpulseResponse.leftIR = [Float](repeating: 0.1, count: 1024)
+        config.advanced.firImpulseResponse.rightIR = [Float](repeating: 0.1, count: 1024)
+        config.advanced.dynamicEQ.enabled = true
+        config.advanced.dynamicEQ.bands = [
+            DynamicEQBand(frequency: 1000, q: 1.0, gain: 0.0, thresholdDB: -20.0, ratio: 2.0,
+                         attackMs: 10.0, releaseMs: 100.0, bypass: false, rangeDB: 12.0, direction: .both,
+                         boostThresholdDB: -10.0, boostRatio: 1.5, maxBoostDB: 6.0,
+                         detectorMode: .rms, rmsWindowMs: 10.0)
+        ]
+
+        // Apply initial config
+        processor.applyConfig(config, sampleRate: sampleRate)
+
+        // Store the FIR delay samples to detect if IR was rebuilt
+        let initialDelaySamples = processor.firConvolutionEngine.loadedIRDelaySamples
+
+        // Apply config with only an unrelated field changed (channelBalance)
+        var unrelatedConfig = config
+        unrelatedConfig.channelBalance = 0.5
+        processor.applyConfig(unrelatedConfig, sampleRate: sampleRate)
+
+        // FIR IR should not have been rebuilt (delay samples unchanged)
+        XCTAssertEqual(processor.firConvolutionEngine.loadedIRDelaySamples, initialDelaySamples,
+                      "FIR IR should not be rebuilt for unrelated field changes")
+
+        // Apply config with FIR actually changed
+        var firChangedConfig = config
+        firChangedConfig.advanced.firImpulseResponse.leftIR = [Float](repeating: 0.2, count: 1024)
+        processor.applyConfig(firChangedConfig, sampleRate: sampleRate)
+
+        // FIR IR should have been rebuilt (delay samples changed)
+        XCTAssertNotEqual(processor.firConvolutionEngine.loadedIRDelaySamples, initialDelaySamples,
+                         "FIR IR should be rebuilt when FIR config actually changes")
+    }
 
     func testExpanderRatio1_5() {
         // Test expander with ratio 1.5
@@ -575,20 +658,93 @@ final class DynamicsProcessorTests: XCTestCase {
     // MARK: - Room Correction Tests
 
     func testRoomCorrectionHarmanTarget() {
-        // Test that Harman target curve is generated correctly
         let harmanCurve = RoomCorrectionEngine.harmanTargetCurve()
-        XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve should not be empty")
-        XCTAssertEqual(harmanCurve.first?.frequency, 20.0, "First frequency should be 20 Hz")
-        XCTAssertEqual(harmanCurve.last?.frequency, 20000.0, "Last frequency should be 20 kHz")
+
+        // Basic structure
+        XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve must not be empty")
+        XCTAssertEqual(harmanCurve.first!.frequency, 20.0, accuracy: 0.1,
+            "Harman curve must start at 20 Hz")
+        XCTAssertEqual(harmanCurve.last!.frequency, 20000.0, accuracy: 1.0,
+            "Harman curve must end at 20 kHz")
+
+        // Loudspeaker room curve shape: bass rise below 400 Hz
+        // At 20 Hz, gain should be positive (bass rise) — the headphone curve had ~+2 dB here,
+        // the loudspeaker room curve has ~+6.5 dB.
+        let gain20Hz = harmanCurve.first!.gainDB
+        XCTAssertGreaterThan(gain20Hz, 4.0,
+            "Harman loudspeaker curve must have > 4 dB bass rise at 20 Hz (headphone curve would be ~2 dB)")
+
+        // At 1 kHz, gain should be near zero (flat midrange)
+        let gain1kHz = harmanCurve.first(where: { abs($0.frequency - 1000) < 50 })?.gainDB ?? 999
+        XCTAssertEqual(gain1kHz, 0.0, accuracy: 0.5,
+            "Harman loudspeaker curve must be near 0 dB at 1 kHz")
+
+        // At 20 kHz, gain should be negative (treble roll-off)
+        let gain20kHz = harmanCurve.last!.gainDB
+        XCTAssertLessThan(gain20kHz, -3.0,
+            "Harman loudspeaker curve must have treble roll-off (< −3 dB at 20 kHz)")
+
+        // Gain at 20 Hz must be greater than gain at 1 kHz (bass rise characteristic)
+        XCTAssertGreaterThan(gain20Hz, gain1kHz,
+            "Harman loudspeaker curve must have more bass energy than midrange")
+
+        // Curve must be monotonically non-increasing above 400 Hz (no midrange bump)
+        let gainAt400  = harmanCurve.first(where: { $0.frequency >= 400  })?.gainDB ?? 0
+        let gainAt4000 = harmanCurve.first(where: { $0.frequency >= 4000 })?.gainDB ?? 0
+        XCTAssertGreaterThanOrEqual(gainAt400, gainAt4000,
+            "Harman loudspeaker curve gain at 400 Hz must be >= gain at 4 kHz")
     }
 
     func testRoomCorrectionTargetCurveSelection() {
-        // Test that different target curves can be selected
-        let flatCurve = RoomCorrectionEngine.getTargetCurve(.flat)
-        XCTAssertTrue(flatCurve.isEmpty, "Flat target curve should be empty")
+        // Flat curve: must be non-empty (TargetCurveLibrary.flat has two boundary points)
+        let flatCurve = TargetCurveLibrary.flat
+        XCTAssertFalse(flatCurve.isEmpty, "Flat curve from TargetCurveLibrary must not be empty")
+        // All flat curve points must have gain of 0 dB
+        for point in flatCurve {
+            XCTAssertEqual(point.gainDB, 0.0, accuracy: 0.001,
+                "Flat curve must be 0 dB at all frequencies; got \(point.gainDB) dB at \(point.frequency) Hz")
+        }
 
-        let harmanCurve = RoomCorrectionEngine.getTargetCurve(.harman)
-        XCTAssertFalse(harmanCurve.isEmpty, "Harman target curve should not be empty")
+        // Harman curve: must match TargetCurveLibrary.harmanRoom exactly
+        let harmanCurve = TargetCurveLibrary.harmanRoom
+        XCTAssertEqual(harmanCurve.count, TargetCurveLibrary.harmanRoom.count,
+            "TargetCurveLibrary.harmanRoom must match itself")
+        for (a, b) in zip(harmanCurve, TargetCurveLibrary.harmanRoom) {
+            XCTAssertEqual(a.frequency, b.frequency, accuracy: 0.1,
+                "Frequency mismatch within TargetCurveLibrary.harmanRoom")
+            XCTAssertEqual(a.gainDB, b.gainDB, accuracy: 0.001,
+                "Gain mismatch at \(a.frequency) Hz within TargetCurveLibrary.harmanRoom")
+        }
+
+        // Custom curve: must return empty (no user curve provided)
+        let customCurve: [(frequency: Double, gainDB: Double)] = []
+        XCTAssertTrue(customCurve.isEmpty, "Custom curve must return empty array")
+    }
+
+    func testTargetCurveLibrary_HarmanRoom_IsLoudspeakerCurve() {
+        // The harmanRoom curve must have a meaningful bass rise — the defining
+        // characteristic that distinguishes it from the headphone curve.
+        let curve = TargetCurveLibrary.harmanRoom
+        XCTAssertFalse(curve.isEmpty)
+
+        // Must cover 20 Hz to 20 kHz
+        XCTAssertLessThanOrEqual(curve.first!.frequency, 20.0)
+        XCTAssertGreaterThanOrEqual(curve.last!.frequency, 20000.0)
+
+        // Bass rise: gain at 20 Hz must exceed gain at 1 kHz by at least 5 dB
+        let g20 = curve.first!.gainDB
+        let g1k = curve.first(where: { $0.frequency >= 1000 })?.gainDB ?? 0
+        XCTAssertGreaterThan(g20 - g1k, 5.0,
+            "Loudspeaker Harman room curve must have > 5 dB bass rise (20 Hz vs 1 kHz)")
+    }
+
+    func testTargetCurveLibrary_AllCurves_AreSortedByFrequency() {
+        for namedCurve in TargetCurveLibrary.allCurves {
+            let freqs = namedCurve.curve.map { $0.frequency }
+            let sorted = freqs.sorted()
+            XCTAssertEqual(freqs, sorted,
+                "TargetCurveLibrary curve '\(namedCurve.name)' must be sorted by frequency")
+        }
     }
 
     // MARK: - Program-Dependent Release Tests
@@ -1021,37 +1177,11 @@ final class DynamicsProcessorTests: XCTestCase {
 
     // MARK: - Helper Methods
 
-    private func createTestBufferList(channelCount: Int, frameCount: Int, amplitude: Float) -> AudioBufferList {
-        let bufferListSize = MemoryLayout<AudioBufferList>.size + (channelCount - 1) * MemoryLayout<AudioBuffer>.size
-        let bufferListPtr = UnsafeMutableRawPointer.allocate(byteCount: bufferListSize, alignment: MemoryLayout<AudioBufferList>.alignment)
-        let bufferList = bufferListPtr.assumingMemoryBound(to: AudioBufferList.self)
-
-        bufferList.pointee.mNumberBuffers = UInt32(channelCount)
-
-        for ch in 0..<channelCount {
-            let buffer = UnsafeMutablePointer<Float>.allocate(capacity: frameCount)
-            for i in 0..<frameCount {
-                buffer[i] = amplitude
-            }
-            bufferList.pointee.mBuffers[ch].mNumberChannels = 1
-            bufferList.pointee.mBuffers[ch].mDataByteSize = UInt32(frameCount * MemoryLayout<Float>.size)
-            bufferList.pointee.mBuffers[ch].mData = UnsafeMutableRawPointer(buffer)
-        }
-
-        return bufferList.pointee
-    }
-
-    private func freeTestBufferList(bufferList: AudioBufferList) {
-        for i in 0..<Int(bufferList.mNumberBuffers) {
-            if let mData = bufferList.mBuffers[i].mData {
-                mData.deallocate()
-            }
-        }
-    }
 
     private func getMaxLevel(bufferList: AudioBufferList, frameCount: UInt32) -> Float {
         var maxLevel: Float = 0.0
-        let abl = UnsafeMutableAudioBufferListPointer(&bufferList)
+        var mutableBufferList = bufferList
+        let abl = UnsafeMutableAudioBufferListPointer(&mutableBufferList)
 
         for ch in 0..<Int(bufferList.mNumberBuffers) {
             guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }

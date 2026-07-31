@@ -146,6 +146,13 @@ enum EasyEffectsExporter {
             return "Notch"
         case .allPass:
             return "All-pass"
+        case .fir:
+            // FIR bands have no EasyEffects biquad equivalent — skip with identity type.
+            return "Bell"
+        case .linkwitzTransform:
+            return "Bell"   // no EasyEffects equivalent; export as bell approximation
+        case .tiltEQ:
+            return "Bell"   // no EasyEffects equivalent; export as bell approximation
         }
     }
 }

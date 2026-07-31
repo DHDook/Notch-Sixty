@@ -6,6 +6,7 @@
 // Layout: six-column inline view with per-control settings popovers.
 
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: - Slider Row
@@ -23,7 +24,21 @@ private struct DynamicsSliderRow: View {
     var isDisabled: Bool = false
 
     @State private var textValue: String = ""
+    @State private var isUserEditing: Bool = false   // new — tracks an in-progress edit, not raw focus state
     @FocusState private var isFieldFocused: Bool
+    /// Snaps to the step grid on write without using Slider's built-in
+    /// `step:` parameter, which draws visible tick marks along the track —
+    /// this keeps drag-to-step-increment behavior while avoiding that look.
+    private var steppedValue: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { newVal in
+                guard step > 0 else { value = newVal; return }
+                let snapped = (newVal / step).rounded() * step
+                value = min(range.upperBound, max(range.lowerBound, snapped))
+            }
+        )
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -38,30 +53,60 @@ private struct DynamicsSliderRow: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Slider(value: $value, in: range)
+            Slider(value: steppedValue, in: range)
                 .controlSize(.small)
                 .onChange(of: value) { _, newVal in
-                    if !isFieldFocused {
+                    if !isUserEditing {
                         textValue = formatValue(newVal)
                     }
                 }
-
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            if isFieldFocused {
+                                // Don't wait for SwiftUI's @FocusState to round-trip —
+                                // go straight to AppKit and clear the window's first
+                                // responder the instant a touch lands on this slider,
+                                // before the slider's own drag-tracking has a chance
+                                // to be blocked by a still-active text-editor session
+                                // in the sibling TextField.
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                            }
+                        }
+                )
             if let right = rightEndLabel {
                 Text(right)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
 
-            TextField("", text: $textValue)
+           TextField("", text: $textValue)
                 .font(.system(size: 12, design: .monospaced))
                 .multilineTextAlignment(.trailing)
                 .frame(width: 74)
                 .textFieldStyle(.roundedBorder)
                 .focused($isFieldFocused)
                 .onAppear { textValue = formatValue(value) }
-                .onSubmit { commitTextEdit() }
+                .onChange(of: textValue) { _, _ in
+                    // Only true once the user has actually typed a keystroke
+                    // while this field is focused — not set merely by gaining
+                    // focus, and not set by the programmatic textValue
+                    // assignments above (see ordering note below).
+                    if isFieldFocused {
+                        isUserEditing = true
+                    }
+                }
+                .onSubmit {
+                    commitTextEdit()
+                    isUserEditing = false
+                }
                 .onChange(of: isFieldFocused) { _, focused in
-                    if !focused { commitTextEdit() }
+                    if !focused {
+                        if isUserEditing {
+                            commitTextEdit()
+                        }
+                        isUserEditing = false
+                    }
                 }
         }
         .disabled(isDisabled)
@@ -102,26 +147,43 @@ struct DynamicsInlineView: View {
 
     @State private var showDefinitions   = false
     @StateObject private var inlineMeterBridge = InlineMeterBridge()
+    @State private var rtaEnabledUI = true
+    @State private var goniometerEnabledUI = true
+    @State private var analyticsEnabledUI = true
+    @State private var gainStructureEnabledUI = true
+    @State private var levelMetersEnabledUI = true
+    @State private var metersMasterEnabledUI = true
+    @State private var showMetersHelp = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
 
             HStack(alignment: .top, spacing: 12) {
-                column1
-                Divider()
-                column2
-                Divider()
-                column3
-                Divider()
-                column4
-                Divider()
-                column5
+                controlColumns
                 Divider()
                 column6
             }
         }
         .onAppear { inlineMeterBridge.register(with: store.meterStore, equaliserStore: store) }
+    }
+
+    // Columns 1–5 grouped into their own container so the goniometer's updates
+    // (column6, which redraws whenever the goniometer is active) don't force
+    // SwiftUI to re-run stack sizing across these five static/control-heavy
+    // columns on every tick.
+    private var controlColumns: some View {
+        HStack(alignment: .top, spacing: 12) {
+            column1
+            Divider()
+            column2
+            Divider()
+            column3
+            Divider()
+            column4
+            Divider()
+            column5
+        }
     }
 
     // MARK: - Header
@@ -148,24 +210,34 @@ struct DynamicsInlineView: View {
                         // Column 1 — early signal chain
                         definitionEntry(title: "Infrasonic Filter", body: "Steep high-pass filter removing subsonic content below the threshold of hearing. Protects drivers and amplifiers from HVAC turbulence, record warps, and room pressurisation. Does not affect audible content when set at or below 20 Hz.")
                         Divider()
-                        definitionEntry(title: "Hi-Res Coef", body: "Enables high-resolution coefficient decoupling for per-sample filter updates at the cost of higher CPU.")
+                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
+                        Divider()
+                        definitionEntry(title: "Dialogue-Relative Leveler", body: "Dynamically boosts dialogue when it's being masked by other audio content. Compares the dialogue band's level against the full program level and applies gain only when the gap exceeds the target threshold. Uses asymmetric attack/release for natural response.")
+                        Divider()
+                        definitionEntry(title: "FIR Impulse Response", body: "Loads a user-supplied impulse response file and convolves it with the signal — distinct from FIR Correction's convolution slot. Intended for headphone or speaker correction profiles supplied as a raw impulse response rather than a measurement-derived filter.")
                         Divider()
                         definitionEntry(title: "DC Filter", body: "0.5 Hz single-pole high-pass removing DC bias before the dynamics chain.")
                         Divider()
+                        definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
+                        Divider()
                         definitionEntry(title: "Stereo Widener", body: "Three-band M/S processor that independently adjusts stereo width in the Low (< 200 Hz), Mid (200 Hz – 4 kHz), and High (> 4 kHz) regions.")
                         Divider()
-                        definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level.")
+                        definitionEntry(title: "LUFS Loudness Match", body: "Measures 3-second K-weighted loudness and continuously adjusts gain to hit the target LUFS level. Uses asymmetric attack/release: faster attack when the program gets louder, slower release when it gets quieter for more natural recovery.")
                         Divider()
                         definitionEntry(title: "Loudness Contour", body: "Fletcher-Munson compensation curve adding gentle bass and treble lift for low-level listening.")
                         Divider()
-                        definitionEntry(title: "4x Oversampling", body: "Upsamples audio by 4× before EQ and downsamples after EQ. Improves high-frequency response and reduces aliasing artifacts.")
-                        Divider()
                         definitionEntry(title: "De-Esser", body: "Tames harsh, high-frequency sibilance by applying frequency-selective gain reduction around a tunable centre frequency.")
                         Divider()
+                        // Column 2 — dynamics + spatial
                         definitionEntry(title: "Multiband Compressor", body: "Independently controls the dynamics of three separate frequency bands using Linkwitz-Riley crossovers.")
                         Divider()
-                        // Column 2 — later dynamics + spatial
+                        definitionEntry(title: "Compressor", body: "Standard feed-forward dynamics compressor with adjustable threshold, ratio, soft-knee width, attack, release, and makeup gain. Supports program-dependent release time adaptation and an optional sidechain high-pass filter to reduce low-frequency pumping.")
+                        Divider()
                         definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
+                        Divider()
+                        definitionEntry(title: "Bass Management", body: "Unified subwoofer integration: crossover frequency, slope, and type; independent sub-channel gain, polarity, and delay; room-gain compensation shelf; and per-speaker distance compensation for time alignment.")
+                        Divider()
+                        definitionEntry(title: "Dynamic Gain Rider", body: "Slowly reduces the signal feeding the clipper/limiter to keep sustained limiter gain reduction near a target level, trading a small amount of loudness for fewer audible limiting artefacts on hot mixes.")
                         Divider()
                         definitionEntry(title: "Clipper", body: "Analogue-style wave-shaper that gently rounds transient peaks before the limiter.")
                         Divider()
@@ -173,24 +245,26 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "De-Harsh", body: "High-frequency tilt filter attenuating above ~3.5 kHz to reduce tweeter fatigue.")
                         Divider()
+                        definitionEntry(title: "IR Alignment", body: "Fractional-sample delay compensation for multi-driver speaker acoustic centres.")
+                        Divider()
+                        definitionEntry(title: "Symmetry Balance", body: "Gain-matrix correction for asymmetric listening positions. Aligns L/R loudness at the ear.")
+                        Divider()
+                        // Column 3 — LTI suite + processing-mode flags
+                        definitionEntry(title: "Panning Gain Matrix", body: "Bilinear crossfeed matrix blending a proportion of each channel into the opposite channel.")
+                        Divider()
+                        definitionEntry(title: "Crosstalk Cancel.", body: "Recursive binaural inversion filter reducing inter-channel acoustic leakage between speakers.")
+                        Divider()
                         definitionEntry(title: "Pause Gate", body: "Silences output when signal falls below the threshold for the Hold duration, then reopens at the Resume Speed when audio returns. Use the Preset picker or tune individually to match your amplifier and listening habits.")
+                        Divider()
+                        definitionEntry(title: "Hi-Res Coef", body: "Enables high-resolution coefficient decoupling for per-sample filter updates at the cost of higher CPU.")
+                        Divider()
+                        definitionEntry(title: "4x Oversampling", body: "Upsamples audio by 4× before EQ and downsamples after EQ. Improves high-frequency response and reduces aliasing artifacts.")
                         Divider()
                         definitionEntry(title: "Sync Buffer", body: "Synchronises processing buffer to latency mode, preventing dropouts at low latency settings.")
                         Divider()
                         definitionEntry(title: "Pipeline Latency", body: "If using with video, your AV receiver or display's audio delay/lip-sync setting may need adjustment by the algorithmic latency amount.")
                         Divider()
-                        definitionEntry(title: "Symmetry Balance", body: "Gain-matrix correction for asymmetric listening positions. Aligns L/R loudness at the ear.")
-                        Divider()
-                        definitionEntry(title: "Panning Gain Matrix", body: "Bilinear crossfeed matrix blending a proportion of each channel into the opposite channel.")
-                        Divider()
-                        // Column 3 — LTI suite
-                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
-                        Divider()
-                        definitionEntry(title: "IR Alignment", body: "Fractional-sample delay compensation for multi-driver speaker acoustic centres.")
-                        Divider()
-                        definitionEntry(title: "Crosstalk Cancel.", body: "Recursive binaural inversion filter reducing inter-channel acoustic leakage between speakers.")
-                        Divider()
-                        definitionEntry(title: "Sub-Bass Align", body: "All-pass network phase-aligning sub-bass with main speaker bandwidth at the crossover frequency.")
+                        definitionEntry(title: "EQ Headroom Compensation", body: "Predictive static preamp gain, computed from EQ and room-correction filter design data, that backs off input level ahead of time to prevent EQ/correction boosts from clipping. Complements the reactive Dynamic Gain Rider.")
                         Divider()
                         definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions for more robust room correction.")
                         Divider()
@@ -217,7 +291,15 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Infrasonic",
                 isOn: inlineInfrasonicFilterEnabled,
-                fullName: "Infrasonic Filter"
+                fullName: "Infrasonic Filter",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = InfrasonicFilterConfig()
+                    adv.infrasonicFilter.cutoffHz = d.cutoffHz
+                    adv.infrasonicFilter.slope = d.slope
+                    adv.infrasonicFilter.target = d.target
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Frequency",
@@ -229,17 +311,69 @@ struct DynamicsInlineView: View {
                     step: 1.0,
                     formatValue: { String(format: "%.0f Hz", $0) }
                 )
+                HStack(spacing: 8) {
+                    Text("Slope")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.infrasonicFilter.slope },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.infrasonicFilter.slope = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        ForEach(InfrasonicFilterConfig.InfrasonicSlope.allCases, id: \.self) { s in
+                            Text(s.displayName).tag(s)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
+                HStack(spacing: 8) {
+                    Text("Target")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.infrasonicFilter.target },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.infrasonicFilter.target = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        ForEach(InfrasonicFilterConfig.ApplicationTarget.allCases, id: \.self) { t in
+                            Text(t.displayName).tag(t)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
             }
             col2ToggleWithSettings(
                 label: "Denoiser",
                 isOn: inlineDenoisingEnabled,
-                fullName: "Linear Denoising Engine"
+                fullName: "Linear Denoising Engine",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.linearDenoisingThresholdDB = d.linearDenoisingThresholdDB
+                    adv.linearDenoisingPreset = d.linearDenoisingPreset
+                    adv.denoiserMode = d.denoiserMode
+                    adv.denoiserWienerFloor = d.denoiserWienerFloor
+                    adv.denoiserReductionAmount = d.denoiserReductionAmount
+                    adv.denoiserAttackMs = d.denoiserAttackMs
+                    adv.denoiserReleaseMs = d.denoiserReleaseMs
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Threshold",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.advanced.linearDenoisingThresholdDB) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingThresholdDB = Float(v); store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.linearDenoisingThresholdDB = Float(v)
+                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor {
+                                adv.linearDenoisingPreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     ),
                     range: -80.0...(-20.0),
                     step: 1.0,
@@ -252,13 +386,21 @@ struct DynamicsInlineView: View {
                         .frame(width: 80, alignment: .leading)
                     Picker("", selection: Binding(
                         get: { store.dynamicsConfig.advanced.linearDenoisingPreset },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.linearDenoisingPreset = v; store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.linearDenoisingPreset = v
+                            if let bundle = v.parameters {
+                                adv.linearDenoisingThresholdDB = bundle.noiseFloorDB
+                                adv.denoiserWienerFloor        = bundle.wienerFloor
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     )) {
                         ForEach(DenoiserPreset.allCases, id: \.self) { p in
                             Text(p.rawValue).tag(p)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .labelsHidden()
                 }
                 HStack(spacing: 8) {
@@ -278,6 +420,24 @@ struct DynamicsInlineView: View {
                     .labelsHidden()
                 }
                 DynamicsSliderRow(
+                    label: "Wiener Floor",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.denoiserWienerFloor) },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.denoiserWienerFloor = Float(v)
+                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor {
+                                adv.linearDenoisingPreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    ),
+                    range: 0.0...0.2,
+                    step: 0.001,
+                    formatValue: { String(format: "%.3f", $0) }
+                )
+                DynamicsSliderRow(
                     label: "Reduction",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.advanced.denoiserReductionAmount) },
@@ -287,11 +447,176 @@ struct DynamicsInlineView: View {
                     step: 0.01,
                     formatValue: { String(format: "%.2f", $0) }
                 )
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.denoiserAttackMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.denoiserAttackMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 1.0...100.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                .help("Faster attack reacts to new noise quickly but may pump on transients.")
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.denoiserReleaseMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.denoiserReleaseMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 5.0...500.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                .help("Slower release smooths sustained material; faster release responds to changing noise floor.")
+            }
+            col2ToggleWithSettings(
+                label: "Dial. Level.",
+                isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.dialogueRelativeLeveler.isEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.isEnabled = v; store.updateAdvancedProcessing(adv) }
+                ),
+                fullName: "Dialogue-Relative Leveler",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = DialogueRelativeLevelerConfig()
+                    adv.dialogueRelativeLeveler.targetGapDB = d.targetGapDB
+                    adv.dialogueRelativeLeveler.boostRatio = d.boostRatio
+                    adv.dialogueRelativeLeveler.maxBoostDB = d.maxBoostDB
+                    adv.dialogueRelativeLeveler.attackMs = d.attackMs
+                    adv.dialogueRelativeLeveler.releaseMs = d.releaseMs
+                    adv.dialogueRelativeLeveler.bandLowHz = d.bandLowHz
+                    adv.dialogueRelativeLeveler.bandHighHz = d.bandHighHz
+                    adv.dialogueRelativeLeveler.voiceGate.minConfidence = d.voiceGate.minConfidence
+                    store.updateAdvancedProcessing(adv)
+                }
+            ) {
+                DynamicsSliderRow(
+                    label: "Band Low",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.bandLowHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.bandLowHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 100.0...8000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Band High",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.bandHighHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.bandHighHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 100.0...8000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Target Gap",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.targetGapDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.targetGapDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 3.0...20.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
+                .help("Maximum acceptable gap between program level and dialogue-band level before correction engages.")
+                DynamicsSliderRow(
+                    label: "Boost Ratio",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.boostRatio) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.boostRatio = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 1.0...6.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f", $0) }
+                )
+                .help("How aggressively the gap is closed once it's exceeded. 1.0 = no correction.")
+                DynamicsSliderRow(
+                    label: "Max Boost",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.maxBoostDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.maxBoostDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...15.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.attackMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.attackMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 50.0...500.0,
+                    step: 10.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.releaseMs) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.releaseMs = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 200.0...2000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Gate Thresh",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.programGateThresholdDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.programGateThresholdDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: -70.0...(-30.0),
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dBFS", $0) }
+                )
+                .help("Below this full-program level, correction decays to zero rather than chasing noise floor.")
+                Toggle("Voice Gate", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.isEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.voiceGate.isEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Reduces the boost when the dialogue band doesn't have a speech-like rhythm — helps avoid falsely boosting quiet music content in the same frequency range.")
+                if store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.isEnabled {
+                    DynamicsSliderRow(
+                        label: "Sensitivity",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.confidenceCeilingIndex) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.dialogueRelativeLeveler.voiceGate.confidenceCeilingIndex = Float(v)
+                                adv.dialogueRelativeLeveler.voiceGate.confidenceFloorIndex = Float(v) - 0.30
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: 0.2...0.8,
+                        step: 0.05,
+                        formatValue: { String(format: "%.0f%%", $0 * 100) }
+                    )
+                    DynamicsSliderRow(
+                        label: "Min Confidence",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.dialogueRelativeLeveler.voiceGate.minConfidence) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.dialogueRelativeLeveler.voiceGate.minConfidence = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: 0.0...0.6,
+                        step: 0.05,
+                        formatValue: { String(format: "%.0f%%", $0 * 100) }
+                    )
+                    .help("Even when nothing looks speech-like, apply at least this much of the correction — a safety floor for whispered or heavily processed dialogue.")
+                }
             }
             col2ToggleWithSettings(
                 label: "FIR IR",
                 isOn: inlineFirImpulseResponseEnabled,
-                fullName: "FIR Impulse Response"
+                fullName: "FIR Impulse Response",
+                onReset: {
+                    store.clearFIRImpulseResponse()
+                }
             ) {
                 let fir = store.dynamicsConfig.advanced.firImpulseResponse
                 if !fir.leftIR.isEmpty {
@@ -314,7 +639,14 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Sub Align",
                 isOn: inlineSubBassEnabled,
-                fullName: "Sub-Bass Phase Alignment"
+                fullName: "Sub-Bass Phase Alignment",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.subBassAlignmentFrequencyHz = d.subBassAlignmentFrequencyHz
+                    adv.subBassPhaseAlignmentQ = d.subBassPhaseAlignmentQ
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Frequency",
@@ -340,7 +672,18 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Widener",
                 isOn: inlineWideEnabled,
-                fullName: "Stereo Widener"
+                fullName: "Stereo Widener",
+                onReset: {
+                    var c = store.dynamicsConfig.stereoWidener
+                    let d = StereoWidenerConfig()
+                    c.widthFactorLow = d.widthFactorLow
+                    c.monoLowBand = d.monoLowBand
+                    c.crossoverLowMidHz = d.crossoverLowMidHz
+                    c.widthFactorMid = d.widthFactorMid
+                    c.crossoverMidHighHz = d.crossoverMidHighHz
+                    c.widthFactorHigh = d.widthFactorHigh
+                    store.updateStereoWidener(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Low Width",
@@ -354,6 +697,23 @@ struct DynamicsInlineView: View {
                     leftEndLabel: "Mono",
                     rightEndLabel: "Stereo"
                 )
+                Toggle("Mono Bass", isOn: Binding(
+                    get: { store.dynamicsConfig.stereoWidener.monoLowBand },
+                    set: { v in var c = store.dynamicsConfig.stereoWidener; c.monoLowBand = v; store.updateStereoWidener(c) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Forces the low band to mono regardless of the Low Width setting above.")
+                DynamicsSliderRow(
+                    label: "Low/Mid Xover",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.stereoWidener.crossoverLowMidHz) },
+                        set: { v in var c = store.dynamicsConfig.stereoWidener; c.crossoverLowMidHz = Float(v); store.updateStereoWidener(c) }
+                    ),
+                    range: 80.0...500.0,
+                    step: 10.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
                 DynamicsSliderRow(
                     label: "Mid Width",
                     value: Binding(
@@ -365,6 +725,16 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.2f", $0) },
                     leftEndLabel: "Stereo",
                     rightEndLabel: "Wide"
+                )
+                DynamicsSliderRow(
+                    label: "Mid/High Xover",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.stereoWidener.crossoverMidHighHz) },
+                        set: { v in var c = store.dynamicsConfig.stereoWidener; c.crossoverMidHighHz = Float(v); store.updateStereoWidener(c) }
+                    ),
+                    range: 1500.0...8000.0,
+                    step: 100.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
                 )
                 DynamicsSliderRow(
                     label: "High Width",
@@ -382,7 +752,24 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "LUFS",
                 isOn: inlineLufsEnabled,
-                fullName: "LUFS Loudness Match"
+                fullName: "LUFS Loudness Match",
+                onReset: {
+                    var c = store.dynamicsConfig.loudnessMatch
+                    let d = LoudnessMatchConfig()
+                    c.targetLoudnessLUFS = d.targetLoudnessLUFS
+                    c.maxCorrectionDB = d.maxCorrectionDB
+                    c.attackSeconds = d.attackSeconds
+                    c.releaseSeconds = d.releaseSeconds
+                    store.updateLoudnessMatch(c)
+                    var adv = store.dynamicsConfig.advanced
+                    let dAdv = AdvancedProcessingConfig()
+                    adv.loudnessDialogueGateEnabled = dAdv.loudnessDialogueGateEnabled
+                    adv.volumeDependentLoudnessEnabled = dAdv.volumeDependentLoudnessEnabled
+                    adv.loudnessReferencePhon = dAdv.loudnessReferencePhon
+                    adv.loudnessReferenceVolume = dAdv.loudnessReferenceVolume
+                    adv.loudnessContourStrength = dAdv.loudnessContourStrength
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Target",
@@ -394,13 +781,168 @@ struct DynamicsInlineView: View {
                     step: 0.5,
                     formatValue: { String(format: "%.1f LUFS", $0) }
                 )
+                DynamicsSliderRow(
+                    label: "Max Correction",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.loudnessMatch.maxCorrectionDB) },
+                        set: { v in var c = store.dynamicsConfig.loudnessMatch; c.maxCorrectionDB = Float(v); store.updateLoudnessMatch(c) }
+                    ),
+                    range: 3.0...20.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dB", $0) }
+                )
+                .help("Ceiling on how much gain this stage will ever apply in either direction. Content with wider scene-to-scene swings than this will only be partially corrected in its most extreme moments. Higher values reach further but risk more noticeable gain changes.")
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.loudnessMatch.attackSeconds) },
+                        set: { v in var c = store.dynamicsConfig.loudnessMatch; c.attackSeconds = Float(v); store.updateLoudnessMatch(c) }
+                    ),
+                    range: 0.3...5.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f s", $0) }
+                )
+                .help("Fast direction: how quickly gain decreases when program gets louder.")
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.loudnessMatch.releaseSeconds) },
+                        set: { v in var c = store.dynamicsConfig.loudnessMatch; c.releaseSeconds = Float(v); store.updateLoudnessMatch(c) }
+                    ),
+                    range: 1.0...10.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f s", $0) }
+                )
+                .help("Slow direction: how quickly gain increases when program gets quieter.")
+                Toggle("Dialogue Gate", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.loudnessDialogueGateEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.loudnessDialogueGateEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                Toggle("Volume-Dependent Loudness", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.volumeDependentLoudnessEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.volumeDependentLoudnessEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                if store.dynamicsConfig.advanced.volumeDependentLoudnessEnabled {
+                    DynamicsSliderRow(
+                        label: "Ref. Level",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.loudnessReferencePhon) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.loudnessReferencePhon = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: 60.0...95.0,
+                        step: 1.0,
+                        formatValue: { String(format: "%.0f phon", $0) }
+                    )
+                    DynamicsSliderRow(
+                        label: "Ref. Volume",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.loudnessReferenceVolume) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.loudnessReferenceVolume = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: 0.0...1.0,
+                        step: 0.01,
+                        formatValue: { String(format: "%.2f", $0) }
+                    )
+                    DynamicsSliderRow(
+                        label: "Strength",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.loudnessContourStrength) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.loudnessContourStrength = Float(v)
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: 0.0...1.0,
+                        step: 0.05,
+                        formatValue: { String(format: "%.0f%%", $0 * 100) }
+                    )
+                    // Real-time correction preview — re-evaluates whenever liveSystemVolumeGain changes
+                    let _ = store.liveSystemVolumeGain  // observed to trigger re-render on volume change
+                    let previewTuple = store.routingCoordinator.pipelineManager.renderPipeline?
+                        .callbackContext?.dynamicsProcessor.previewContourGains() ?? (0, 0)
+                    let previewBass   = previewTuple.0
+                    let previewTreble = previewTuple.1
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Current correction")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        HStack(spacing: 16) {
+                            HStack(spacing: 4) {
+                                Text("Bass")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(previewBass == 0
+                                    ? "—"
+                                    : String(format: "%+.1f dB", previewBass))
+                                    .font(.caption2)
+                                    .monospacedDigit()
+                                    .foregroundStyle(previewBass > 0 ? .primary : .secondary)
+                            }
+                            HStack(spacing: 4) {
+                                Text("Treble")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text(previewTreble == 0
+                                    ? "—"
+                                    : String(format: "%+.1f dB", previewTreble))
+                                    .font(.caption2)
+                                    .monospacedDigit()
+                                    .foregroundStyle(previewTreble > 0 ? .primary : .secondary)
+                            }
+                            Spacer()
+                            if previewBass == 0 && previewTreble == 0 {
+                                Text("At reference level")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }
             col2Toggle(label: "Contour", isOn: inlineLoudnessContourEnabled)
             col2ToggleWithSettings(
                 label: "De-Esser",
                 isOn: deEsserEnabledBinding,
-                fullName: "De-Esser"
+                fullName: "De-Esser",
+                onReset: {
+                    var c = store.dynamicsConfig.deEsser
+                    let d = DeEsserConfig()
+                    c.frequencyHz = d.frequencyHz
+                    c.detectionQ = d.detectionQ
+                    c.thresholdDB = d.thresholdDB
+                    c.ratio = d.ratio
+                    c.rangeDB = d.rangeDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    store.updateDeEsser(c)
+                }
             ) {
+                DynamicsSliderRow(
+                    label: "Frequency",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.deEsser.frequencyHz) },
+                        set: { v in var c = store.dynamicsConfig.deEsser; c.frequencyHz = Float(v); store.updateDeEsser(c) }
+                    ),
+                    range: 2000.0...12000.0,
+                    step: 100.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Detect Q",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.deEsser.detectionQ) },
+                        set: { v in var c = store.dynamicsConfig.deEsser; c.detectionQ = Float(v); store.updateDeEsser(c) }
+                    ),
+                    range: 0.5...8.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f", $0) }
+                )
                 DynamicsSliderRow(
                     label: "Threshold",
                     value: Binding(
@@ -431,41 +973,25 @@ struct DynamicsInlineView: View {
                     step: 1.0,
                     formatValue: { String(format: "%.0f dB", $0) }
                 )
-            }
-            col2ToggleWithSettings(
-                label: "M-Band",
-                isOn: mbEnabledBinding,
-                fullName: "Multiband Compressor"
-            ) {
                 DynamicsSliderRow(
-                    label: "Low Thresh",
+                    label: "Attack",
                     value: Binding(
-                        get: { Double(store.dynamicsConfig.multibandCompressor.thresholdLowDB) },
-                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdLowDB = Float(v); store.updateMultibandCompressor(c) }
+                        get: { Double(store.dynamicsConfig.deEsser.attackMs) },
+                        set: { v in var c = store.dynamicsConfig.deEsser; c.attackMs = Float(v); store.updateDeEsser(c) }
                     ),
-                    range: -60.0...0.0,
-                    step: 0.5,
-                    formatValue: { String(format: "%.1f dB", $0) }
+                    range: 0.1...20.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f ms", $0) }
                 )
                 DynamicsSliderRow(
-                    label: "Mid Thresh",
+                    label: "Release",
                     value: Binding(
-                        get: { Double(store.dynamicsConfig.multibandCompressor.thresholdMidDB) },
-                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdMidDB = Float(v); store.updateMultibandCompressor(c) }
+                        get: { Double(store.dynamicsConfig.deEsser.releaseMs) },
+                        set: { v in var c = store.dynamicsConfig.deEsser; c.releaseMs = Float(v); store.updateDeEsser(c) }
                     ),
-                    range: -60.0...0.0,
-                    step: 0.5,
-                    formatValue: { String(format: "%.1f dB", $0) }
-                )
-                DynamicsSliderRow(
-                    label: "High Thresh",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.multibandCompressor.thresholdHighDB) },
-                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdHighDB = Float(v); store.updateMultibandCompressor(c) }
-                    ),
-                    range: -60.0...0.0,
-                    step: 0.5,
-                    formatValue: { String(format: "%.1f dB", $0) }
+                    range: 10.0...300.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
                 )
             }
         }
@@ -476,9 +1002,169 @@ struct DynamicsInlineView: View {
     private var column2: some View {
         VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
+                label: "M-Band",
+                isOn: mbEnabledBinding,
+                fullName: "Multiband Compressor",
+                onReset: {
+                    var c = store.dynamicsConfig.multibandCompressor
+                    let d = MultibandCompressorConfig()
+                    c.crossLowMidHz = d.crossLowMidHz
+                    c.crossMidHighHz = d.crossMidHighHz
+                    c.slopeLowMid = d.slopeLowMid
+                    c.slopeMidHigh = d.slopeMidHigh
+                    c.thresholdLowDB = d.thresholdLowDB
+                    c.ratioLow = d.ratioLow
+                    c.attackLowMs = d.attackLowMs
+                    c.releaseLowMs = d.releaseLowMs
+                    c.kneeWidthLowDB = d.kneeWidthLowDB
+                    c.makeupGainLowDB = d.makeupGainLowDB
+                    c.sidechainHighPassLowHz = d.sidechainHighPassLowHz
+                    c.thresholdMidDB = d.thresholdMidDB
+                    c.ratioMid = d.ratioMid
+                    c.attackMidMs = d.attackMidMs
+                    c.releaseMidMs = d.releaseMidMs
+                    c.kneeWidthMidDB = d.kneeWidthMidDB
+                    c.makeupGainMidDB = d.makeupGainMidDB
+                    c.sidechainHighPassMidHz = d.sidechainHighPassMidHz
+                    c.thresholdHighDB = d.thresholdHighDB
+                    c.ratioHigh = d.ratioHigh
+                    c.attackHighMs = d.attackHighMs
+                    c.releaseHighMs = d.releaseHighMs
+                    c.kneeWidthHighDB = d.kneeWidthHighDB
+                    c.makeupGainHighDB = d.makeupGainHighDB
+                    c.sidechainHighPassHighHz = d.sidechainHighPassHighHz
+                    store.updateMultibandCompressor(c)
+                }
+            ) {
+                DynamicsSliderRow(
+                    label: "Low/Mid X-over",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.crossLowMidHz) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.crossLowMidHz = Float(v); store.updateMultibandCompressor(c) }
+                    ),
+                    range: 60.0...500.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Mid/High X-over",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.crossMidHighHz) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.crossMidHighHz = Float(v); store.updateMultibandCompressor(c) }
+                    ),
+                    range: 1000.0...8000.0,
+                    step: 100.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                DisclosureGroup("Low Band") {
+                    DynamicsSliderRow(label: "Threshold", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.thresholdLowDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdLowDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: -60.0...0.0, step: 0.5, formatValue: { String(format: "%.1f dB", $0) })
+                    DynamicsSliderRow(label: "Ratio", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.ratioLow) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.ratioLow = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 1.0...20.0, step: 0.5, formatValue: { String(format: "%.1f:1", $0) })
+                    DynamicsSliderRow(label: "Attack", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.attackLowMs) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.attackLowMs = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 1.0...200.0, step: 1.0, formatValue: { String(format: "%.0f ms", $0) })
+                    DynamicsSliderRow(label: "Release", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.releaseLowMs) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.releaseLowMs = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 10.0...1000.0, step: 10.0, formatValue: { String(format: "%.0f ms", $0) })
+                    DynamicsSliderRow(label: "Knee", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.kneeWidthLowDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.kneeWidthLowDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 0.0...20.0, step: 0.5, formatValue: { String(format: "%.1f dB", $0) })
+                    DynamicsSliderRow(label: "Makeup", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.makeupGainLowDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.makeupGainLowDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: -12.0...12.0, step: 0.5, formatValue: { String(format: "%+.1f dB", $0) })
+                    DynamicsSliderRow(label: "Sidechain HP", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.sidechainHighPassLowHz) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.sidechainHighPassLowHz = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 0.0...300.0, step: 5.0, formatValue: { v in v == 0 ? "Off" : String(format: "%.0f Hz", v) })
+                }
+                DisclosureGroup("Mid Band") {
+                    DynamicsSliderRow(label: "Threshold", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.thresholdMidDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdMidDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: -60.0...0.0, step: 0.5, formatValue: { String(format: "%.1f dB", $0) })
+                    DynamicsSliderRow(label: "Ratio", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.ratioMid) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.ratioMid = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 1.0...20.0, step: 0.5, formatValue: { String(format: "%.1f:1", $0) })
+                    DynamicsSliderRow(label: "Attack", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.attackMidMs) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.attackMidMs = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 1.0...200.0, step: 1.0, formatValue: { String(format: "%.0f ms", $0) })
+                    DynamicsSliderRow(label: "Release", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.releaseMidMs) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.releaseMidMs = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 10.0...1000.0, step: 10.0, formatValue: { String(format: "%.0f ms", $0) })
+                    DynamicsSliderRow(label: "Knee", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.kneeWidthMidDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.kneeWidthMidDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 0.0...20.0, step: 0.5, formatValue: { String(format: "%.1f dB", $0) })
+                    DynamicsSliderRow(label: "Makeup", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.makeupGainMidDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.makeupGainMidDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: -12.0...12.0, step: 0.5, formatValue: { String(format: "%+.1f dB", $0) })
+                    DynamicsSliderRow(label: "Sidechain HP", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.sidechainHighPassMidHz) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.sidechainHighPassMidHz = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 0.0...1000.0, step: 10.0, formatValue: { v in v == 0 ? "Off" : String(format: "%.0f Hz", v) })
+                }
+                DisclosureGroup("High Band") {
+                    DynamicsSliderRow(label: "Threshold", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.thresholdHighDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.thresholdHighDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: -60.0...0.0, step: 0.5, formatValue: { String(format: "%.1f dB", $0) })
+                    DynamicsSliderRow(label: "Ratio", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.ratioHigh) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.ratioHigh = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 1.0...20.0, step: 0.5, formatValue: { String(format: "%.1f:1", $0) })
+                    DynamicsSliderRow(label: "Attack", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.attackHighMs) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.attackHighMs = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 1.0...200.0, step: 1.0, formatValue: { String(format: "%.0f ms", $0) })
+                    DynamicsSliderRow(label: "Release", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.releaseHighMs) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.releaseHighMs = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 10.0...1000.0, step: 10.0, formatValue: { String(format: "%.0f ms", $0) })
+                    DynamicsSliderRow(label: "Knee", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.kneeWidthHighDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.kneeWidthHighDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 0.0...20.0, step: 0.5, formatValue: { String(format: "%.1f dB", $0) })
+                    DynamicsSliderRow(label: "Makeup", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.makeupGainHighDB) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.makeupGainHighDB = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: -12.0...12.0, step: 0.5, formatValue: { String(format: "%+.1f dB", $0) })
+                    DynamicsSliderRow(label: "Sidechain HP", value: Binding(
+                        get: { Double(store.dynamicsConfig.multibandCompressor.sidechainHighPassHighHz) },
+                        set: { v in var c = store.dynamicsConfig.multibandCompressor; c.sidechainHighPassHighHz = Float(v); store.updateMultibandCompressor(c) }
+                    ), range: 0.0...3000.0, step: 50.0, formatValue: { v in v == 0 ? "Off" : String(format: "%.0f Hz", v) })
+                }
+            }
+            col2ToggleWithSettings(
                 label: "Comp.",
                 isOn: compressorEnabledBinding,
-                fullName: "Compressor"
+                fullName: "Compressor",
+                onReset: {
+                    var c = store.dynamicsConfig.compressor
+                    let d = CompressorConfig()
+                    c.thresholdDB = d.thresholdDB
+                    c.ratio = d.ratio
+                    c.kneeWidthDB = d.kneeWidthDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    c.makeupGainDB = d.makeupGainDB
+                    c.programDependentRelease = d.programDependentRelease
+                    c.topology = d.topology
+                    c.sidechainHighPassHz = d.sidechainHighPassHz
+                    store.updateCompressor(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Threshold",
@@ -542,11 +1228,46 @@ struct DynamicsInlineView: View {
                     step: 0.5,
                     formatValue: { String(format: "%+.1f dB", $0) }
                 )
+                Toggle("Program-Dependent Release", isOn: Binding(
+                    get: { store.dynamicsConfig.compressor.programDependentRelease },
+                    set: { v in var c = store.dynamicsConfig.compressor; c.programDependentRelease = v; store.updateCompressor(c) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                Picker("Topology", selection: Binding(
+                    get: { store.dynamicsConfig.compressor.topology },
+                    set: { v in var c = store.dynamicsConfig.compressor; c.topology = v; store.updateCompressor(c) }
+                )) {
+                    Text("Feed-Forward").tag(CompressorTopology.feedForward)
+                    Text("Feed-Back").tag(CompressorTopology.feedBack)
+                }
+                .pickerStyle(.segmented)
+                .help("Feed-forward measures the input (standard). Feed-back measures the output, producing the smoother character of vintage opto/tube compressors.")
+                DynamicsSliderRow(
+                    label: "Sidechain HP",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.compressor.sidechainHighPassHz) },
+                        set: { v in var c = store.dynamicsConfig.compressor; c.sidechainHighPassHz = Float(v); store.updateCompressor(c) }
+                    ),
+                    range: 0.0...300.0,
+                    step: 5.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
             }
             col2ToggleWithSettings(
                 label: "Expander",
                 isOn: expanderEnabledBinding,
-                fullName: "Expander"
+                fullName: "Expander",
+                onReset: {
+                    var c = store.dynamicsConfig.expander
+                    let d = ExpanderConfig()
+                    c.thresholdDB = d.thresholdDB
+                    c.ratio = d.ratio
+                    c.rangeDB = d.rangeDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    store.updateExpander(c)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Threshold",
@@ -578,11 +1299,44 @@ struct DynamicsInlineView: View {
                     step: 0.5,
                     formatValue: { String(format: "%.1f dB", $0) }
                 )
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.expander.attackMs) },
+                        set: { v in var c = store.dynamicsConfig.expander; c.attackMs = Float(v); store.updateExpander(c) }
+                    ),
+                    range: 0.1...100.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.expander.releaseMs) },
+                        set: { v in var c = store.dynamicsConfig.expander; c.releaseMs = Float(v); store.updateExpander(c) }
+                    ),
+                    range: 10.0...1000.0,
+                    step: 10.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
             }
             col2ToggleWithSettings(
                 label: "Bass Mgmt",
                 isOn: inlineBassManagementEnabled,
-                fullName: "Bass Management"
+                fullName: "Bass Management",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = BassManagementConfig()
+                    adv.bassManagement.crossoverHz = d.crossoverHz
+                    adv.bassManagement.slope = d.slope
+                    adv.bassManagement.lowBandGainDB = d.lowBandGainDB
+                    adv.bassManagement.lowBandPolarityInverted = d.lowBandPolarityInverted
+                    adv.bassManagement.crossoverType = d.crossoverType
+                    adv.bassManagement.asymmetricCrossoverEnabled = d.asymmetricCrossoverEnabled
+                    adv.bassManagement.mainsHighPassHz = d.mainsHighPassHz
+                    adv.bassManagement.lowBandDelaySamples = d.lowBandDelaySamples
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Crossover",
@@ -624,12 +1378,66 @@ struct DynamicsInlineView: View {
                     get: { store.dynamicsConfig.advanced.bassManagement.lowBandPolarityInverted },
                     set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandPolarityInverted = v; store.updateAdvancedProcessing(adv) }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                HStack(spacing: 8) {
+                    Text("X-over Type")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.bassManagement.crossoverType },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.crossoverType = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        Text("Linkwitz-Riley").tag(CrossoverType.linkwitzRiley)
+                        Text("Butterworth").tag(CrossoverType.butterworth)
+                        Text("Bessel").tag(CrossoverType.bessel)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                Toggle("Asymmetric Crossover", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.bassManagement.asymmetricCrossoverEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.asymmetricCrossoverEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                if store.dynamicsConfig.advanced.bassManagement.asymmetricCrossoverEnabled {
+                    DynamicsSliderRow(
+                        label: "Mains HP",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.bassManagement.mainsHighPassHz) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.mainsHighPassHz = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: 40.0...200.0,
+                        step: 1.0,
+                        formatValue: { String(format: "%.0f Hz", $0) }
+                    )
+                }
+                DynamicsSliderRow(
+                    label: "Sub Delay",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.bassManagement.lowBandDelaySamples) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandDelaySamples = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 0.0...500.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f samples", $0) }
+                )
                 // TODO: Expose lowBandLowShelfEnabled/FreqHz/GainDB, leftSpeakerDistanceM/rightSpeakerDistanceM/subwooferDistanceM, subEQBands
             }
             col2ToggleWithSettings(
                 label: "Gain Rider",
                 isOn: inlineAutoHeadroomEnabled,
-                fullName: "Dynamic Gain Rider"
+                fullName: "Dynamic Gain Rider",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.autoHeadroomTargetGRDB = d.autoHeadroomTargetGRDB
+                    adv.autoHeadroomMaxReductionDB = d.autoHeadroomMaxReductionDB
+                    adv.autoHeadroomSpeed = d.autoHeadroomSpeed
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Target GR",
@@ -682,8 +1490,50 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Clipper",
                 isOn: clipperEnabledBinding,
-                fullName: "Clipper"
+                fullName: "Clipper",
+                onReset: {
+                    var sc = store.dynamicsConfig.softClipper
+                    let d = SoftClipperConfig()
+                    sc.driveDB = d.driveDB
+                    sc.thresholdDB = d.thresholdDB
+                    sc.kneeSmooth = d.kneeSmooth
+                    sc.curveType = d.curveType
+                    sc.autoCompensateGain = d.autoCompensateGain
+                    store.updateSoftClipper(sc)
+                }
             ) {
+                DynamicsSliderRow(
+                    label: "Drive",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.softClipper.driveDB) },
+                        set: { v in var sc = store.dynamicsConfig.softClipper; sc.driveDB = Float(v); store.updateSoftClipper(sc) }
+                    ),
+                    range: 0.0...12.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%+.1f dB", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Threshold",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.softClipper.thresholdDB) },
+                        set: { v in var sc = store.dynamicsConfig.softClipper; sc.thresholdDB = Float(v); store.updateSoftClipper(sc) }
+                    ),
+                    range: -6.0...0.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Knee",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.softClipper.kneeSmooth) },
+                        set: { v in var sc = store.dynamicsConfig.softClipper; sc.kneeSmooth = Float(v); store.updateSoftClipper(sc) }
+                    ),
+                    range: 0.0...1.0,
+                    step: 0.05,
+                    formatValue: { String(format: "%.2f", $0) },
+                    leftEndLabel: "Hard",
+                    rightEndLabel: "Soft"
+                )
                 HStack(spacing: 8) {
                     Text("Curve")
                         .font(.system(size: 13))
@@ -700,11 +1550,30 @@ struct DynamicsInlineView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
+                Toggle("Auto-Compensate Gain", isOn: Binding(
+                    get: { store.dynamicsConfig.softClipper.autoCompensateGain },
+                    set: { v in var sc = store.dynamicsConfig.softClipper; sc.autoCompensateGain = v; store.updateSoftClipper(sc) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
             col2ToggleWithSettings(
                 label: "Limiter",
                 isOn: limiterEnabledBinding,
-                fullName: "Limiter"
+                fullName: "Limiter",
+                onReset: {
+                    var c = store.dynamicsConfig.limiter
+                    let d = BrickwallLimiterConfig()
+                    c.ceilingDB = d.ceilingDB
+                    c.attackMs = d.attackMs
+                    c.releaseMs = d.releaseMs
+                    c.lookAheadMs = d.lookAheadMs
+                    store.updateLimiter(c)
+                    var adv = store.dynamicsConfig.advanced
+                    let dAdv = AdvancedProcessingConfig()
+                    adv.limiterTruePeakGuardEnabled = dAdv.limiterTruePeakGuardEnabled
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Ceiling",
@@ -746,11 +1615,24 @@ struct DynamicsInlineView: View {
                     step: 0.5,
                     formatValue: { String(format: "%.1f ms", $0) }
                 )
+                Toggle("TP Guard", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.limiterTruePeakGuardEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.limiterTruePeakGuardEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
             col2ToggleWithSettings(
                 label: "De-Harsh",
                 isOn: inlineDeharshEnabled,
-                fullName: "De-Harsh Filter"
+                fullName: "De-Harsh Filter",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.deharshTiltAmountDB = d.deharshTiltAmountDB
+                    adv.deharshFrequencyHz = d.deharshFrequencyHz
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Tilt Amount",
@@ -762,11 +1644,27 @@ struct DynamicsInlineView: View {
                     step: 0.5,
                     formatValue: { String(format: "%+.1f dB", $0) }
                 )
+                DynamicsSliderRow(
+                    label: "Frequency",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.deharshFrequencyHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.deharshFrequencyHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 1500.0...10000.0,
+                    step: 100.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
             }
             col2ToggleWithSettings(
                 label: "IR Align",
                 isOn: inlineIRAlignmentEnabled,
-                fullName: "Speaker IR Alignment"
+                fullName: "Speaker IR Alignment",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.speakerIRDelayMs = d.speakerIRDelayMs
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Fine Delay",
@@ -784,7 +1682,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "Sym. Bal.",
                 isOn: inlineSymmetryBalanceEnabled,
-                fullName: "Symmetry Balance"
+                fullName: "Symmetry Balance",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.stereoBalancePosition = d.stereoBalancePosition
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Balance",
@@ -799,10 +1703,23 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "R"
                 )
             }
+        }
+    }
+
+    // MARK: - Column 3: LTI suite + processing-mode flags
+
+    private var column3: some View {
+        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Panning",
                 isOn: inlinePanningEnabled,
-                fullName: "Panning Gain Matrix"
+                fullName: "Panning Gain Matrix",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.panningCrossfeedAmount = d.panningCrossfeedAmount
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Crossfeed",
@@ -817,17 +1734,17 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "Full"
                 )
             }
-        }
-    }
-
-    // MARK: - Column 3: LTI suite + processing-mode flags
-
-    private var column3: some View {
-        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Crosstalk",
                 isOn: inlineCrosstalkEnabled,
-                fullName: "Crosstalk Cancellation Matrix"
+                fullName: "Crosstalk Cancellation Matrix",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.crosstalkCancellationAmount = d.crosstalkCancellationAmount
+                    adv.crosstalkHeadShadowHz = d.crosstalkHeadShadowHz
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Amount",
@@ -841,17 +1758,78 @@ struct DynamicsInlineView: View {
                     leftEndLabel: "Off",
                     rightEndLabel: "Max"
                 )
+                DynamicsSliderRow(
+                    label: "Head-Shadow",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.crosstalkHeadShadowHz) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.crosstalkHeadShadowHz = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 200.0...2000.0,
+                    step: 50.0,
+                    formatValue: { String(format: "%.0f Hz", $0) }
+                )
+                .help("Models speaker angle. ~700 Hz for 60° triangle; lower for narrower angles, higher for wider placements.")
             }
             col2ToggleWithSettings(
                 label: "Pause Gate",
                 isOn: inlinePauseGateEnabled,
-                fullName: "Pause Gate"
+                fullName: "Pause Gate",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.pauseGatePreset = d.pauseGatePreset
+                    adv.pauseGateThresholdDBFS = d.pauseGateThresholdDBFS
+                    adv.pauseGateHoldMs = d.pauseGateHoldMs
+                    adv.pauseGateAttackMs = d.pauseGateAttackMs
+                    adv.pauseGateReleaseMs = d.pauseGateReleaseMs
+                    adv.pauseGateHysteresisDB = d.pauseGateHysteresisDB
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
+                HStack(spacing: 8) {
+                    Text("Preset")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.pauseGatePreset },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.pauseGatePreset = v
+                            if let bundle = v.parameters {
+                                adv.pauseGateThresholdDBFS = bundle.thresholdDBFS
+                                adv.pauseGateHoldMs        = bundle.holdMs
+                                adv.pauseGateAttackMs      = bundle.attackMs
+                                adv.pauseGateReleaseMs     = bundle.releaseMs
+                                adv.pauseGateHysteresisDB  = bundle.hysteresisDB
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    )) {
+                        ForEach(PauseGatePreset.allCases, id: \.self) { p in
+                            Text(p.rawValue).tag(p)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                }
                 DynamicsSliderRow(
                     label: "Threshold",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.advanced.pauseGateThresholdDBFS) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.pauseGateThresholdDBFS = Float(v); store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.pauseGateThresholdDBFS = Float(v)
+                            if let bundle = adv.pauseGatePreset.parameters,
+                               adv.pauseGateThresholdDBFS != bundle.thresholdDBFS ||
+                               adv.pauseGateHoldMs != bundle.holdMs ||
+                               adv.pauseGateAttackMs != bundle.attackMs ||
+                               adv.pauseGateReleaseMs != bundle.releaseMs ||
+                               adv.pauseGateHysteresisDB != bundle.hysteresisDB {
+                                adv.pauseGatePreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     ),
                     range: -80.0 ... -40.0,
                     step: 1.0,
@@ -863,7 +1841,19 @@ struct DynamicsInlineView: View {
                     label: "Hold",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.advanced.pauseGateHoldMs) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.pauseGateHoldMs = Float(v); store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.pauseGateHoldMs = Float(v)
+                            if let bundle = adv.pauseGatePreset.parameters,
+                               adv.pauseGateThresholdDBFS != bundle.thresholdDBFS ||
+                               adv.pauseGateHoldMs != bundle.holdMs ||
+                               adv.pauseGateAttackMs != bundle.attackMs ||
+                               adv.pauseGateReleaseMs != bundle.releaseMs ||
+                               adv.pauseGateHysteresisDB != bundle.hysteresisDB {
+                                adv.pauseGatePreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     ),
                     range: 100.0 ... 2000.0,
                     step: 50.0,
@@ -871,11 +1861,78 @@ struct DynamicsInlineView: View {
                     leftEndLabel: "Tight",
                     rightEndLabel: "Loose"
                 )
+                DynamicsSliderRow(
+                    label: "Attack",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.pauseGateAttackMs) },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.pauseGateAttackMs = Float(v)
+                            if let bundle = adv.pauseGatePreset.parameters,
+                               adv.pauseGateThresholdDBFS != bundle.thresholdDBFS ||
+                               adv.pauseGateHoldMs != bundle.holdMs ||
+                               adv.pauseGateAttackMs != bundle.attackMs ||
+                               adv.pauseGateReleaseMs != bundle.releaseMs ||
+                               adv.pauseGateHysteresisDB != bundle.hysteresisDB {
+                                adv.pauseGatePreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    ),
+                    range: 1.0...100.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Release",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.pauseGateReleaseMs) },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.pauseGateReleaseMs = Float(v)
+                            if let bundle = adv.pauseGatePreset.parameters,
+                               adv.pauseGateThresholdDBFS != bundle.thresholdDBFS ||
+                               adv.pauseGateHoldMs != bundle.holdMs ||
+                               adv.pauseGateAttackMs != bundle.attackMs ||
+                               adv.pauseGateReleaseMs != bundle.releaseMs ||
+                               adv.pauseGateHysteresisDB != bundle.hysteresisDB {
+                                adv.pauseGatePreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    ),
+                    range: 10.0...500.0,
+                    step: 10.0,
+                    formatValue: { String(format: "%.0f ms", $0) }
+                )
+                DynamicsSliderRow(
+                    label: "Hysteresis",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.pauseGateHysteresisDB) },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.pauseGateHysteresisDB = Float(v)
+                            if let bundle = adv.pauseGatePreset.parameters,
+                               adv.pauseGateThresholdDBFS != bundle.thresholdDBFS ||
+                               adv.pauseGateHoldMs != bundle.holdMs ||
+                               adv.pauseGateAttackMs != bundle.attackMs ||
+                               adv.pauseGateReleaseMs != bundle.releaseMs ||
+                               adv.pauseGateHysteresisDB != bundle.hysteresisDB {
+                                adv.pauseGatePreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    ),
+                    range: 0.0...10.0,
+                    step: 0.5,
+                    formatValue: { String(format: "%.1f dB", $0) }
+                )
             }
             col2ToggleWithSettings(
                 label: "Hi-Res Coef",
                 isOn: inlineCoefficientDecouplingEnabled,
-                fullName: "Hi-Res Coefficient Decoupling"
+                fullName: "Hi-Res Coefficient Decoupling",
+                onReset: nil  // No user-adjustable parameters to reset
             ) {
                 HStack(spacing: 8) {
                     Text("Decoupling Active")
@@ -891,7 +1948,13 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "EQ Headroom",
                 isOn: inlineEqHeadroomCompensationEnabled,
-                fullName: "EQ Headroom Compensation"
+                fullName: "EQ Headroom Compensation",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.eqHeadroomMaxAttenuationDB = d.eqHeadroomMaxAttenuationDB
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 HStack(spacing: 8) {
                     Text("Static Preamp")
@@ -900,12 +1963,33 @@ struct DynamicsInlineView: View {
                     Text("\(String(format: "%.1f", store.staticPreampDB)) dB applied")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                    if abs(store.staticPreampDB) >= store.dynamicsConfig.advanced.eqHeadroomMaxAttenuationDB - 0.1 {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .help("Attenuation is at the ceiling — EQ, room correction, and target curve boosts are stacking aggressively. Reduce individual boosts or raise the ceiling.")
+                    }
                 }
+                DynamicsSliderRow(
+                    label: "Max Attenuation",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.eqHeadroomMaxAttenuationDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.eqHeadroomMaxAttenuationDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 3.0...24.0,
+                    step: 1.0,
+                    formatValue: { String(format: "%.0f dB", $0) }
+                )
             }
             col2ToggleWithSettings(
                 label: "Multi-Seat",
                 isOn: inlineMultiSeatEnabled,
-                fullName: "Multi-Seat Complex Averaging"
+                fullName: "Multi-Seat Complex Averaging",
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = AdvancedProcessingConfig()
+                    adv.multiSeatCount = d.multiSeatCount
+                    store.updateAdvancedProcessing(adv)
+                }
             ) {
                 DynamicsSliderRow(
                     label: "Seat Count",
@@ -921,7 +2005,10 @@ struct DynamicsInlineView: View {
             col2ToggleWithSettings(
                 label: "FIR",
                 isOn: inlineConvolutionEnabled,
-                fullName: "FIR Correction"
+                fullName: "FIR Correction",
+                onReset: {
+                    store.clearConvolutionIR()
+                }
             ) {
                 if let name = store.convolutionConfig.irDisplayName {
                     Text("Loaded: \(name)")
@@ -983,7 +2070,7 @@ struct DynamicsInlineView: View {
             InlineBitStreamView(bridge: inlineMeterBridge)
             InlineBitRateView()
             InlineTruePeakView(bridge: inlineMeterBridge)
-            TruePeakMeterView(truePeakDB: -90.0, isOversampled: false)
+            InlineTruePeakMeterView()
         }
         .frame(minWidth: 110)
     }
@@ -994,10 +2081,175 @@ struct DynamicsInlineView: View {
         VStack(spacing: 8) {
             StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
             LatencyReadoutView(
-                totalLatencyMs: 0.0,  // TODO: Compute from pipeline stages
+                totalLatencyMs: store.totalLatencyMs,
                 alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
                 sampleRate: store.streamSampleRate
             )
+            metersMasterControl
+        }
+    }
+
+    private var metersMasterControl: some View {
+        HStack(spacing: 4) {
+            Text("Meters")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button {
+                showMetersHelp = true
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showMetersHelp, arrowEdge: .trailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TooltipDefinitionEntry(
+                            title: "Peak In / Peak Out",
+                            detail: "Instantaneous peak level (highest sample amplitude), captured before and after all EQ, dynamics, and gain processing. Fast-reacting; shows transients and clipping."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "RMS In / RMS Out",
+                            detail: "Time-averaged level (root-mean-square), captured before and after all processing. Slower-reacting; better reflects perceived loudness."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "RTA",
+                            detail: "31-band real-time spectrum analyzer plotting input and output frequency content simultaneously, shown below the meters."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "Gain Structure",
+                            detail: "Live gain reduction, in dB, for every active dynamics stage — De-Esser, Multiband Compressor (low/mid/high), Compressor, Expander, Clipper, and Limiter — shown in the Dynamics section."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "Phase",
+                            detail: "Left/right correlation, from +1 (in phase, mono-compatible) through 0 (decorrelated/wide) to −1 (out of phase — will cancel in mono)."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "Crest Factor",
+                            detail: "Input peak-to-RMS ratio in dB. Higher means a more dynamic, less dense signal arriving at the plugin."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "DR Factor",
+                            detail: "Output peak-to-RMS ratio in dB, after processing. Shows how much dynamic range the dynamics chain has removed."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "ISP Latch",
+                            detail: "Overload indicator that latches on and stays lit once the input or output peak exceeds about −0.1 dBFS. Tap it to reset."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "TP-In / TP-Out",
+                            detail: "Live, non-latching clip indicator for the input and output peak level."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "True Peak Meter",
+                            detail: "Continuous true-peak level in dBTP, with an indicator for when oversampled peak detection is active."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "Bit Stream",
+                            detail: "24-bit activity monitor — one LED per bit of the input signal, lit when that bit carries energy."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "Sample Rate",
+                            detail: "Live input sample rate and its equivalent nominal bit rate."
+                        )
+                        Divider()
+                        TooltipDefinitionEntry(
+                            title: "Goniometer",
+                            detail: "Circular Lissajous (X/Y) plot of the stereo image, showing left/right correlation and width visually."
+                        )
+                    }
+                    .padding(12)
+                }
+                .frame(width: 320, height: 420)
+            }
+
+            Toggle("", isOn: $metersMasterEnabledUI)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
+
+            DynamicsControlSettingsButton(fullName: "Meters", width: 180) {
+                HStack {
+                    Text("RTA")
+                    Spacer()
+                    Toggle("", isOn: $rtaEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: rtaEnabledUI) { newValue in
+                            store.meterStore.rtaEnabled = newValue
+                        }
+                }
+                HStack {
+                    Text("Goniometer")
+                    Spacer()
+                    Toggle("", isOn: $goniometerEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: goniometerEnabledUI) { newValue in
+                            store.meterStore.goniometerEnabled = newValue
+                        }
+                }
+                HStack {
+                    Text("Analytics Meters")
+                    Spacer()
+                    Toggle("", isOn: $analyticsEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: analyticsEnabledUI) { newValue in
+                            store.meterStore.analyticsMetersEnabled = newValue
+                        }
+                }
+                HStack {
+                    Text("Gain Structure")
+                    Spacer()
+                    Toggle("", isOn: $gainStructureEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: gainStructureEnabledUI) { newValue in
+                            store.meterStore.gainStructureEnabled = newValue
+                        }
+                }
+                HStack {
+                    Text("Level Meters")
+                    Spacer()
+                    Toggle("", isOn: $levelMetersEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .onChange(of: levelMetersEnabledUI) { newValue in
+                            store.meterStore.levelMetersEnabled = newValue
+                        }
+                }
+            }
+        }
+        .onAppear {
+            metersMasterEnabledUI = store.meterStore.metersEnabled
+            rtaEnabledUI = store.meterStore.rtaEnabled
+            goniometerEnabledUI = store.meterStore.goniometerEnabled
+            analyticsEnabledUI = store.meterStore.analyticsMetersEnabled
+            gainStructureEnabledUI = store.meterStore.gainStructureEnabled
+            levelMetersEnabledUI = store.meterStore.levelMetersEnabled
+        }
+        .onChange(of: metersMasterEnabledUI) { newValue in
+            store.meterStore.metersEnabled = newValue
         }
     }
 
@@ -1045,6 +2297,7 @@ struct DynamicsInlineView: View {
         label: String,
         isOn: Binding<Bool>,
         fullName: String,
+        onReset: (() -> Void)? = nil,
         @ViewBuilder settings: @escaping () -> Content
     ) -> some View {
         HStack(spacing: 4) {
@@ -1057,7 +2310,7 @@ struct DynamicsInlineView: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .fixedSize()
-            DynamicsControlSettingsButton(fullName: fullName, content: settings)
+            DynamicsControlSettingsButton(fullName: fullName, onReset: onReset, content: settings)
         }
     }
 
@@ -1331,23 +2584,24 @@ struct DynamicsInlineView: View {
 
 // MARK: - Inline Meter Bridge
 
+struct InlineMeterSnapshot: Equatable {
+    var peakL: Float = 0
+    var peakR: Float = 0
+    var rmsL:  Float = 0
+    var rmsR:  Float = 0
+    var peakOutL: Float = 0
+    var peakOutR: Float = 0
+    var rmsOutL:  Float = 0
+    var rmsOutR:  Float = 0
+    var ispInputLatched:  Bool = false
+    var ispOutputLatched: Bool = false
+}
+
 /// Bridges MeterStore observer callbacks to SwiftUI @Published properties
 /// for the analytics metrics and goniometer displays in DynamicsInlineView.
 @MainActor
 final class InlineMeterBridge: ObservableObject {
-    // Input channels
-    @Published var peakL: Float = 0
-    @Published var peakR: Float = 0
-    @Published var rmsL:  Float = 0
-    @Published var rmsR:  Float = 0
-    // Output channels
-    @Published var peakOutL: Float = 0
-    @Published var peakOutR: Float = 0
-    @Published var rmsOutL:  Float = 0
-    @Published var rmsOutR:  Float = 0
-    // Latching indicators
-    @Published var ispInputLatched:  Bool = false
-    @Published var ispOutputLatched: Bool = false
+    @Published private(set) var snapshot = InlineMeterSnapshot()
 
     private let obsPeakL    = BridgeChannelObs()
     private let obsPeakR    = BridgeChannelObs()
@@ -1361,71 +2615,90 @@ final class InlineMeterBridge: ObservableObject {
     // Store reference for gain reduction metrics
     private weak var store: EqualiserStore?
 
+    // Combine cancellables for subscriptions
+    private var cancellables = Set<AnyCancellable>()
+
     // MARK: - Computed Metrics
 
     /// Input peak-to-RMS crest factor in dB. Higher = more dynamic.
     var crestFactorDb: Float {
-        let peak = max(peakL, peakR)
-        let rms  = max(rmsL, rmsR)
+        let peak = max(snapshot.peakL, snapshot.peakR)
+        let rms  = max(snapshot.rmsL, snapshot.rmsR)
         guard rms > 0.001 else { return 0 }
         return max(0, 20 * log10(peak / rms))
     }
 
     /// Output dynamic range factor (peak/RMS) clamped to 0–24 dB.
     var drFactor: Float {
-        let peak = max(peakOutL, peakOutR)
-        let rms  = max(rmsOutL, rmsOutR)
+        let peak = max(snapshot.peakOutL, snapshot.peakOutR)
+        let rms  = max(snapshot.rmsOutL, snapshot.rmsOutR)
         guard rms > 0.001 else { return 0 }
         return max(0, min(24, 20 * log10(peak / rms)))
     }
 
-    var truePeakInputClipped:  Bool { max(peakL, peakR) >= 0.9 }
-    var truePeakOutputClipped: Bool { max(peakOutL, peakOutR) >= 0.9 }
+    var truePeakInputClipped:  Bool { max(snapshot.peakL, snapshot.peakR) >= 0.9 }
+    var truePeakOutputClipped: Bool { max(snapshot.peakOutL, snapshot.peakOutR) >= 0.9 }
 
     /// -1.0 = fully left, 0 = centred, +1.0 = fully right.
     var balance: Float {
-        let l = peakL, r = peakR
+        let l = snapshot.peakL, r = snapshot.peakR
         guard l + r > 0.001 else { return 0 }
         return (r - l) / (l + r)
     }
 
     /// 24-bit activity mask — bits lit when set in the quantised peak sample.
     var inputBitMask: UInt32 {
-        let p = max(peakL, peakR)
+        let p = max(snapshot.peakL, snapshot.peakR)
         guard p > 1e-6 else { return 0 }
         let sample24 = UInt32(min(0xFFFFFF, p * 8_388_607.0 + 0.5))
         return sample24
     }
 
     func resetIspLatches() {
-        ispInputLatched  = false
-        ispOutputLatched = false
+        snapshot.ispInputLatched  = false
+        snapshot.ispOutputLatched = false
     }
 
     // MARK: - Registration
 
     func register(with store: MeterStore, equaliserStore: EqualiserStore?) {
         self.store = equaliserStore
-        obsPeakL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakL = v
-            if v > 0.99 { self?.ispInputLatched = true }
-        }}
-        obsPeakR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakR = v
-            if v > 0.99 { self?.ispInputLatched = true }
-        }}
-        obsRmsL.onUpdate  = { [weak self] v in Task { @MainActor [weak self] in self?.rmsL  = v } }
-        obsRmsR.onUpdate  = { [weak self] v in Task { @MainActor [weak self] in self?.rmsR  = v } }
-        obsPeakOutL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakOutL = v
-            if v > 0.99 { self?.ispOutputLatched = true }
-        }}
-        obsPeakOutR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in
-            self?.peakOutR = v
-            if v > 0.99 { self?.ispOutputLatched = true }
-        }}
-        obsRmsOutL.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.rmsOutL = v } }
-        obsRmsOutR.onUpdate = { [weak self] v in Task { @MainActor [weak self] in self?.rmsOutR = v } }
+        obsPeakL.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.peakL = v
+            if v > 0.99 { self.snapshot.ispInputLatched = true }
+        }
+        obsPeakR.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.peakR = v
+            if v > 0.99 { self.snapshot.ispInputLatched = true }
+        }
+        obsRmsL.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsL = v
+        }
+        obsRmsR.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsR = v
+        }
+        obsPeakOutL.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.peakOutL = v
+            if v > 0.99 { self.snapshot.ispOutputLatched = true }
+        }
+        obsPeakOutR.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.peakOutR = v
+            if v > 0.99 { self.snapshot.ispOutputLatched = true }
+        }
+        obsRmsOutL.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsOutL = v
+        }
+        obsRmsOutR.onUpdate = { [weak self] v in
+            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            self.snapshot.rmsOutR = v
+        }
 
         store.addObserver(obsPeakL,    for: .inputPeakLeft)
         store.addObserver(obsPeakR,    for: .inputPeakRight)
@@ -1435,6 +2708,13 @@ final class InlineMeterBridge: ObservableObject {
         store.addObserver(obsPeakOutR, for: .outputPeakRight)
         store.addObserver(obsRmsOutL,  for: .outputRMSLeft)
         store.addObserver(obsRmsOutR,  for: .outputRMSRight)
+
+        // Reset snapshot to idle state when analytics meters are disabled
+        store.$analyticsMetersEnabled
+            .sink { [weak self] enabled in
+                if !enabled { self?.snapshot = InlineMeterSnapshot() }
+            }
+            .store(in: &cancellables)
     }
 }
 
@@ -1484,53 +2764,82 @@ struct InlinePhaseCorrelationView: View {
     @EnvironmentObject private var store: EqualiserStore
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            let correlation = store.livePhaseCorrelation
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 3) {
-                    Text("Phase")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Text(String(format: "%+.2f", correlation))
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(phaseColour(for: correlation))
-                }
-                GeometryReader { geo in
-                    let w = geo.size.width
-                    let h = geo.size.height
-                    let mid = w / 2
-                    let clamped = CGFloat(max(-1, min(1, correlation)))
-                    let tipX = mid + clamped * (mid - 1)
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.secondary.opacity(0.10))
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.35))
-                            .frame(width: 1, height: h)
-                            .position(x: mid, y: h / 2)
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(phaseColour(for: correlation).opacity(0.85))
-                            .frame(
-                                width: max(2, abs(tipX - mid)),
-                                height: h - 1
-                            )
-                            .position(
-                                x: mid + (tipX - mid) / 2,
-                                y: h / 2
-                            )
-                    }
-                }
-                .frame(height: 6)
+        if store.meterStore.metersEnabled && store.meterStore.analyticsMetersEnabled {
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+                phaseContent(correlation: store.livePhaseCorrelation)
             }
-            .frame(width: 90)
+        } else {
+            phaseContent(correlation: 0)
         }
+    }
+
+    @ViewBuilder
+    private func phaseContent(correlation: Float) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Text("Phase")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Text(String(format: "%+.2f", correlation))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(phaseColour(for: correlation))
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let mid = w / 2
+                let clamped = CGFloat(max(-1, min(1, correlation)))
+                let tipX = mid + clamped * (mid - 1)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.secondary.opacity(0.10))
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.35))
+                        .frame(width: 1, height: h)
+                        .position(x: mid, y: h / 2)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(phaseColour(for: correlation).opacity(0.85))
+                        .frame(
+                            width: max(2, abs(tipX - mid)),
+                            height: h - 1
+                        )
+                        .position(
+                            x: mid + (tipX - mid) / 2,
+                            y: h / 2
+                        )
+                }
+            }
+            .frame(height: 6)
+        }
+        .frame(width: 90)
     }
 
     private func phaseColour(for correlation: Float) -> Color {
         if correlation >= 0.5 { return .green }
         if correlation >= 0   { return .yellow }
         return .red
+    }
+}
+
+// MARK: - Continuous True Peak Meter (live data wrapper)
+
+/// Live-data wrapper around `TruePeakMeterView`, reading the continuous dBTP
+/// measurement and oversampling state from the store at 30 fps.
+struct InlineTruePeakMeterView: View {
+    @EnvironmentObject private var store: EqualiserStore
+
+    var body: some View {
+        if store.meterStore.metersEnabled && store.meterStore.analyticsMetersEnabled {
+            TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+                TruePeakMeterView(
+                    truePeakDB: store.liveTruePeakDB,
+                    isOversampled: store.isOversamplingActive
+                )
+            }
+        } else {
+            TruePeakMeterView(truePeakDB: -.infinity, isOversampled: false)
+        }
     }
 }
 
@@ -1568,8 +2877,8 @@ struct InlineIspLatchView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            ispIndicator(label: "ISP-In",  latched: bridge.ispInputLatched)
-            ispIndicator(label: "ISP-Out", latched: bridge.ispOutputLatched)
+            ispIndicator(label: "ISP-In",  latched: bridge.snapshot.ispInputLatched)
+            ispIndicator(label: "ISP-Out", latched: bridge.snapshot.ispOutputLatched)
         }
         .onTapGesture { bridge.resetIspLatches() }
         .help("Tap to reset over-load latches")
@@ -1656,23 +2965,21 @@ struct InlineBitRateView: View {
     private let bitsPerSample = 32
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            let sr = store.streamSampleRate
-            let kbps = Int(sr * Double(bitsPerSample) * 2.0 / 1000.0)
-            let srText = sr >= 1000
-                ? String(format: "%.0f kHz", sr / 1000)
-                : String(format: "%.0f Hz", sr)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Sample Rate")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Text(srText)
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Text("\(kbps) kbps")
-                    .font(.system(size: 7, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
+        let sr = store.streamSampleRate
+        let kbps = Int(sr * Double(bitsPerSample) * 2.0 / 1000.0)
+        let srText = sr >= 1000
+            ? String(format: "%.0f kHz", sr / 1000)
+            : String(format: "%.0f Hz", sr)
+        VStack(alignment: .leading, spacing: 1) {
+            Text("Sample Rate")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text(srText)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text("\(kbps) kbps")
+                .font(.system(size: 7, weight: .regular, design: .monospaced))
+                .foregroundStyle(.tertiary)
         }
     }
 }

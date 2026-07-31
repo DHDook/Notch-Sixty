@@ -106,8 +106,21 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
     var kneeWidthMidDB:  Float           = 6.0
     var kneeWidthHighDB: Float           = 6.0
 
-    // NEW — sidechain high-pass filter frequency (applied to all three bands)
-    var sidechainHighPassHz: Float = 0.0
+    // NEW — sidechain high-pass filter frequency (per-band; replaces single sidechainHighPassHz)
+    /// Sidechain high-pass frequency for the low band (Hz). 0 = disabled.
+    var sidechainHighPassLowHz:  Float = 0.0
+    /// Sidechain high-pass frequency for the mid band (Hz). 0 = disabled.
+    var sidechainHighPassMidHz:  Float = 0.0
+    /// Sidechain high-pass frequency for the high band (Hz). 0 = disabled.
+    var sidechainHighPassHighHz: Float = 0.0
+
+    // NEW — per-band makeup gain
+    /// Post-compression makeup gain for the low band in dB. Range: -12 to +12. Default: 0.
+    var makeupGainLowDB:  Float = 0.0
+    /// Post-compression makeup gain for the mid band in dB. Range: -12 to +12. Default: 0.
+    var makeupGainMidDB:  Float = 0.0
+    /// Post-compression makeup gain for the high band in dB. Range: -12 to +12. Default: 0.
+    var makeupGainHighDB: Float = 0.0
 
     static let `default` = MultibandCompressorConfig()
 
@@ -119,6 +132,9 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         case attackLowMs, attackMidMs, attackHighMs
         case releaseLowMs, releaseMidMs, releaseHighMs
         case kneeWidthLowDB, kneeWidthMidDB, kneeWidthHighDB
+        case sidechainHighPassLowHz, sidechainHighPassMidHz, sidechainHighPassHighHz
+        case makeupGainLowDB, makeupGainMidDB, makeupGainHighDB
+        // Legacy decode-only key (not a stored property; used only in init(from:))
         case sidechainHighPassHz
     }
 
@@ -143,7 +159,12 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         kneeWidthLowDB: Float = 6.0,
         kneeWidthMidDB: Float = 6.0,
         kneeWidthHighDB: Float = 6.0,
-        sidechainHighPassHz: Float = 0.0
+        sidechainHighPassLowHz: Float = 0.0,
+        sidechainHighPassMidHz: Float = 0.0,
+        sidechainHighPassHighHz: Float = 0.0,
+        makeupGainLowDB: Float = 0.0,
+        makeupGainMidDB: Float = 0.0,
+        makeupGainHighDB: Float = 0.0
     ) {
         self.isEnabled       = isEnabled
         self.crossLowMidHz   = crossLowMidHz
@@ -165,7 +186,12 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         self.kneeWidthLowDB  = kneeWidthLowDB
         self.kneeWidthMidDB  = kneeWidthMidDB
         self.kneeWidthHighDB = kneeWidthHighDB
-        self.sidechainHighPassHz = sidechainHighPassHz
+        self.sidechainHighPassLowHz  = sidechainHighPassLowHz
+        self.sidechainHighPassMidHz  = sidechainHighPassMidHz
+        self.sidechainHighPassHighHz = sidechainHighPassHighHz
+        self.makeupGainLowDB  = makeupGainLowDB
+        self.makeupGainMidDB  = makeupGainMidDB
+        self.makeupGainHighDB = makeupGainHighDB
     }
 
     init(from decoder: Decoder) throws {
@@ -190,11 +216,57 @@ struct MultibandCompressorConfig: Codable, Equatable, Sendable {
         kneeWidthLowDB  = try c.decodeIfPresent(Float.self,          forKey: .kneeWidthLowDB)  ?? 6.0
         kneeWidthMidDB  = try c.decodeIfPresent(Float.self,          forKey: .kneeWidthMidDB)  ?? 6.0
         kneeWidthHighDB = try c.decodeIfPresent(Float.self,          forKey: .kneeWidthHighDB) ?? 6.0
-        sidechainHighPassHz = try c.decodeIfPresent(Float.self,      forKey: .sidechainHighPassHz) ?? 0.0
+        // Migrate legacy single sidechainHighPassHz to per-band fields
+        let legacyHz = try c.decodeIfPresent(Float.self, forKey: .sidechainHighPassHz) ?? 0.0
+        sidechainHighPassLowHz  = try c.decodeIfPresent(Float.self, forKey: .sidechainHighPassLowHz)  ?? legacyHz
+        sidechainHighPassMidHz  = try c.decodeIfPresent(Float.self, forKey: .sidechainHighPassMidHz)  ?? legacyHz
+        sidechainHighPassHighHz = try c.decodeIfPresent(Float.self, forKey: .sidechainHighPassHighHz) ?? legacyHz
+        makeupGainLowDB  = try c.decodeIfPresent(Float.self, forKey: .makeupGainLowDB)  ?? 0.0
+        makeupGainMidDB  = try c.decodeIfPresent(Float.self, forKey: .makeupGainMidDB)  ?? 0.0
+        makeupGainHighDB = try c.decodeIfPresent(Float.self, forKey: .makeupGainHighDB) ?? 0.0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(isEnabled,      forKey: .isEnabled)
+        try c.encode(crossLowMidHz,  forKey: .crossLowMidHz)
+        try c.encode(crossMidHighHz, forKey: .crossMidHighHz)
+        try c.encode(thresholdLowDB,  forKey: .thresholdLowDB)
+        try c.encode(thresholdMidDB,  forKey: .thresholdMidDB)
+        try c.encode(thresholdHighDB, forKey: .thresholdHighDB)
+        try c.encode(slopeLowMid,    forKey: .slopeLowMid)
+        try c.encode(slopeMidHigh,   forKey: .slopeMidHigh)
+        try c.encode(ratioLow,       forKey: .ratioLow)
+        try c.encode(ratioMid,       forKey: .ratioMid)
+        try c.encode(ratioHigh,      forKey: .ratioHigh)
+        try c.encode(attackLowMs,    forKey: .attackLowMs)
+        try c.encode(attackMidMs,    forKey: .attackMidMs)
+        try c.encode(attackHighMs,   forKey: .attackHighMs)
+        try c.encode(releaseLowMs,   forKey: .releaseLowMs)
+        try c.encode(releaseMidMs,   forKey: .releaseMidMs)
+        try c.encode(releaseHighMs,  forKey: .releaseHighMs)
+        try c.encode(kneeWidthLowDB,  forKey: .kneeWidthLowDB)
+        try c.encode(kneeWidthMidDB,  forKey: .kneeWidthMidDB)
+        try c.encode(kneeWidthHighDB, forKey: .kneeWidthHighDB)
+        try c.encode(sidechainHighPassLowHz,  forKey: .sidechainHighPassLowHz)
+        try c.encode(sidechainHighPassMidHz,  forKey: .sidechainHighPassMidHz)
+        try c.encode(sidechainHighPassHighHz, forKey: .sidechainHighPassHighHz)
+        try c.encode(makeupGainLowDB,  forKey: .makeupGainLowDB)
+        try c.encode(makeupGainMidDB,  forKey: .makeupGainMidDB)
+        try c.encode(makeupGainHighDB, forKey: .makeupGainHighDB)
+        // Note: sidechainHighPassHz is legacy decode-only — not encoded.
     }
 }
 
 // MARK: - Compressor Configuration
+
+/// Compressor sidechain topology.
+enum CompressorTopology: String, Codable, Equatable, Sendable {
+    /// Feed-forward: measures input signal. Standard behaviour. Default.
+    case feedForward = "feedForward"
+    /// Feed-back: measures output after gain application. Characteristic of vintage hardware.
+    case feedBack    = "feedBack"
+}
 
 /// Configuration for the wideband feed-forward compressor.
 struct CompressorConfig: Codable, Equatable, Sendable {
@@ -213,11 +285,13 @@ struct CompressorConfig: Codable, Equatable, Sendable {
     /// Sidechain high-pass filter frequency in Hz.
     /// When > 0, the compressor sidechain is filtered to ignore low frequencies.
     var sidechainHighPassHz: Float = 0.0
+    /// Sidechain topology. Default: .feedForward (preserves existing behaviour exactly).
+    var topology: CompressorTopology = .feedForward
 
     static let `default` = CompressorConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, thresholdDB, ratio, attackMs, releaseMs, makeupGainDB, kneeWidthDB, programDependentRelease, sidechainHighPassHz
+        case isEnabled, thresholdDB, ratio, attackMs, releaseMs, makeupGainDB, kneeWidthDB, programDependentRelease, sidechainHighPassHz, topology
     }
 
     init(
@@ -229,7 +303,8 @@ struct CompressorConfig: Codable, Equatable, Sendable {
         makeupGainDB: Float = 2.5,
         kneeWidthDB: Float = 6.0,
         programDependentRelease: Bool = false,
-        sidechainHighPassHz: Float = 0.0
+        sidechainHighPassHz: Float = 0.0,
+        topology: CompressorTopology = .feedForward
     ) {
         self.isEnabled    = isEnabled
         self.thresholdDB  = thresholdDB
@@ -240,6 +315,7 @@ struct CompressorConfig: Codable, Equatable, Sendable {
         self.kneeWidthDB  = kneeWidthDB
         self.programDependentRelease = programDependentRelease
         self.sidechainHighPassHz = sidechainHighPassHz
+        self.topology     = topology
     }
 
     init(from decoder: Decoder) throws {
@@ -253,6 +329,7 @@ struct CompressorConfig: Codable, Equatable, Sendable {
         kneeWidthDB  = try c.decodeIfPresent(Float.self, forKey: .kneeWidthDB)  ?? 6.0
         programDependentRelease = try c.decodeIfPresent(Bool.self, forKey: .programDependentRelease) ?? false
         sidechainHighPassHz = try c.decodeIfPresent(Float.self, forKey: .sidechainHighPassHz) ?? 0.0
+        topology = try c.decodeIfPresent(CompressorTopology.self, forKey: .topology) ?? .feedForward
     }
 }
 
@@ -264,18 +341,25 @@ struct ExpanderConfig: Codable, Equatable, Sendable {
     var thresholdDB: Float = -35.0
     var ratio:       Float = 1.5
     var rangeDB:     Float = -12.0
+    /// Attack time in milliseconds. Range: 0.1–100 ms. Default: 5.0 ms (matches prior hardcoded value).
+    var attackMs:    Float = 5.0
+    /// Release time in milliseconds. Range: 10–1000 ms. Default: 200.0 ms (matches prior hardcoded value).
+    var releaseMs:   Float = 200.0
 
     static let `default` = ExpanderConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, thresholdDB, ratio, rangeDB
+        case isEnabled, thresholdDB, ratio, rangeDB, attackMs, releaseMs
     }
 
-    init(isEnabled: Bool = false, thresholdDB: Float = -35.0, ratio: Float = 1.5, rangeDB: Float = -12.0) {
+    init(isEnabled: Bool = false, thresholdDB: Float = -35.0, ratio: Float = 1.5, rangeDB: Float = -12.0,
+         attackMs: Float = 5.0, releaseMs: Float = 200.0) {
         self.isEnabled   = isEnabled
         self.thresholdDB = thresholdDB
         self.ratio       = ratio
         self.rangeDB     = rangeDB
+        self.attackMs    = attackMs
+        self.releaseMs   = releaseMs
     }
 
     init(from decoder: Decoder) throws {
@@ -284,6 +368,8 @@ struct ExpanderConfig: Codable, Equatable, Sendable {
         thresholdDB = try c.decodeIfPresent(Float.self, forKey: .thresholdDB) ?? -35.0
         ratio       = try c.decodeIfPresent(Float.self, forKey: .ratio)       ?? 1.5
         rangeDB     = try c.decodeIfPresent(Float.self, forKey: .rangeDB)     ?? -12.0
+        attackMs    = try c.decodeIfPresent(Float.self, forKey: .attackMs)    ?? 5.0
+        releaseMs   = try c.decodeIfPresent(Float.self, forKey: .releaseMs)   ?? 200.0
     }
 }
 
@@ -398,42 +484,221 @@ struct BrickwallLimiterConfig: Codable, Equatable, Sendable {
 
 /// Configuration for the three-band frequency-dependent stereo widener.
 ///
-/// Uses hardcoded crossover frequencies of 200 Hz (Low/Mid) and 4000 Hz (Mid/High).
+/// Uses configurable crossover frequencies (default 200 Hz and 4000 Hz).
 /// Width factors: 0 = pure mono, 1.0 = original stereo, 2.0 = maximum expansion.
 struct StereoWidenerConfig: Codable, Equatable, Sendable {
     /// Whether the stereo widener is active. Default OFF.
     var isEnabled:      Bool  = false
-    /// Low-band (< 200 Hz) width. Range: 0.0 (mono) – 1.0 (stereo). Default: 0.0 (mono bass).
+    /// Low-band (< crossoverLowMidHz) width. Range: 0.0 (mono) – 1.0 (stereo). Default: 0.0 (mono bass).
     var widthFactorLow: Float = 0.0
-    /// Mid-band (200 Hz – 4 kHz) width. Range: 1.0 – 2.0. Default: 1.4.
+    /// Mid-band width. Range: 1.0 – 2.0. Default: 1.4.
     var widthFactorMid: Float = 1.4
-    /// High-band (> 4 kHz) width. Range: 1.0 – 2.0. Default: 1.25.
+    /// High-band width. Range: 1.0 – 2.0. Default: 1.25.
     var widthFactorHigh: Float = 1.25
+    /// Low/Mid crossover frequency in Hz. Default: 200 Hz.
+    var crossoverLowMidHz: Float = 200.0
+    /// Mid/High crossover frequency in Hz. Default: 4000 Hz.
+    var crossoverMidHighHz: Float = 4000.0
+    /// When true, forces the low band to mono (width = 0) regardless of widthFactorLow.
+    /// Useful for maintaining solid bass phantom centre. Default: false.
+    var monoLowBand: Bool = false
 
     static let `default` = StereoWidenerConfig()
 
     private enum CodingKeys: String, CodingKey {
         case isEnabled, widthFactorLow, widthFactorMid, widthFactorHigh
+        case crossoverLowMidHz, crossoverMidHighHz, monoLowBand
     }
 
     init(
         isEnabled: Bool = false,
         widthFactorLow: Float = 0.0,
         widthFactorMid: Float = 1.4,
-        widthFactorHigh: Float = 1.25
+        widthFactorHigh: Float = 1.25,
+        crossoverLowMidHz: Float = 200.0,
+        crossoverMidHighHz: Float = 4000.0,
+        monoLowBand: Bool = false
     ) {
-        self.isEnabled      = isEnabled
-        self.widthFactorLow  = widthFactorLow
-        self.widthFactorMid  = widthFactorMid
-        self.widthFactorHigh = widthFactorHigh
+        self.isEnabled        = isEnabled
+        self.widthFactorLow   = widthFactorLow
+        self.widthFactorMid   = widthFactorMid
+        self.widthFactorHigh  = widthFactorHigh
+        self.crossoverLowMidHz  = crossoverLowMidHz
+        self.crossoverMidHighHz = crossoverMidHighHz
+        self.monoLowBand      = monoLowBand
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        isEnabled       = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)       ?? false
-        widthFactorLow  = try c.decodeIfPresent(Float.self, forKey: .widthFactorLow)  ?? 0.0
-        widthFactorMid  = try c.decodeIfPresent(Float.self, forKey: .widthFactorMid)  ?? 1.4
-        widthFactorHigh = try c.decodeIfPresent(Float.self, forKey: .widthFactorHigh) ?? 1.25
+        isEnabled         = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)         ?? false
+        widthFactorLow    = try c.decodeIfPresent(Float.self, forKey: .widthFactorLow)    ?? 0.0
+        widthFactorMid    = try c.decodeIfPresent(Float.self, forKey: .widthFactorMid)    ?? 1.4
+        widthFactorHigh   = try c.decodeIfPresent(Float.self, forKey: .widthFactorHigh)   ?? 1.25
+        crossoverLowMidHz  = try c.decodeIfPresent(Float.self, forKey: .crossoverLowMidHz)  ?? 200.0
+        crossoverMidHighHz = try c.decodeIfPresent(Float.self, forKey: .crossoverMidHighHz) ?? 4000.0
+        monoLowBand       = try c.decodeIfPresent(Bool.self,  forKey: .monoLowBand)       ?? false
+    }
+}
+
+// MARK: - Voice-Activity Gate Configuration
+
+/// Confidence-multiplier gate on DialogueRelativeLeveler's correction, based on whether the
+/// dialogue band's envelope shows a speech-like syllabic modulation rate (~3-8 Hz) rather than
+/// a sustained tone or music's typically slower tempo-rate modulation.
+struct VoiceActivityGateConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool = false
+
+    /// Center of the syllabic modulation band checked, Hz. Range: 2–10.
+    var modulationCenterHz: Float = 5.0
+    /// Bandwidth around the center, Hz. Range: 2–8.
+    var modulationBandwidthHz: Float = 5.0
+
+    /// Fast envelope window feeding the modulation detector, ms. Must stay well below one
+    /// modulation period or the modulation itself gets smoothed away. Range: 5–30.
+    var envelopeWindowMs: Float = 15.0
+    /// Window over which modulation energy is measured, ms — needs several modulation cycles
+    /// to be stable. Range: 300–1500.
+    var measurementWindowMs: Float = 700.0
+
+    /// Normalized modulation index below which confidence is 0. Range: 0.0–1.0.
+    var confidenceFloorIndex: Float = 0.15
+    /// Normalized modulation index at/above which confidence is 1. Must exceed confidenceFloorIndex. Range: 0.0–1.0.
+    var confidenceCeilingIndex: Float = 0.45
+
+    /// Minimum confidence applied even at zero modulation index — a safety floor so heavily
+    /// processed or whispered dialogue that lacks strong syllabic modulation still gets partial
+    /// rescue instead of none. Range: 0.0–1.0.
+    var minConfidence: Float = 0.2
+
+    static let `default` = VoiceActivityGateConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, modulationCenterHz, modulationBandwidthHz
+        case envelopeWindowMs, measurementWindowMs
+        case confidenceFloorIndex, confidenceCeilingIndex, minConfidence
+    }
+
+    init(
+        isEnabled: Bool = false,
+        modulationCenterHz: Float = 5.0,
+        modulationBandwidthHz: Float = 5.0,
+        envelopeWindowMs: Float = 15.0,
+        measurementWindowMs: Float = 700.0,
+        confidenceFloorIndex: Float = 0.15,
+        confidenceCeilingIndex: Float = 0.45,
+        minConfidence: Float = 0.2
+    ) {
+        self.isEnabled = isEnabled
+        self.modulationCenterHz = modulationCenterHz
+        self.modulationBandwidthHz = modulationBandwidthHz
+        self.envelopeWindowMs = envelopeWindowMs
+        self.measurementWindowMs = measurementWindowMs
+        self.confidenceFloorIndex = confidenceFloorIndex
+        self.confidenceCeilingIndex = confidenceCeilingIndex
+        self.minConfidence = minConfidence
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        modulationCenterHz = try c.decodeIfPresent(Float.self, forKey: .modulationCenterHz) ?? 5.0
+        modulationBandwidthHz = try c.decodeIfPresent(Float.self, forKey: .modulationBandwidthHz) ?? 5.0
+        envelopeWindowMs = try c.decodeIfPresent(Float.self, forKey: .envelopeWindowMs) ?? 15.0
+        measurementWindowMs = try c.decodeIfPresent(Float.self, forKey: .measurementWindowMs) ?? 700.0
+        confidenceFloorIndex = try c.decodeIfPresent(Float.self, forKey: .confidenceFloorIndex) ?? 0.15
+        confidenceCeilingIndex = try c.decodeIfPresent(Float.self, forKey: .confidenceCeilingIndex) ?? 0.45
+        minConfidence = try c.decodeIfPresent(Float.self, forKey: .minConfidence) ?? 0.2
+    }
+}
+
+// MARK: - Dialogue-Relative Leveler Configuration
+
+/// Configuration for the dialogue-relative leveler.
+///
+/// Unlike a single-band dynamic EQ, this compares the dialogue band's level against
+/// the *full program* level and boosts only when the gap between them exceeds
+/// targetGapDB — i.e. only when dialogue is actually being masked by the rest of
+/// the mix right now, not merely whenever the dialogue band itself is quiet.
+struct DialogueRelativeLevelerConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool = false
+
+    /// Bandpass region used to isolate dialogue content. Range: 100–8000 Hz.
+    var bandLowHz:  Float = 300.0
+    var bandHighHz: Float = 3500.0
+
+    /// Maximum acceptable gap (dB) between program level and dialogue-band level
+    /// before correction engages. Range: 3–20 dB.
+    var targetGapDB: Float = 10.0
+
+    /// How aggressively the gap is closed once it's exceeded. 1.0 = no correction,
+    /// higher = closes more of the gap. Range: 1.0–6.0.
+    var boostRatio: Float = 2.0
+
+    /// Ceiling on applied boost, dB. Range: 0–15.
+    var maxBoostDB: Float = 8.0
+
+    /// RMS envelope window for both detectors, ms. Range: 50–500.
+    var detectorWindowMs: Float = 300.0
+
+    /// Fast direction: how quickly correction increases when masking worsens. ms.
+    var attackMs: Float = 150.0
+
+    /// Slow direction: how quickly correction relaxes when masking eases. ms.
+    var releaseMs: Float = 900.0
+
+    /// Below this full-program level, treat as near-silence and decay correction
+    /// to zero rather than chasing noise floor. dBFS. Range: -70…-30.
+    var programGateThresholdDB: Float = -50.0
+
+    /// Voice-activity gate based on syllabic modulation rate.
+    var voiceGate: VoiceActivityGateConfig = VoiceActivityGateConfig()
+
+    static let `default` = DialogueRelativeLevelerConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, bandLowHz, bandHighHz, targetGapDB, boostRatio, maxBoostDB
+        case detectorWindowMs, attackMs, releaseMs, programGateThresholdDB, voiceGate
+    }
+
+    init(
+        isEnabled: Bool = false,
+        bandLowHz: Float = 300.0,
+        bandHighHz: Float = 3500.0,
+        targetGapDB: Float = 10.0,
+        boostRatio: Float = 2.0,
+        maxBoostDB: Float = 8.0,
+        detectorWindowMs: Float = 300.0,
+        attackMs: Float = 150.0,
+        releaseMs: Float = 900.0,
+        programGateThresholdDB: Float = -50.0,
+        voiceGate: VoiceActivityGateConfig = VoiceActivityGateConfig()
+    ) {
+        self.isEnabled = isEnabled
+        self.bandLowHz = bandLowHz
+        self.bandHighHz = bandHighHz
+        self.targetGapDB = targetGapDB
+        self.boostRatio = boostRatio
+        self.maxBoostDB = maxBoostDB
+        self.detectorWindowMs = detectorWindowMs
+        self.attackMs = attackMs
+        self.releaseMs = releaseMs
+        self.programGateThresholdDB = programGateThresholdDB
+        self.voiceGate = voiceGate
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        bandLowHz = try c.decodeIfPresent(Float.self, forKey: .bandLowHz) ?? 300.0
+        bandHighHz = try c.decodeIfPresent(Float.self, forKey: .bandHighHz) ?? 3500.0
+        targetGapDB = try c.decodeIfPresent(Float.self, forKey: .targetGapDB) ?? 10.0
+        boostRatio = try c.decodeIfPresent(Float.self, forKey: .boostRatio) ?? 2.0
+        maxBoostDB = try c.decodeIfPresent(Float.self, forKey: .maxBoostDB) ?? 8.0
+        detectorWindowMs = try c.decodeIfPresent(Float.self, forKey: .detectorWindowMs) ?? 300.0
+        attackMs = try c.decodeIfPresent(Float.self, forKey: .attackMs) ?? 150.0
+        releaseMs = try c.decodeIfPresent(Float.self, forKey: .releaseMs) ?? 900.0
+        programGateThresholdDB = try c.decodeIfPresent(Float.self, forKey: .programGateThresholdDB) ?? -50.0
+        voiceGate = try c.decodeIfPresent(VoiceActivityGateConfig.self, forKey: .voiceGate) ?? VoiceActivityGateConfig()
     }
 }
 
@@ -446,21 +711,42 @@ struct LoudnessMatchConfig: Codable, Equatable, Sendable {
     /// Target integrated loudness in LUFS. Range: −24 to −10 LUFS. Default: −16 LUFS.
     var targetLoudnessLUFS: Float = -16.0
 
+    /// Ceiling on corrective gain in either direction, dB. Content with scene-to-scene
+    /// loudness swings wider than this will only be partially corrected in its most
+    /// extreme moments. Range: 3–20. Default: 12 (unchanged from the prior hardcoded value).
+    var maxCorrectionDB: Float = 12.0
+
+    /// Time constant (seconds) for gain *decreasing* — i.e. the program got louder
+    /// and we need to pull level down. Kept faster than release so a loud scene's
+    /// onset doesn't ride at full level for long. Range: 0.3–5.0.
+    var attackSeconds: Float = 1.0
+
+    /// Time constant (seconds) for gain *increasing* — i.e. the program got quieter
+    /// and we're restoring level. Kept slower than attack so recovery doesn't rush
+    /// into a loud scene's reverb tail. Range: 1.0–10.0.
+    var releaseSeconds: Float = 4.0
+
     static let `default` = LoudnessMatchConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, targetLoudnessLUFS
+        case isEnabled, targetLoudnessLUFS, maxCorrectionDB, attackSeconds, releaseSeconds
     }
 
-    init(isEnabled: Bool = false, targetLoudnessLUFS: Float = -16.0) {
+    init(isEnabled: Bool = false, targetLoudnessLUFS: Float = -16.0, maxCorrectionDB: Float = 12.0, attackSeconds: Float = 1.0, releaseSeconds: Float = 4.0) {
         self.isEnabled          = isEnabled
         self.targetLoudnessLUFS = targetLoudnessLUFS
+        self.maxCorrectionDB    = maxCorrectionDB
+        self.attackSeconds      = attackSeconds
+        self.releaseSeconds     = releaseSeconds
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         isEnabled          = try c.decodeIfPresent(Bool.self,  forKey: .isEnabled)          ?? false
         targetLoudnessLUFS = try c.decodeIfPresent(Float.self, forKey: .targetLoudnessLUFS) ?? -16.0
+        maxCorrectionDB    = try c.decodeIfPresent(Float.self, forKey: .maxCorrectionDB)    ?? 12.0
+        attackSeconds      = try c.decodeIfPresent(Float.self, forKey: .attackSeconds)      ?? 1.0
+        releaseSeconds     = try c.decodeIfPresent(Float.self, forKey: .releaseSeconds)     ?? 4.0
     }
 }
 
@@ -961,6 +1247,14 @@ enum DynamicBandDirection: String, Codable, Equatable, Sendable {
     case both
 }
 
+/// Envelope detector mode for dynamic EQ bands.
+enum DynamicEQDetectorMode: String, Codable, Equatable, Sendable {
+    /// Peak detector (current behavior) — responds to instantaneous amplitude.
+    case peak
+    /// RMS detector — responds to signal power; less reactive to transients.
+    case rms
+}
+
 /// Single dynamic EQ band configuration.
 struct DynamicEQBand: Codable, Equatable, Sendable {
     var frequency: Float   // Hz, 20–20,000
@@ -980,6 +1274,11 @@ struct DynamicEQBand: Codable, Equatable, Sendable {
     var boostThresholdDB: Float = -40.0
     var boostRatio: Float = 2.0
     var maxBoostDB: Float = 6.0
+
+    /// Envelope detector mode. Default: .peak (preserves existing behavior).
+    var detectorMode: DynamicEQDetectorMode = .peak
+    /// RMS averaging window in milliseconds. Only used when detectorMode == .rms. Range: 5–200 ms.
+    var rmsWindowMs: Float = 50.0
 }
 
 /// Dynamic EQ configuration.
@@ -1221,15 +1520,19 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
     /// to be attenuated more deeply. May introduce slight residual smoothing
     /// on very transient material; best for heavily noise-contaminated sources.
     case aggressive = "Aggressive"
+    /// All controls set manually; preset picker shows Custom when values diverge.
+    case custom     = "Custom"
 
     /// Returns the `(noiseFloorDB, wienerFloor)` pair for this preset.
     /// `noiseFloorDB` feeds `setNoiseFloorDB(_:)` on the denoiser.
     /// `wienerFloor` feeds `setWienerFloor(_:)` on the denoiser.
-    var parameters: (noiseFloorDB: Float, wienerFloor: Float) {
+    /// Returns `nil` for `.custom` — callers must read individual config fields instead.
+    var parameters: (noiseFloorDB: Float, wienerFloor: Float)? {
         switch self {
         case .natural:    return (noiseFloorDB: -55.0, wienerFloor: 0.05)
         case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01)
         case .aggressive: return (noiseFloorDB: -65.0, wienerFloor: 0.002)
+        case .custom:     return nil
         }
     }
 }
@@ -1255,18 +1558,29 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     // ── D. Dynamic EQ (General) ───────────────────────────────────────
     var dynamicEQ: DynamicEQConfig = DynamicEQConfig()
 
+    // ── D. Dialogue-Relative Leveler ───────────────────────────────────
+    var dialogueRelativeLeveler: DialogueRelativeLevelerConfig = DialogueRelativeLevelerConfig()
+
     // ── D. FIR Impulse Response (Room Correction) ─────────────────────
     var firImpulseResponse: FIRImpulseResponseConfig = FIRImpulseResponseConfig()
 
     // ── D. De-Harsh Tilt Filter ───────────────────────────────────────
     var deharshFilterEnabled: Bool = false
     var deharshTiltAmountDB: Float = -1.5
+    /// De-harsh tilt filter centre frequency in Hz. Default: 3500 Hz (preserves current behaviour).
+    var deharshFrequencyHz: Float = 3500.0
 
     // ── D. Stereo Balance Matrix ───────────────────────────────────────
     var stereoBalancePosition: Float = 0.0
 
     // ── E. Loudness Contouring ────────────────────────────────────────
     var loudnessContourEnabled: Bool = false
+
+    /// Scales the ISO 226 correction gains linearly.
+    /// 0.0 = no correction (contour enabled but flat), 1.0 = full ISO 226 correction.
+    /// Useful for users who find full correction excessive at low volumes.
+    /// Default: 1.0 (full correction).
+    var loudnessContourStrength: Float = 1.0
 
     // ── E. True-Peak Auto-Guard ───────────────────────────────────────
     var limiterTruePeakGuardEnabled: Bool = false
@@ -1339,12 +1653,18 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Active denoiser operating-point preset.
     /// Seeds the noiseFloorDB and wienerFloor on the SpectralDenoiser.
     var linearDenoisingPreset: DenoiserPreset = .standard
+    /// Wiener gain floor (spectral floor for the Wiener filter). Range: 0.0–0.2. Default: 0.01 (matches DenoiserPreset.standard).
+    var denoiserWienerFloor: Float = 0.01
     /// Noise reduction amount. Range: 0.0 (transparent) – 1.0 (maximum). Default: 0.5.
     var denoiserReductionAmount: Float = 0.5
     /// Denoiser FFT resolution mode. Default: .high.
     var denoiserMode: DenoiserMode = .high
     /// Whether a noise profile has been captured (vs adaptive mode).
     var denoiserHasCapturedProfile: Bool = false
+    /// Spectral denoiser gain-envelope attack speed in milliseconds. Default: 11 ms.
+    var denoiserAttackMs: Float = 11.0
+    /// Spectral denoiser gain-envelope release speed in milliseconds. Default: 21 ms.
+    var denoiserReleaseMs: Float = 21.0
 
     /// Speaker Impulse Response Alignment — applies fractional-sample delay
     /// compensation to time-align the acoustic centres of multi-driver systems.
@@ -1357,6 +1677,10 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     var crosstalkCancellationEnabled: Bool = false
     /// Cancellation depth. Range: 0.0 – 1.0. Default: 0.5.
     var crosstalkCancellationAmount: Float = 0.5
+    /// Head-shadow frequency for crosstalk cancellation in Hz.
+    /// Model for speaker angle: ~700 Hz for 60°, ~500 Hz for 45°, ~350 Hz for 30°.
+    /// Default: 700 Hz (preserves current behaviour).
+    var crosstalkHeadShadowHz: Float = 700.0
 
     /// Multi-Seat Complex Averaging — combines head-related transfer function
     /// estimates from multiple listening positions into a composite correction.
@@ -1427,6 +1751,10 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
 
     /// EQ Headroom Compensation — applies static preamp attenuation to prevent clipping from EQ boosts.
     var eqHeadroomCompensationEnabled: Bool = true
+    /// Maximum allowed static preamp attenuation in dB. Prevents runaway stacking of
+    /// target curve + room correction + EQ + bass management from silencing the output.
+    /// Range: 3–24 dB. Default: 12 dB.
+    var eqHeadroomMaxAttenuationDB: Float = 12.0
 
     // MARK: - Codable
 
@@ -1437,11 +1765,13 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case clipperAsymmetryTrimDB
         case deesserDynamicModeEnabled
         case dynamicEQ
+        case dialogueRelativeLeveler
         case firImpulseResponse
         case coefficientDecouplingEnabled
-        case deharshFilterEnabled, deharshTiltAmountDB
+        case deharshFilterEnabled, deharshTiltAmountDB, deharshFrequencyHz
         case stereoBalancePosition
         case loudnessContourEnabled
+        case loudnessContourStrength
         case limiterTruePeakGuardEnabled
         case autoHeadroomEnabled
         case autoHeadroomTargetGRDB
@@ -1477,12 +1807,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case symmetryBalanceEnabled
         case panningGainMatrixEnabled, panningCrossfeedAmount
         case linearDenoisingEnabled, linearDenoisingThresholdDB, linearDenoisingPreset
+        case denoiserWienerFloor
         case denoiserReductionAmount, denoiserMode, denoiserHasCapturedProfile
+        case denoiserAttackMs, denoiserReleaseMs
         case speakerIRAlignmentEnabled, speakerIRDelayMs
-        case crosstalkCancellationEnabled, crosstalkCancellationAmount
+        case crosstalkCancellationEnabled, crosstalkCancellationAmount, crosstalkHeadShadowHz
         case multiSeatAveragingEnabled, multiSeatCount
         case subBassPhaseAlignmentEnabled, subBassAlignmentFrequencyHz, subBassPhaseAlignmentQ
         case eqHeadroomCompensationEnabled
+        case eqHeadroomMaxAttenuationDB
         // highResDecouplingActive is not persisted (runtime-computed)
     }
 
@@ -1492,12 +1825,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         clipperAsymmetryTrimDB: Float = 0.0,
         deesserDynamicModeEnabled: Bool = false,
         dynamicEQ: DynamicEQConfig = DynamicEQConfig(),
+        dialogueRelativeLeveler: DialogueRelativeLevelerConfig = DialogueRelativeLevelerConfig(),
         firImpulseResponse: FIRImpulseResponseConfig = FIRImpulseResponseConfig(),
         coefficientDecouplingEnabled: Bool = true,
         deharshFilterEnabled: Bool = false,
         deharshTiltAmountDB: Float = -1.5,
+        deharshFrequencyHz: Float = 3500.0,
         stereoBalancePosition: Float = 0.0,
         loudnessContourEnabled: Bool = false,
+        loudnessContourStrength: Float = 1.0,
         limiterTruePeakGuardEnabled:  Bool              = false,
         autoHeadroomEnabled:          Bool              = false,
         autoHeadroomTargetGRDB:       Float             = 3.0,
@@ -1523,13 +1859,17 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         linearDenoisingEnabled: Bool = false,
         linearDenoisingThresholdDB: Float = -60.0,
         linearDenoisingPreset: DenoiserPreset = .standard,
+        denoiserWienerFloor: Float = 0.01,
         denoiserReductionAmount: Float = 0.5,
         denoiserMode: DenoiserMode = .high,
         denoiserHasCapturedProfile: Bool = false,
+        denoiserAttackMs: Float = 11.0,
+        denoiserReleaseMs: Float = 21.0,
         speakerIRAlignmentEnabled: Bool = false,
         speakerIRDelayMs: Float = 0.0,
         crosstalkCancellationEnabled: Bool = false,
         crosstalkCancellationAmount: Float = 0.5,
+        crosstalkHeadShadowHz: Float = 700.0,
         multiSeatAveragingEnabled: Bool = false,
         multiSeatCount: Int = 2,
         subBassPhaseAlignmentEnabled: Bool = false,
@@ -1551,19 +1891,23 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         loudnessReferencePhon: Float = 83.0,
         loudnessReferenceVolume: Float = 0.85,
         perBandLoudness: PerBandLoudnessConfig = PerBandLoudnessConfig(),
-        eqHeadroomCompensationEnabled: Bool = true
+        eqHeadroomCompensationEnabled: Bool = true,
+        eqHeadroomMaxAttenuationDB: Float = 12.0
     ) {
         self.highResDecouplingActive          = highResDecouplingActive
         self.loudnessDialogueGateEnabled      = loudnessDialogueGateEnabled
         self.clipperAsymmetryTrimDB           = clipperAsymmetryTrimDB
         self.deesserDynamicModeEnabled        = deesserDynamicModeEnabled
         self.dynamicEQ                        = dynamicEQ
+        self.dialogueRelativeLeveler         = dialogueRelativeLeveler
         self.firImpulseResponse              = firImpulseResponse
         self.coefficientDecouplingEnabled     = coefficientDecouplingEnabled
         self.deharshFilterEnabled             = deharshFilterEnabled
         self.deharshTiltAmountDB              = deharshTiltAmountDB
+        self.deharshFrequencyHz               = deharshFrequencyHz
         self.stereoBalancePosition            = stereoBalancePosition
         self.loudnessContourEnabled           = loudnessContourEnabled
+        self.loudnessContourStrength          = loudnessContourStrength
         self.limiterTruePeakGuardEnabled      = limiterTruePeakGuardEnabled
         self.autoHeadroomEnabled              = autoHeadroomEnabled
         self.autoHeadroomTargetGRDB           = autoHeadroomTargetGRDB
@@ -1589,13 +1933,17 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.linearDenoisingEnabled           = linearDenoisingEnabled
         self.linearDenoisingThresholdDB       = linearDenoisingThresholdDB
         self.linearDenoisingPreset           = linearDenoisingPreset
+        self.denoiserWienerFloor              = denoiserWienerFloor
         self.denoiserReductionAmount          = denoiserReductionAmount
         self.denoiserMode                    = denoiserMode
         self.denoiserHasCapturedProfile      = denoiserHasCapturedProfile
+        self.denoiserAttackMs                = denoiserAttackMs
+        self.denoiserReleaseMs               = denoiserReleaseMs
         self.speakerIRAlignmentEnabled        = speakerIRAlignmentEnabled
         self.speakerIRDelayMs                 = speakerIRDelayMs
         self.crosstalkCancellationEnabled     = crosstalkCancellationEnabled
         self.crosstalkCancellationAmount      = crosstalkCancellationAmount
+        self.crosstalkHeadShadowHz            = crosstalkHeadShadowHz
         self.multiSeatAveragingEnabled        = multiSeatAveragingEnabled
         self.multiSeatCount                   = multiSeatCount
         self.subBassPhaseAlignmentEnabled     = subBassPhaseAlignmentEnabled
@@ -1618,6 +1966,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.loudnessReferenceVolume          = loudnessReferenceVolume
         self.perBandLoudness                 = perBandLoudness
         self.eqHeadroomCompensationEnabled   = eqHeadroomCompensationEnabled
+        self.eqHeadroomMaxAttenuationDB      = eqHeadroomMaxAttenuationDB
     }
 
     init(from decoder: Decoder) throws {
@@ -1626,12 +1975,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         clipperAsymmetryTrimDB           = try c.decodeIfPresent(Float.self,                 forKey: .clipperAsymmetryTrimDB)           ?? 0.0
         deesserDynamicModeEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .deesserDynamicModeEnabled)        ?? false
         dynamicEQ                        = try c.decodeIfPresent(DynamicEQConfig.self,       forKey: .dynamicEQ)                        ?? DynamicEQConfig()
+        dialogueRelativeLeveler         = try c.decodeIfPresent(DialogueRelativeLevelerConfig.self, forKey: .dialogueRelativeLeveler) ?? DialogueRelativeLevelerConfig()
         firImpulseResponse              = try c.decodeIfPresent(FIRImpulseResponseConfig.self, forKey: .firImpulseResponse)              ?? FIRImpulseResponseConfig()
         coefficientDecouplingEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .coefficientDecouplingEnabled)     ?? true
         deharshFilterEnabled             = try c.decodeIfPresent(Bool.self,                  forKey: .deharshFilterEnabled)             ?? false
         deharshTiltAmountDB              = try c.decodeIfPresent(Float.self,                 forKey: .deharshTiltAmountDB)              ?? -1.5
+        deharshFrequencyHz               = try c.decodeIfPresent(Float.self,                 forKey: .deharshFrequencyHz)               ?? 3500.0
         stereoBalancePosition            = try c.decodeIfPresent(Float.self,                 forKey: .stereoBalancePosition)            ?? 0.0
         loudnessContourEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .loudnessContourEnabled)           ?? false
+        loudnessContourStrength          = try c.decodeIfPresent(Float.self,                 forKey: .loudnessContourStrength)          ?? 1.0
         limiterTruePeakGuardEnabled      = try c.decodeIfPresent(Bool.self,                  forKey: .limiterTruePeakGuardEnabled)      ?? false
         autoHeadroomEnabled              = try c.decodeIfPresent(Bool.self,                  forKey: .autoHeadroomEnabled)              ?? false
         autoHeadroomTargetGRDB           = try c.decodeIfPresent(Float.self,                 forKey: .autoHeadroomTargetGRDB)           ?? 3.0
@@ -1657,13 +2009,17 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         linearDenoisingEnabled           = try c.decodeIfPresent(Bool.self,                  forKey: .linearDenoisingEnabled)           ?? false
         linearDenoisingThresholdDB       = try c.decodeIfPresent(Float.self,                 forKey: .linearDenoisingThresholdDB)       ?? -60.0
         linearDenoisingPreset           = try c.decodeIfPresent(DenoiserPreset.self,     forKey: .linearDenoisingPreset)           ?? .standard
+        denoiserWienerFloor              = try c.decodeIfPresent(Float.self,                 forKey: .denoiserWienerFloor)              ?? 0.01
         denoiserReductionAmount          = try c.decodeIfPresent(Float.self,                 forKey: .denoiserReductionAmount)          ?? 0.5
         denoiserMode                    = try c.decodeIfPresent(DenoiserMode.self,         forKey: .denoiserMode)                    ?? .high
         denoiserHasCapturedProfile      = try c.decodeIfPresent(Bool.self,                  forKey: .denoiserHasCapturedProfile)      ?? false
+        denoiserAttackMs                = try c.decodeIfPresent(Float.self,                 forKey: .denoiserAttackMs)                ?? 11.0
+        denoiserReleaseMs               = try c.decodeIfPresent(Float.self,                 forKey: .denoiserReleaseMs)               ?? 21.0
         speakerIRAlignmentEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .speakerIRAlignmentEnabled)        ?? false
         speakerIRDelayMs                 = try c.decodeIfPresent(Float.self,                 forKey: .speakerIRDelayMs)                 ?? 0.0
         crosstalkCancellationEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .crosstalkCancellationEnabled)     ?? false
         crosstalkCancellationAmount      = try c.decodeIfPresent(Float.self,                 forKey: .crosstalkCancellationAmount)      ?? 0.5
+        crosstalkHeadShadowHz            = try c.decodeIfPresent(Float.self,                 forKey: .crosstalkHeadShadowHz)            ?? 700.0
         multiSeatAveragingEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .multiSeatAveragingEnabled)        ?? false
         multiSeatCount                   = try c.decodeIfPresent(Int.self,                   forKey: .multiSeatCount)                   ?? 2
         subBassPhaseAlignmentEnabled     = try c.decodeIfPresent(Bool.self,                  forKey: .subBassPhaseAlignmentEnabled)     ?? false
@@ -1704,7 +2060,8 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         loudnessReferencePhon            = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferencePhon)            ?? 83.0
         loudnessReferenceVolume          = try c.decodeIfPresent(Float.self,                 forKey: .loudnessReferenceVolume)          ?? 0.85
         perBandLoudness                 = try c.decodeIfPresent(PerBandLoudnessConfig.self, forKey: .perBandLoudness)                 ?? PerBandLoudnessConfig()
-        eqHeadroomCompensationEnabled   = try c.decodeIfPresent(Bool.self,                  forKey: .eqHeadroomCompensationEnabled)   ?? true
+        eqHeadroomCompensationEnabled   = try c.decodeIfPresent(Bool.self,  forKey: .eqHeadroomCompensationEnabled)  ?? true
+        eqHeadroomMaxAttenuationDB      = try c.decodeIfPresent(Float.self, forKey: .eqHeadroomMaxAttenuationDB)     ?? 12.0
         highResDecouplingActive          = false  // always computed at runtime
     }
 
@@ -1714,12 +2071,15 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(clipperAsymmetryTrimDB,             forKey: .clipperAsymmetryTrimDB)
         try c.encode(deesserDynamicModeEnabled,          forKey: .deesserDynamicModeEnabled)
         try c.encode(dynamicEQ,                          forKey: .dynamicEQ)
+        try c.encode(dialogueRelativeLeveler,           forKey: .dialogueRelativeLeveler)
         try c.encode(firImpulseResponse,                 forKey: .firImpulseResponse)
         try c.encode(coefficientDecouplingEnabled,       forKey: .coefficientDecouplingEnabled)
         try c.encode(deharshFilterEnabled,               forKey: .deharshFilterEnabled)
         try c.encode(deharshTiltAmountDB,                forKey: .deharshTiltAmountDB)
+        try c.encode(deharshFrequencyHz,                 forKey: .deharshFrequencyHz)
         try c.encode(stereoBalancePosition,              forKey: .stereoBalancePosition)
         try c.encode(loudnessContourEnabled,             forKey: .loudnessContourEnabled)
+        try c.encode(loudnessContourStrength,            forKey: .loudnessContourStrength)
         try c.encode(limiterTruePeakGuardEnabled,        forKey: .limiterTruePeakGuardEnabled)
         try c.encode(autoHeadroomEnabled,                forKey: .autoHeadroomEnabled)
         try c.encode(autoHeadroomTargetGRDB,             forKey: .autoHeadroomTargetGRDB)
@@ -1745,13 +2105,17 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(linearDenoisingEnabled,             forKey: .linearDenoisingEnabled)
         try c.encode(linearDenoisingThresholdDB,         forKey: .linearDenoisingThresholdDB)
         try c.encode(linearDenoisingPreset,             forKey: .linearDenoisingPreset)
+        try c.encode(denoiserWienerFloor,                forKey: .denoiserWienerFloor)
         try c.encode(denoiserReductionAmount,            forKey: .denoiserReductionAmount)
         try c.encode(denoiserMode,                     forKey: .denoiserMode)
         try c.encode(denoiserHasCapturedProfile,       forKey: .denoiserHasCapturedProfile)
+        try c.encode(denoiserAttackMs,                   forKey: .denoiserAttackMs)
+        try c.encode(denoiserReleaseMs,                  forKey: .denoiserReleaseMs)
         try c.encode(speakerIRAlignmentEnabled,          forKey: .speakerIRAlignmentEnabled)
         try c.encode(speakerIRDelayMs,                   forKey: .speakerIRDelayMs)
         try c.encode(crosstalkCancellationEnabled,       forKey: .crosstalkCancellationEnabled)
         try c.encode(crosstalkCancellationAmount,        forKey: .crosstalkCancellationAmount)
+        try c.encode(crosstalkHeadShadowHz,              forKey: .crosstalkHeadShadowHz)
         try c.encode(multiSeatAveragingEnabled,          forKey: .multiSeatAveragingEnabled)
         try c.encode(multiSeatCount,                     forKey: .multiSeatCount)
         try c.encode(subBassPhaseAlignmentEnabled,       forKey: .subBassPhaseAlignmentEnabled)
@@ -1772,6 +2136,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(loudnessReferenceVolume,            forKey: .loudnessReferenceVolume)
         try c.encode(perBandLoudness,                    forKey: .perBandLoudness)
         try c.encode(eqHeadroomCompensationEnabled,      forKey: .eqHeadroomCompensationEnabled)
+        try c.encode(eqHeadroomMaxAttenuationDB,         forKey: .eqHeadroomMaxAttenuationDB)
     }
 }
 

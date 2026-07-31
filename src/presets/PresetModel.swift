@@ -199,6 +199,8 @@ struct PresetBand: Codable, Sendable {
         case slope
         case isDynamic
         case dynamicParams
+        case constantQ
+        case linkwitzTargetHz
     }
 
     var frequency: Float
@@ -209,6 +211,8 @@ struct PresetBand: Codable, Sendable {
     var slope: FilterSlope
     var isDynamic: Bool = false
     var dynamicParams: DynamicBandParams = DynamicBandParams()
+    var constantQ: Bool = false
+    var linkwitzTargetHz: Float? = nil
 
     init(
         frequency: Float,
@@ -216,7 +220,9 @@ struct PresetBand: Codable, Sendable {
         gain: Float,
         filterType: FilterType = .parametric,
         bypass: Bool = false,
-        slope: FilterSlope = .db12
+        slope: FilterSlope = .db12,
+        constantQ: Bool = false,
+        linkwitzTargetHz: Float? = nil
     ) {
         self.frequency = frequency
         self.q = q
@@ -224,6 +230,8 @@ struct PresetBand: Codable, Sendable {
         self.filterType = filterType
         self.bypass = bypass
         self.slope = slope
+        self.constantQ = constantQ
+        self.linkwitzTargetHz = linkwitzTargetHz
     }
 
     /// Creates a PresetBand by decoding from a container with version awareness.

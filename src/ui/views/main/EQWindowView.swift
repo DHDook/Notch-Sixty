@@ -5,9 +5,13 @@ import Combine
 struct EQWindowView: View {
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject var store: EqualiserStore
+    @EnvironmentObject var windowActivation: WindowActivationController
     @StateObject private var driverManager = DriverManager.shared
     @State private var showCompareHelp = false
+    @State private var showSnapshotCompareHelp = false
+    @State private var showChannelHelp = false
     @State private var metersEnabledUI = true
+    @State private var showSnapshotCompare = false
     @State private var localVolume: Float = 1.0
     @State private var localIsMuted: Bool = false
     @State private var showDriverSheet = true
@@ -24,122 +28,95 @@ struct EQWindowView: View {
         store.showDriverUpdateRequired && !store.routingCoordinator.manualModeEnabled
     }
 
-    /// View model for routing status.
-    private var routingViewModel: RoutingViewModel {
-        RoutingViewModel(store: store)
-    }
-
     /// View model for EQ configuration.
     private var eqViewModel: EQViewModel {
         EQViewModel(store: store)
     }
 
+    // MARK: - Column Views
+
+    /// Preamp and volume controls column.
+    private var preampVolumeColumn: some View {
+        VStack(spacing: 12) {
+            GainControlsView(
+                inputGain: store.inputGain,
+                outputGain: store.outputGain,
+                onInputGainChange: { store.updateInputGain($0) },
+                onOutputGainChange: { store.updateOutputGain($0) }
+            )
+
+            ChannelBalanceSlider(
+                balance: Binding(
+                    get: { store.dynamicsConfig.channelBalance },
+                    set: { store.updateChannelBalance($0) }
+                )
+            )
+
+            MasterVolumeSlider(
+                volume: Binding(
+                    get: {
+                        if store.routingStatus.isActive {
+                            return store.routingCoordinator.masterVolume
+                        } else {
+                            return localVolume
+                        }
+                    },
+                    set: { newVolume in
+                        if store.routingStatus.isActive {
+                            store.routingCoordinator.setMasterVolume(newVolume)
+                        } else {
+                            localVolume = newVolume
+                        }
+                    }
+                ),
+                isMuted: Binding(
+                    get: {
+                        if store.routingStatus.isActive {
+                            return store.routingCoordinator.isMuted
+                        } else {
+                            return localIsMuted
+                        }
+                    },
+                    set: { newMuted in
+                        if store.routingStatus.isActive {
+                            store.routingCoordinator.setMuted(newMuted)
+                        } else {
+                            localIsMuted = newMuted
+                        }
+                    }
+                )
+            )
+        }
+    }
+
+    /// Meters and EQ curve column.
+    private var metersAndCurveColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if store.meterStore.levelMetersEnabled {
+                LevelMetersView(meterStore: store.meterStore)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+                    .opacity(metersEnabledUI ? 1.0 : 0.35)
+                    .saturation(metersEnabledUI ? 1.0 : 0.0)
+                    .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+            }
+
+            EQCurveView(metersEnabled: metersEnabledUI)
+                .frame(width: 333, alignment: .leading)
+                // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
+        }
+    }
+
+
     var body: some View {
         VStack(spacing: 0) {
-            // Level meters + control panel
-            HStack(alignment: .top, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    LevelMetersView(meterStore: store.meterStore)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(1)
-                        .offset(x: -8)
-                        .opacity(metersEnabledUI ? 1.0 : 0.35)
-                        .saturation(metersEnabledUI ? 1.0 : 0.0)
-                        .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
-
-                    EQCurveView(metersEnabled: metersEnabledUI)
-                        .frame(width: 333, alignment: .leading)
-                        .offset(x: -8)
-                        .padding(.leading, 16)
-                        .padding(.top, 4)
-                }
-
-                Spacer(minLength: 64)
-
-                VStack(spacing: 12) {
-                    GainControlsView(
-                        inputGain: store.inputGain,
-                        outputGain: store.outputGain,
-                        onInputGainChange: { store.updateInputGain($0) },
-                        onOutputGainChange: { store.updateOutputGain($0) }
-                    )
-
-                    ChannelBalanceSlider(
-                        balance: Binding(
-                            get: { store.dynamicsConfig.channelBalance },
-                            set: { store.updateChannelBalance($0) }
-                        )
-                    )
-
-                    MasterVolumeSlider(
-                        volume: Binding(
-                            get: {
-                                if store.routingStatus.isActive {
-                                    return store.routingCoordinator.masterVolume
-                                } else {
-                                    return localVolume
-                                }
-                            },
-                            set: { newVolume in
-                                if store.routingStatus.isActive {
-                                    store.routingCoordinator.setMasterVolume(newVolume)
-                                } else {
-                                    localVolume = newVolume
-                                }
-                            }
-                        ),
-                        isMuted: Binding(
-                            get: {
-                                if store.routingStatus.isActive {
-                                    return store.routingCoordinator.isMuted
-                                } else {
-                                    return localIsMuted
-                                }
-                            },
-                            set: { newMuted in
-                                if store.routingStatus.isActive {
-                                    store.routingCoordinator.setMuted(newMuted)
-                                } else {
-                                    localIsMuted = newMuted
-                                }
-                            }
-                        )
-                    )
-                }
-
+            // Top section: 8-column layout
+            HStack(alignment: .top, spacing: 12) {
+                preampVolumeColumn
+                Divider()
+                metersAndCurveColumn
+                Divider()
                 DynamicsInlineView()
-                    .padding(.leading, 24)
-                    .padding(.bottom, 0)
-                    .padding(.trailing, 4)
-
-                // Manual-mode controls (device pickers + routing toggle)
-                // Only reserve horizontal space when manual mode is active.
-                if routingViewModel.manualModeEnabled {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        DevicePickerView()
-
-                        ToggleWithHelp(
-                            label: "Audio Routing",
-                            isOn: Binding(
-                                get: { routingViewModel.isActive },
-                                set: { newValue in
-                                    if newValue {
-                                        store.reconfigureRouting()
-                                    } else {
-                                        store.stopRouting()
-                                    }
-                                }
-                            ),
-                            helpText: "Enable or disable audio routing between the selected input and output devices. Both devices must be selected to enable routing."
-                        )
-                        .disabled(!routingViewModel.canToggleRouting)
-                        .errorTint({
-                            if case .error = store.routingStatus { return true }
-                            return false
-                        }())
-                    }
-                    .frame(minWidth: 376)
-                }
             }
 
             // Dual 31-band real-time spectrum analyser
@@ -153,8 +130,88 @@ struct EQWindowView: View {
                 PresetToolbar()
                     .frame(minWidth: 280, maxWidth: 280, alignment: .leading)
 
-                Spacer()
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Text("Compare")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
+                        Button {
+                            showSnapshotCompareHelp = true
+                        } label: {
+                            Image(systemName: "questionmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showSnapshotCompareHelp, arrowEdge: .trailing) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                TooltipDefinitionEntry(
+                                    title: "A/B/C/D Snapshot Compare",
+                                    detail: "Save up to four full EQ configurations and switch between them instantly for A/B comparison."
+                                )
+                                Divider()
+                                TooltipDefinitionEntry(
+                                    title: "Click to Recall",
+                                    detail: "Click a lettered slot to load its saved EQ."
+                                )
+                                Divider()
+                                TooltipDefinitionEntry(
+                                    title: "Right-Click to Save or Clear",
+                                    detail: "Right-click a slot to save the current EQ into it, or to clear it."
+                                )
+                            }
+                            .padding(12)
+                            .frame(width: 280)
+                        }
+                    }
+
+                    HStack(spacing: 4) {
+                        Toggle("", isOn: $showSnapshotCompare)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+
+                        if showSnapshotCompare {
+                            HStack(spacing: 2) {
+                                ForEach(["A", "B", "C", "D"], id: \.self) { key in
+                                    Button(action: {
+                                        store.restoreSnapshot(key: key)
+                                    }) {
+                                        Text(key)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .frame(width: 18, height: 20)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .background(store.selectedSnapshotKey == key ? Color.accentColor.opacity(0.3) : Color.clear)
+                                    .overlay(
+                                        store.snapshots[key] != nil ?
+                                            Circle()
+                                                .fill(Color.accentColor)
+                                                .frame(width: 4, height: 4)
+                                                .offset(x: 6, y: -8)
+                                            : nil
+                                    )
+                                    .contextMenu {
+                                        Button("Save Current EQ to Slot \(key)") {
+                                            store.saveSnapshot(key: key)
+                                        }
+                                        if store.snapshots[key] != nil {
+                                            Divider()
+                                            Button("Clear Slot \(key)", role: .destructive) {
+                                                store.clearSnapshot(key: key)
+                                            }
+                                        }
+                                    }
+                                    .help("Click to recall slot \(key). Right-click to save or clear.")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer()
                 Spacer()
                     .frame(width: 192)
 
@@ -168,46 +225,42 @@ struct EQWindowView: View {
                 Spacer()
                     .frame(width: 128)
 
-                // Snapshot comparison controls (Part 9.1)
-                VStack(spacing: 4) {
-                    Text("Compare")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 4) {
-                        ForEach(["A", "B", "C", "D"], id: \.self) { key in
-                            Button(action: {
-                                if store.selectedSnapshotKey == key {
-                                    // Already selected - save current state
-                                    store.saveSnapshot(key: key)
-                                } else {
-                                    // Restore snapshot
-                                    store.restoreSnapshot(key: key)
-                                }
-                            }) {
-                                Text(key)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .background(store.selectedSnapshotKey == key ? Color.accentColor.opacity(0.3) : Color.clear)
-                            .overlay(
-                                store.snapshots[key] != nil ?
-                                    Circle()
-                                        .fill(Color.accentColor)
-                                        .frame(width: 4, height: 4)
-                                        .offset(x: 8, y: -8)
-                                    : nil
-                            )
-                        }
-                    }
-                }
-
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {
-                        Text("Channel")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text("Channel")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                showChannelHelp = true
+                            } label: {
+                                Image(systemName: "questionmark.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: $showChannelHelp, arrowEdge: .trailing) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TooltipDefinitionEntry(
+                                        title: "Linked",
+                                        detail: "One EQ curve applied equally to both channels."
+                                    )
+                                    Divider()
+                                    TooltipDefinitionEntry(
+                                        title: "Stereo",
+                                        detail: "Independent left and right EQ curves. Use the Edit picker to choose which channel you're editing."
+                                    )
+                                    Divider()
+                                    TooltipDefinitionEntry(
+                                        title: "M/S",
+                                        detail: "Independent Mid (center, L+R) and Side (width, L−R) EQ curves. Use the Edit picker to choose which one you're editing."
+                                    )
+                                }
+                                .padding(12)
+                                .frame(width: 300)
+                            }
+                        }
                         Picker("", selection: $store.channelMode) {
                             Text("Linked").tag(ChannelMode.linked)
                             Text("Stereo").tag(ChannelMode.stereo)
@@ -260,16 +313,19 @@ struct EQWindowView: View {
                             }
                             .buttonStyle(.plain)
                             .popover(isPresented: $showCompareHelp, arrowEdge: .trailing) {
-                                Text("""
-                                    EQ — Full biquad IIR processing. Minimum latency.
-                                    Linear — Zero-phase FIR convolution EQ. Eliminates phase distortion entirely at the cost of increased latency and pre-ringing artefacts.
-                                    Mixed — Biquad EQ with all-pass phase correction. Reduces phase distortion without pre-ringing or added latency. A practical middle ground between EQ and Linear modes.
-                                    Flat — Bypasses EQ at matched volume to audition unprocessed audio. Reverts automatically after 5 minutes.
-                                    Delta — Solos the EQ difference signal to hear the processed effect.
-                                    """)
-                                    .font(.caption)
-                                    .padding(12)
-                                    .frame(width: 320)
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TooltipDefinitionEntry(title: "EQ", detail: "Full biquad IIR processing. Minimum latency.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Linear", detail: "Zero-phase FIR convolution EQ. Eliminates phase distortion entirely at the cost of increased latency and pre-ringing artefacts.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Mixed", detail: "Biquad EQ with all-pass phase correction. Reduces phase distortion without pre-ringing or added latency. A practical middle ground between EQ and Linear modes.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Flat", detail: "Bypasses EQ at matched volume to audition unprocessed audio. Reverts automatically after 5 minutes.")
+                                    Divider()
+                                    TooltipDefinitionEntry(title: "Delta", detail: "Solos the EQ difference signal to hear the processed effect.")
+                                }
+                                .padding(12)
+                                .frame(width: 320)
                             }
                         }
 
@@ -326,22 +382,6 @@ struct EQWindowView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
-                }
-                .frame(minWidth: 40, alignment: .center)
-                .padding(.top, 10)
-                .padding(.bottom, 2)
-                .padding(.leading, 4)
-                .padding(.trailing, 8)
-
-                VStack(spacing: 2) {
-                    Text("Meters")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                    Toggle("", isOn: $metersEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
                 }
                 .frame(minWidth: 40, alignment: .center)
                 .padding(.top, 10)
@@ -457,7 +497,8 @@ struct SystemEQToggleView: View {
     }
 }
 
-// #Preview("EQ Window") {
-//     EQWindowView()
-//         .environmentObject(EqualiserStore())
-// }
+#Preview("EQ Window") {
+    EQWindowView()
+        .environmentObject(EqualiserStore())
+        .environmentObject(WindowActivationController())
+}

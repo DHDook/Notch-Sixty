@@ -89,7 +89,8 @@ final class RenderPipeline {
     /// PLL writers for Mode 3 (software PLL sync)
     private var pllWriters: [PLLSRCWriter] = []
 
-    /// Fallback writers for Mode 3 when PLL configuration fails
+    /// Fallback writers are superseded by `RenderCallbackContext.outputChannelWriters`.
+    /// Kept as an empty array only for stop/reset paths that zero it out.
     private var fallbackWriters: [SecondaryOutputWriter] = []
 
     /// Active routing mode (resolved by OutputDeviceRouter)
@@ -128,6 +129,12 @@ final class RenderPipeline {
 
     func setSweepAnalyser(_ analyser: SweepAnalyser?) {
         callbackContext?.setSweepAnalyser(analyser)
+    }
+
+    /// Delivers externally captured mic samples to the RTA analyser's input ring buffer.
+    /// Called from MicCaptureSession's delivery queue (background thread).
+    func deliverMicSamplesToRTA(_ samples: [Float]) {
+        callbackContext?.deliverMicSamplesToRTA(samples)
     }
 
     // MARK: - Static Logging (for audio thread)
@@ -508,6 +515,16 @@ final class RenderPipeline {
         // Reset convolution engine on pipeline start
         context.resetConvolution()
 
+        // Hook up latency change callback from adaptive excess phase corrector
+        // to trigger crossover path alignment updates on escalation/de-escalation
+        context.setAdaptiveExcessPhaseCorrectorLatencyCallback { [weak self] in
+            guard let self = self, let ctx = self.callbackContext else { return }
+            ctx.updateCrossoverPathAlignment(
+                dynamicsProcessor: ctx.dynamicsProcessor,
+                sampleRate: self.currentSampleRate
+            )
+        }
+
         // Configure SRC with actual input and output rates.
         let driverRate: Double
         if captureMode == .halInput, let inputManager = inputHALManager {
@@ -693,6 +710,14 @@ final class RenderPipeline {
         driverCapture?.stop()
         driverCapture = nil
 
+        // Stop secondary output writers before the primary HAL unit
+        if let ctx = callbackContext {
+            for i in 0..<OutputChannelMatrixConfig.maxChannels {
+                ctx.outputChannelWriters[i]?.stop()
+                ctx.outputChannelWriters[i] = nil
+            }
+        }
+
         // Stop the output HAL unit first (stops the output callback)
         if let outputManager = outputHALManager {
             if case .failure(let error) = outputManager.stop() {
@@ -747,6 +772,89 @@ final class RenderPipeline {
     /// Thread-safe: parameters are propagated atomically to the audio thread.
     func updateDynamicsConfig(_ config: DynamicsConfig) {
         callbackContext?.updateDynamicsConfig(config, sampleRate: currentSampleRate)
+    }
+
+    /// Applies an output channel matrix configuration to the render pipeline.
+    /// Constructs or reconfigures per-channel processors and sets active channel count.
+    /// For channels whose target device differs from the primary output device, starts
+    /// a SecondaryOutputWriter (AUHAL instance targeting that device). Channels on the
+    /// same device write directly into the existing HAL output buffer via channel index.
+    /// Must be called from the main thread only.
+    func applyOutputChannelMatrix(_ config: OutputChannelMatrixConfig) {
+        guard let ctx = callbackContext else { return }
+        let sr = currentSampleRate
+
+        // Stop and release any existing secondary writers before rebuilding
+        for i in 0..<OutputChannelMatrixConfig.maxChannels {
+            ctx.outputChannelWriters[i]?.stop()
+            ctx.outputChannelWriters[i] = nil
+        }
+
+        guard config.isEnabled else {
+            // Matrix disabled — zero out all processors and count
+            for i in 0..<OutputChannelMatrixConfig.maxChannels {
+                ctx.outputChannelProcessors[i] = nil
+                ctx.outputChannelSources[i] = .mainsLeft
+            }
+            ctx.activeOutputChannelCount = 0
+            return
+        }
+
+        // Primary device UID — channels targeting this device don't need a writer
+        let primaryUID = outputDeviceUID()
+
+        var count = 0
+        for (i, channel) in config.channels.prefix(OutputChannelMatrixConfig.maxChannels).enumerated() {
+            guard channel.isEnabled else {
+                ctx.outputChannelProcessors[i] = nil
+                continue
+            }
+            // Only rebuild the processor when the config actually changed
+            if let existing = ctx.outputChannelProcessors[i] {
+                existing.applyChannelConfig(channel, sampleRate: sr)
+            } else {
+                let proc = OutputChannelProcessor(source: channel.source,
+                                                  maxFrameCount: Int(ctx.maxFrameCount),
+                                                  sampleRate: sr)
+                proc.applyChannelConfig(channel, sampleRate: sr)
+                ctx.outputChannelProcessors[i] = proc
+            }
+            ctx.outputChannelSources[i] = channel.source
+            count = i + 1
+
+            // Build a SecondaryOutputWriter for channels i ≥ 1 whose target device
+            // differs from the primary output device.
+            if i > 0, let target = channel.target, !target.deviceUID.isEmpty {
+                let targetUID = target.deviceUID
+                let isPrimary = primaryUID.map { $0 == targetUID } ?? false
+                if !isPrimary, let deviceID = audioDeviceID(forUID: targetUID) {
+                    let writerConfig = SecondaryOutputWriter.Config(
+                        deviceID:          deviceID,
+                        deviceUID:         targetUID,
+                        channelCount:      max(1, min(2, target.channelIndices.count)),
+                        nominalSampleRate: sr,
+                        maxFrameCount:     Int(ctx.maxFrameCount)
+                    )
+                    let writer = SecondaryOutputWriter(config: writerConfig)
+                    if writer.start() {
+                        ctx.outputChannelWriters[i] = writer
+                        logger.info("applyOutputChannelMatrix: writer started for ch\(i) → device \(targetUID)")
+                    } else {
+                        logger.error("applyOutputChannelMatrix: writer failed to start for ch\(i) → device \(targetUID)")
+                    }
+                }
+            }
+        }
+        ctx.activeOutputChannelCount = count
+
+        // Update crossover path alignment after matrix configuration changes
+        ctx.updateCrossoverPathAlignment(dynamicsProcessor: ctx.dynamicsProcessor, sampleRate: currentSampleRate)
+    }
+
+    /// Returns the UID of the currently active primary output device, if resolvable.
+    private func outputDeviceUID() -> String? {
+        guard let mgr = outputHALManager else { return nil }
+        return mgr.deviceUID
     }
 
     /// Gain reduction in dB currently applied by the brickwall limiter.
@@ -809,8 +917,65 @@ final class RenderPipeline {
     var truePeakLimiterTripped: Bool {
         callbackContext?.dynamicsProcessor.truePeakLimiterTripped ?? false
     }
+    var liveTruePeakDB: Float {
+        callbackContext?.dynamicsProcessor.liveTruePeakDB ?? -90.0
+    }
+    var isOversamplingActive: Bool {
+        callbackContext?.dynamicsProcessor.isOversamplingActive ?? false
+    }
     func clearTruePeakFlags() {
         callbackContext?.dynamicsProcessor.clearTruePeakFlags()
+    }
+
+    /// Total pipeline latency in milliseconds.
+    /// Sum of all active processing stages: limiter look-ahead, oversampling,
+    /// FIR convolution, speaker/room correction convolution, IR alignment, linear-phase EQ,
+    /// adaptive excess-phase correction, and crossover path alignment.
+    var totalLatencyMs: Double {
+        guard let ctx = callbackContext else { return 0.0 }
+        let sr = ctx.dynamicsProcessor.storedSampleRate
+
+        var ms: Double = 0.0
+
+        // Limiter look-ahead
+        if ctx.dynamicsProcessor.isLimiterEnabled {
+            ms += Double(ctx.dynamicsProcessor.currentLimiterLookAheadMs)
+        }
+
+        // Oversampling (59 samples at base rate)
+        if ctx.dynamicsProcessor.isOversamplingActive {
+            ms += 59.0 / sr * 1000.0
+        }
+
+        // FIR convolution stage (512 samples buffering + IR delay)
+        if ctx.dynamicsProcessor.isFIREnabled {
+            ms += (512.0 / sr * 1000.0) + (ctx.dynamicsProcessor.firConvolutionEngineDelaySamples / sr * 1000.0)
+        }
+
+        // Speaker/room correction convolution (512 samples buffering + IR delay)
+        if ctx.isConvolutionEnabled {
+            ms += (512.0 / sr * 1000.0) + (ctx.convolutionEngineDelaySamples / sr * 1000.0)
+        }
+
+        // IR alignment delay
+        if ctx.dynamicsProcessor.isIRAlignmentEnabled {
+            ms += Double(ctx.dynamicsProcessor.irAlignmentDelayMs)
+        }
+
+        // Linear-phase EQ delay (kernel group delay)
+        if ctx.isLinearPhaseEnabled {
+            ms += Double(ctx.linearPhaseEngine.kernelDelaySamples) / sr * 1000.0
+        }
+
+        // Adaptive excess-phase correction delay (kernel group delay)
+        if ctx.isMixedPhaseEnabled && ctx.adaptiveExcessPhaseCorrectorEnabled {
+            ms += Double(ctx.adaptiveExcessPhaseCorrectorDelaySamples) / sr * 1000.0
+        }
+
+        // Crossover path alignment delay (when active with multiple paths)
+        ms += ctx.crossoverPathAlignment.effectiveLatencyMs
+
+        return ms
     }
 
     /// Updates the boost gain applied before input gain.
@@ -1237,14 +1402,17 @@ final class RenderPipeline {
         // 3. Copy processed audio to output buffer list
         let outputBuffers = context.outputBufferPointers
         let abl = UnsafeMutableAudioBufferListPointer(ioData)
+        let bufferCount = Int(ioData.pointee.mNumberBuffers)
         let framesToCopy = workFrames
 
-        for (index, buffer) in abl.enumerated() {
-            if let destData = buffer.mData?.assumingMemoryBound(to: Float.self) {
-                if index < outputBuffers.count {
-                    memcpy(destData, outputBuffers[index], framesToCopy * MemoryLayout<Float>.size)
-                } else {
-                    memset(destData, 0, framesToCopy * MemoryLayout<Float>.size)
+        withUnsafeMutablePointer(to: &ioData.pointee.mBuffers) { buffersPtr in
+            for index in 0..<bufferCount {
+                if let destData = buffersPtr[index].mData?.assumingMemoryBound(to: Float.self) {
+                    if index < outputBuffers.count {
+                        memcpy(destData, outputBuffers[index], framesToCopy * MemoryLayout<Float>.size)
+                    } else {
+                        memset(destData, 0, framesToCopy * MemoryLayout<Float>.size)
+                    }
                 }
             }
         }
@@ -1295,6 +1463,17 @@ final class RenderPipeline {
 
         if context.processingMode != 0 {
             context.processDynamics(bufferList: ioData, frameCount: outputFrames)
+        }
+
+        // 4.6. Output channel matrix — runs after dynamics so per-channel DSP
+        // operates on the fully-processed (clipped/limited) mains signal, and
+        // after the active crossover band split that ran inside processDynamics.
+        // Zero cost when matrix is disabled (activeOutputChannelCount == 0).
+        if context.activeOutputChannelCount > 0 && context.processingMode != 0 {
+            context.processOutputChannelMatrix(
+                dynamicsProcessor: context.dynamicsProcessor,
+                frameCount: Int(outputFrames)
+            )
         }
 
         // 5. Update output meters with rendered audio

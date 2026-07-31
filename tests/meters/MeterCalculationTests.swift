@@ -7,44 +7,35 @@ final class MeterCalculationTests: XCTestCase {
     func testNormalizedPosition_boundaries() {
         // 0 dB (max) → 1.0
         XCTAssertEqual(MeterConstants.normalizedPosition(for: 0), 1.0, accuracy: 0.001)
-
-        // -36 dB (min) → 0.0
-        XCTAssertEqual(MeterConstants.normalizedPosition(for: -36), 0.0, accuracy: 0.001)
+        // -60 dB (min) → 0.0
+        XCTAssertEqual(MeterConstants.normalizedPosition(for: -60), 0.0, accuracy: 0.001)
     }
 
     func testNormalizedPosition_outOfRange() {
-        // Above 0 dB should clamp to 1.0
         XCTAssertEqual(MeterConstants.normalizedPosition(for: 6), 1.0, accuracy: 0.001)
         XCTAssertEqual(MeterConstants.normalizedPosition(for: 20), 1.0, accuracy: 0.001)
-
-        // Below -36 dB should clamp to 0.0
-        XCTAssertEqual(MeterConstants.normalizedPosition(for: -40), 0.0, accuracy: 0.001)
+        // Below -60 dB should clamp to 0.0
+        XCTAssertEqual(MeterConstants.normalizedPosition(for: -70), 0.0, accuracy: 0.001)
         XCTAssertEqual(MeterConstants.normalizedPosition(for: -100), 0.0, accuracy: 0.001)
     }
 
     func testNormalizedPosition_midRange() {
-        // Test that mid-range values are properly scaled
-        // The function uses gamma correction (gamma = 0.5), so the relationship isn't linear
+        // Linear in dB now (not gamma-corrected) — -30 dB is the exact midpoint of -60...0,
+        // so it should land at ~0.5, not just "somewhere between 0.2 and 0.8".
+        let midPosition = MeterConstants.normalizedPosition(for: -30)
+        XCTAssertEqual(midPosition, 0.5, accuracy: 0.01)
 
-        // At -18 dB (middle of -36 to 0 range), should be somewhere in the middle
-        let midPosition = MeterConstants.normalizedPosition(for: -18)
-        XCTAssertGreaterThan(midPosition, 0.2)
-        XCTAssertLessThan(midPosition, 0.8)
-
-        // -6 dB should be higher than -18 dB
         let minus6Position = MeterConstants.normalizedPosition(for: -6)
         XCTAssertGreaterThan(minus6Position, midPosition)
 
-        // -30 dB should be lower than -18 dB
-        let minus30Position = MeterConstants.normalizedPosition(for: -30)
-        XCTAssertLessThan(minus30Position, midPosition)
+        let minus45Position = MeterConstants.normalizedPosition(for: -45)
+        XCTAssertLessThan(minus45Position, midPosition)
     }
 
     func testNormalizedPosition_monotonicallyIncreasing() {
-        // Higher dB values should always give higher normalized positions
-        let dbValues: [Float] = [-36, -30, -24, -18, -12, -6, 0]
+        // Update the sample points to span the real range, -60...0
+        let dbValues: [Float] = [-60, -48, -36, -30, -24, -18, -12, -6, 0]
         var previousPosition: Float = -1
-
         for db in dbValues {
             let position = MeterConstants.normalizedPosition(for: db)
             XCTAssertGreaterThan(position, previousPosition, "Position should increase as dB increases")
@@ -55,16 +46,18 @@ final class MeterCalculationTests: XCTestCase {
     // MARK: - Meter Constants Tests
 
     func testMeterRange_values() {
-        XCTAssertEqual(MeterConstants.meterRange.lowerBound, -36)
+        // Current MeterConstants.meterRange is -60...0, not -36...0
+        XCTAssertEqual(MeterConstants.meterRange.lowerBound, -60)
         XCTAssertEqual(MeterConstants.meterRange.upperBound, 0)
     }
 
-    func testGamma_value() {
-        XCTAssertEqual(MeterConstants.gamma, 0.5)
-    }
+    // DELETE testGamma_value entirely — MeterConstants.gamma no longer exists.
+    // normalizedPosition's doc comment now explicitly states:
+    // "Linear in dB (not gamma-corrected) — matches conventional PPM meter behavior."
 
     func testStandardTickValues() {
-        let expectedTicks: [Float] = [0, -6, -12, -18, -24, -30, -36]
+        // Current standardTickValues has 10 entries with finer near-top granularity
+        let expectedTicks: [Float] = [0, -3, -6, -12, -18, -24, -30, -36, -48, -60]
         XCTAssertEqual(MeterConstants.standardTickValues, expectedTicks)
     }
 

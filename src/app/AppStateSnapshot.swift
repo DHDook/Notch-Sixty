@@ -27,6 +27,8 @@ struct AppStateSnapshot: Sendable {
     var inputDeviceID: String?
     var outputDeviceID: String?
     var bandwidthDisplayMode: String
+    var appearanceMode: String
+    var interfaceStyle: String
     var manualModeEnabled: Bool
     var captureMode: Int  // CaptureMode.rawValue
 
@@ -37,6 +39,11 @@ struct AppStateSnapshot: Sendable {
     // MARK: - Meter State
 
     var metersEnabled: Bool
+    var rtaEnabled: Bool
+    var goniometerEnabled: Bool
+    var analyticsMetersEnabled: Bool
+    var gainStructureEnabled: Bool
+    var levelMetersEnabled: Bool
 
     // MARK: - Defaults
 
@@ -52,10 +59,17 @@ struct AppStateSnapshot: Sendable {
             inputDeviceID: nil,
             outputDeviceID: nil,
             bandwidthDisplayMode: BandwidthDisplayMode.qFactor.rawValue,
+            appearanceMode: AppearanceMode.system.rawValue,
+            interfaceStyle: InterfaceStyle.both.rawValue,
             manualModeEnabled: false,
             captureMode: CaptureMode.sharedMemory.rawValue,
             dynamicsConfig: .default,
-            metersEnabled: true
+            metersEnabled: true,
+            rtaEnabled: true,
+            goniometerEnabled: true,
+            analyticsMetersEnabled: true,
+            gainStructureEnabled: true,
+            levelMetersEnabled: true
         )
     }
 }
@@ -74,10 +88,17 @@ extension AppStateSnapshot: Codable {
         case inputDeviceID
         case outputDeviceID
         case bandwidthDisplayMode
+        case appearanceMode
+        case interfaceStyle
         case manualModeEnabled
         case captureMode
         case dynamicsConfig
         case metersEnabled
+        case rtaEnabled
+        case goniometerEnabled
+        case analyticsMetersEnabled
+        case gainStructureEnabled
+        case levelMetersEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -97,10 +118,19 @@ extension AppStateSnapshot: Codable {
         outputDeviceID = try container.decodeIfPresent(String.self, forKey: .outputDeviceID)
         bandwidthDisplayMode = try container.decodeIfPresent(String.self, forKey: .bandwidthDisplayMode)
             ?? BandwidthDisplayMode.qFactor.rawValue
+        appearanceMode = try container.decodeIfPresent(String.self, forKey: .appearanceMode)
+            ?? AppearanceMode.system.rawValue
+        interfaceStyle = try container.decodeIfPresent(String.self, forKey: .interfaceStyle)
+            ?? InterfaceStyle.both.rawValue
         manualModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .manualModeEnabled) ?? false
         captureMode = try container.decodeIfPresent(Int.self, forKey: .captureMode)
             ?? CaptureMode.sharedMemory.rawValue
         metersEnabled = try container.decodeIfPresent(Bool.self, forKey: .metersEnabled) ?? true
+        rtaEnabled = try container.decodeIfPresent(Bool.self, forKey: .rtaEnabled) ?? true
+        goniometerEnabled = try container.decodeIfPresent(Bool.self, forKey: .goniometerEnabled) ?? true
+        analyticsMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .analyticsMetersEnabled) ?? true
+        gainStructureEnabled = try container.decodeIfPresent(Bool.self, forKey: .gainStructureEnabled) ?? true
+        levelMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .levelMetersEnabled) ?? true
         dynamicsConfig = try container.decodeIfPresent(DynamicsConfig.self, forKey: .dynamicsConfig) ?? .default
     }
 
@@ -120,10 +150,17 @@ extension AppStateSnapshot: Codable {
         try container.encodeIfPresent(inputDeviceID, forKey: .inputDeviceID)
         try container.encodeIfPresent(outputDeviceID, forKey: .outputDeviceID)
         try container.encode(bandwidthDisplayMode, forKey: .bandwidthDisplayMode)
+        try container.encode(appearanceMode, forKey: .appearanceMode)
+        try container.encode(interfaceStyle, forKey: .interfaceStyle)
         try container.encode(manualModeEnabled, forKey: .manualModeEnabled)
         try container.encode(captureMode, forKey: .captureMode)
         try container.encode(dynamicsConfig, forKey: .dynamicsConfig)
         try container.encode(metersEnabled, forKey: .metersEnabled)
+        try container.encode(rtaEnabled, forKey: .rtaEnabled)
+        try container.encode(goniometerEnabled, forKey: .goniometerEnabled)
+        try container.encode(analyticsMetersEnabled, forKey: .analyticsMetersEnabled)
+        try container.encode(gainStructureEnabled, forKey: .gainStructureEnabled)
+        try container.encode(levelMetersEnabled, forKey: .levelMetersEnabled)
     }
 }
 

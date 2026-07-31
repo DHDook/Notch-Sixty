@@ -1,10 +1,7 @@
 import XCTest
 @testable import Equaliser
 
-/// Tests for the `buildMergedDynamicEQConfig()` helper in `EqualiserStore`.
-/// Verifies that inline dynamic bands from the EQ band strip are correctly
-/// merged into the `DynamicEQConfig` and that the resulting config is applied
-/// to the audio pipeline.
+@MainActor
 final class DynamicBandMergeTests: XCTestCase {
 
     /// Verifies that inline dynamic bands from the EQ configuration are correctly

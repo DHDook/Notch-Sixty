@@ -137,8 +137,14 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     // MARK: - Linear Phase EQ
 
-    private nonisolated(unsafe) var linearPhaseEngine: LinearPhaseEQEngine
+    private nonisolated(unsafe) var _linearPhaseEngine: LinearPhaseEQEngine
     private let _linearPhaseEnabled: ManagedAtomic<Int32>
+
+    /// Public accessor for the linear-phase engine (read-only).
+    /// Used by RenderPipeline to query kernel delay for latency computation.
+    var linearPhaseEngine: LinearPhaseEQEngine {
+        _linearPhaseEngine
+    }
 
     // MARK: - Mid/Side EQ
 
@@ -150,6 +156,21 @@ final class RenderCallbackContext: @unchecked Sendable {
     private nonisolated(unsafe) var leftAllPassChain:  AllPassChain
     private nonisolated(unsafe) var rightAllPassChain: AllPassChain
     private let _mixedPhaseEnabled: ManagedAtomic<Int32>
+
+    // Adaptive excess-phase corrector (escalation when all-pass alone is insufficient)
+    private nonisolated(unsafe) var adaptiveExcessPhaseCorrector: AdaptiveExcessPhaseCorrector
+    private let _adaptiveExcessPhaseCorrectorEnabled: ManagedAtomic<Int32>
+    nonisolated(unsafe) var adaptiveExcessPhaseCorrectorDelaySamples: Int = 0
+
+    // Per-channel escalation state for combining async callback results
+    private var lastLeftEscalationNeeded = false
+    private var lastRightEscalationNeeded = false
+
+    /// Sets the latency change callback for the adaptive excess phase corrector.
+    /// Called from RenderPipeline to trigger crossover path alignment updates on escalation/de-escalation.
+    func setAdaptiveExcessPhaseCorrectorLatencyCallback(_ callback: @escaping () -> Void) {
+        adaptiveExcessPhaseCorrector.setLatencyChangeCallback(callback)
+    }
 
     // MARK: - Convolution Engine
 
@@ -262,6 +283,7 @@ final class RenderCallbackContext: @unchecked Sendable {
         let clamped = max(1, linear)
         let bits = Int32(bitPattern: clamped.bitPattern)
         targetBoostGainAtomic.store(bits, ordering: .relaxed)
+        dynamicsProcessor.setSystemVolume(clamped)   // forward to loudness contour (HAL input mode)
     }
 
     /// Updates the target volume gain for shared memory mode (called from main thread).
@@ -270,6 +292,7 @@ final class RenderCallbackContext: @unchecked Sendable {
         let clamped = max(0, min(1, linear))
         let bits = Int32(bitPattern: clamped.bitPattern)
         targetVolumeGainAtomic.store(bits, ordering: .relaxed)
+        dynamicsProcessor.setSystemVolume(clamped)   // forward to loudness contour
     }
 
     /// Updates the meters enabled state (called from main thread).
@@ -355,7 +378,7 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     func setLinearPhaseEnabled(_ enabled: Bool) {
         _linearPhaseEnabled.store(enabled ? 1 : 0, ordering: .relaxed)
-        if !enabled { linearPhaseEngine.reset() }
+        if !enabled { _linearPhaseEngine.reset() }
     }
 
     var isMidSideEnabled: Bool {
@@ -369,13 +392,17 @@ final class RenderCallbackContext: @unchecked Sendable {
     func updateLinearPhaseIR(leftBands: [EQBandConfiguration],
                               rightBands: [EQBandConfiguration],
                               sampleRate: Double) {
-        linearPhaseEngine.updateIR(leftBands: leftBands,
-                                    rightBands: rightBands,
-                                    sampleRate: sampleRate)
+        _linearPhaseEngine.updateIR(leftBands: leftBands,
+                                     rightBands: rightBands,
+                                     sampleRate: sampleRate)
     }
 
     var isMixedPhaseEnabled: Bool {
         _mixedPhaseEnabled.load(ordering: .relaxed) != 0
+    }
+
+    var adaptiveExcessPhaseCorrectorEnabled: Bool {
+        _adaptiveExcessPhaseCorrectorEnabled.load(ordering: .relaxed) != 0
     }
 
     func setMixedPhaseEnabled(_ enabled: Bool) {
@@ -383,17 +410,66 @@ final class RenderCallbackContext: @unchecked Sendable {
         if !enabled {
             leftAllPassChain.reset()
             rightAllPassChain.reset()
+            adaptiveExcessPhaseCorrector.disable()
+            _adaptiveExcessPhaseCorrectorEnabled.store(0, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = 0
         }
     }
 
     /// Stages new all-pass sections derived from the current biquad band coefficients.
     /// Called from the main thread when band parameters change while in mixed-phase mode.
+    /// Returns true if escalation to FIR correction is needed.
     func updateMixedPhaseSections(
-        leftSections:  [[BiquadCoefficients]],
+        leftSections: [[BiquadCoefficients]],
         rightSections: [[BiquadCoefficients]]
-    ) {
-        leftAllPassChain.stageSections(from: leftSections)
-        rightAllPassChain.stageSections(from: rightSections)
+    ) -> Bool {
+        let sampleRate = dynamicsProcessor.storedSampleRate
+        let leftEscalates = leftAllPassChain.stageSections(from: leftSections, sampleRate: sampleRate)
+        let rightEscalates = rightAllPassChain.stageSections(from: rightSections, sampleRate: sampleRate)
+
+        // Escalate if either channel needs it
+        let shouldEscalate = leftEscalates || rightEscalates
+
+        if shouldEscalate {
+            // Update adaptive excess-phase corrector with residual phase
+            let allBiquadSections = leftSections.flatMap { $0 }
+            let allPassSections = leftAllPassChain.activeSections()
+
+            adaptiveExcessPhaseCorrector.updateCorrection(
+                biquadSections: allBiquadSections,
+                allPassSections: allPassSections,
+                sampleRate: sampleRate
+            )
+
+            _adaptiveExcessPhaseCorrectorEnabled.store(1, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = adaptiveExcessPhaseCorrector.correctorDelaySamples
+        } else {
+            adaptiveExcessPhaseCorrector.disable()
+            _adaptiveExcessPhaseCorrectorEnabled.store(0, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = 0
+        }
+
+        return shouldEscalate
+    }
+
+    /// Handles escalation update from the async fitting callback.
+    /// Combines per-channel decisions and triggers or disengages the adaptive corrector.
+    private func handleEscalationUpdate(isLeft: Bool, needsEscalation: Bool, biquadSections: [BiquadCoefficients], allPassSections: [AllPassSection]) {
+        if isLeft { lastLeftEscalationNeeded = needsEscalation } else { lastRightEscalationNeeded = needsEscalation }
+        let shouldEscalate = lastLeftEscalationNeeded || lastRightEscalationNeeded
+
+        let sampleRate = dynamicsProcessor.storedSampleRate
+
+        if shouldEscalate {
+            adaptiveExcessPhaseCorrector.updateCorrection(biquadSections: biquadSections, allPassSections: allPassSections, sampleRate: sampleRate)
+            _adaptiveExcessPhaseCorrectorEnabled.store(1, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = adaptiveExcessPhaseCorrector.correctorDelaySamples
+        } else {
+            // De-escalation: disable the corrector
+            adaptiveExcessPhaseCorrector.disable()
+            _adaptiveExcessPhaseCorrectorEnabled.store(0, ordering: .relaxed)
+            adaptiveExcessPhaseCorrectorDelaySamples = 0
+        }
     }
 
     // MARK: - Sweep Playback API
@@ -551,8 +627,9 @@ final class RenderCallbackContext: @unchecked Sendable {
         Array(repeating: nil, count: OutputChannelMatrixConfig.maxChannels)
 
     /// Per-output writers for secondary devices (channels 1–7).
-    /// Placeholder type - will be implemented in Task M.
-    nonisolated(unsafe) var outputChannelWriters: [Any?] =
+    /// Non-nil for channels whose target device differs from the primary output device.
+    /// Constructed and started in `RenderPipeline.applyOutputChannelMatrix`.
+    nonisolated(unsafe) var outputChannelWriters: [SecondaryOutputWriter?] =
         Array(repeating: nil, count: OutputChannelMatrixConfig.maxChannels)
 
     /// Signal source assignment per channel. Written on main thread before start.
@@ -570,6 +647,10 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     /// Sub mono output buffer: written by processBassManagement, read by .subMono output channels.
     nonisolated(unsafe) var monoLowOutputBuffer: UnsafeMutablePointer<Float>
+
+    /// Crossover path alignment engine for aligning delays across multiple crossover paths.
+    /// Only active when Active Crossover mode has more than one active output path.
+    let crossoverPathAlignment: CrossoverPathAlignmentEngine
 
     // MARK: - Initialization
 
@@ -599,20 +680,29 @@ final class RenderCallbackContext: @unchecked Sendable {
         dp.applyConfig(dynamicsConfig, sampleRate: sampleRate)
         self.dynamicsProcessor = dp
 
+        // Sync current system volume so loudness contour starts with the correct value.
+        // VolumeManager callbacks only fire on change; we need the initial value immediately.
+        // Default to 1.0 (unity) — VolumeManager.setupVolumeSync() will fire a callback
+        // with the actual value as soon as the pipeline is live.
+        dp.setSystemVolume(1.0)
+
         // Initialise one DC-blocker per channel, tuned to the current sample rate.
         // The pole is computed once here and stored; no allocation occurs in the render loop.
         self.dcBlockers = (0 ..< Int(channelCount)).map { _ in DCBlocker(sampleRate: sampleRate) }
 
         self.oversampler = OversamplingProcessor(maxFrameCount: Int(maxFrameCount))
         self._oversamplingEnabled = ManagedAtomic(0)
-        self.linearPhaseEngine = LinearPhaseEQEngine(maxFrameCount: Int(maxFrameCount))
+        self._linearPhaseEngine = LinearPhaseEQEngine(maxFrameCount: Int(maxFrameCount))
         self._linearPhaseEnabled = ManagedAtomic(0)
         self._midSideEnabled = ManagedAtomic(0)
         self.leftAllPassChain   = AllPassChain()
         self.rightAllPassChain  = AllPassChain()
         self._mixedPhaseEnabled = ManagedAtomic(0)
+        self.adaptiveExcessPhaseCorrector = AdaptiveExcessPhaseCorrector(sampleRate: sampleRate, maxFrameCount: Int(maxFrameCount))
+        self._adaptiveExcessPhaseCorrectorEnabled = ManagedAtomic(0)
         self.convolutionEngine = ConvolutionEngine()
         self._convolutionEnabled = ManagedAtomic(0)
+        self.crossoverPathAlignment = CrossoverPathAlignmentEngine(sampleRate: sampleRate, maxFrameCount: Int(maxFrameCount))
 
         let osAdditional = max(0, Int(channelCount) - 1)
         self.oversampledBufferListSize = MemoryLayout<AudioBufferList>.size
@@ -719,6 +809,14 @@ final class RenderCallbackContext: @unchecked Sendable {
             mutableBuffer.mDataByteSize = UInt32(framesPerBuffer * MemoryLayout<Float>.size)
             mutableBuffer.mData = UnsafeMutableRawPointer(inputBuffers[index])
             buffersPtr[index] = mutableBuffer
+        }
+
+        // Register escalation callbacks for both channels (must be after all properties initialized)
+        leftAllPassChain.setFittingCompletionCallback { [weak self] needsEscalation, biquadSections, allPassSections in
+            self?.handleEscalationUpdate(isLeft: true, needsEscalation: needsEscalation, biquadSections: biquadSections, allPassSections: allPassSections)
+        }
+        rightAllPassChain.setFittingCompletionCallback { [weak self] needsEscalation, biquadSections, allPassSections in
+            self?.handleEscalationUpdate(isLeft: false, needsEscalation: needsEscalation, biquadSections: biquadSections, allPassSections: allPassSections)
         }
     }
 
@@ -1074,6 +1172,24 @@ final class RenderCallbackContext: @unchecked Sendable {
                 scratchR = sR
             }
 
+            // Apply crossover path alignment if active
+            if crossoverPathAlignment.alignmentActive {
+                crossoverPathAlignment.process(
+                    channelIndex: chIdx,
+                    input: outputScratchLeft[chIdx],
+                    output: outputScratchLeft[chIdx],
+                    frameCount: frameCount
+                )
+                if let sR = scratchR {
+                    crossoverPathAlignment.process(
+                        channelIndex: chIdx,
+                        input: sR,
+                        output: sR,
+                        frameCount: frameCount
+                    )
+                }
+            }
+
             // Run per-output DSP chain (EQ → gain → delay → limiter)
             processor.process(leftBuf: outputScratchLeft[chIdx],
                               rightBuf: scratchR,
@@ -1085,15 +1201,100 @@ final class RenderCallbackContext: @unchecked Sendable {
                 writePrimaryChannel(leftBuf: outputScratchLeft[chIdx],
                                     rightBuf: scratchR,
                                     frameCount: frameCount)
-            } else {
-                // TODO: Implement SecondaryOutputWriter in Task M
-                // outputChannelWriters[chIdx]?.write(
-                //     left: outputScratchLeft[chIdx],
-                //     right: scratchR,
-                //     frameCount: frameCount
-                // )
+            } else if let writer = outputChannelWriters[chIdx] {
+                // Channels 1–7: push to the secondary device's ring buffer.
+                // The SecondaryOutputWriter's AUHAL render callback drains the ring
+                // buffer on the secondary device's own audio thread.
+                var channels: [(buffer: UnsafePointer<Float>, channelIndex: Int)] = [
+                    (UnsafePointer(outputScratchLeft[chIdx]), 0)
+                ]
+                if let sR = scratchR {
+                    channels.append((UnsafePointer(sR), 1))
+                }
+                writer.write(channels: channels, frameCount: frameCount)
             }
+            // If outputChannelWriters[chIdx] is nil for chIdx > 0, the channel targets
+            // a different channel index on the *same* device — writePrimaryChannel already
+            // handled the interleaved write for channel 0; same-device channel routing is
+            // managed by the OutputChannelProcessor's channel-map configuration.
         }
+    }
+
+    /// Updates crossover path alignment based on current configuration and latency information.
+    /// Called from the main thread when crossover configuration, EQ parameters, or Option 3
+    /// escalation state changes.
+    ///
+    /// - Parameters:
+    ///   - dynamicsProcessor: The dynamics processor containing the active crossover engine.
+    ///   - sampleRate: Current sample rate.
+    func updateCrossoverPathAlignment(dynamicsProcessor: DynamicsProcessor, sampleRate: Double) {
+        guard activeOutputChannelCount > 1 else {
+            // Single path or disabled - no alignment needed
+            crossoverPathAlignment.updatePathLatencies([:])
+            return
+        }
+
+        var pathLatencies: [Int: PathLatencyInfo] = [:]
+
+        for chIdx in 0..<activeOutputChannelCount {
+            guard let processor = outputChannelProcessors[chIdx] else { continue }
+
+            let source = outputChannelSources[chIdx]
+
+            // Get crossover filter delay for this path
+            let crossoverDelaySamples: Int
+            if let engine = dynamicsProcessor.activeCrossoverEngine {
+                // Determine which crossover filter this path uses
+                // Note: FIR crossover delay calculation not yet implemented
+                // For now, only IIR crossover is supported
+                if source == .mainsLeftLow || source == .mainsRightLow {
+                    crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                        crossoverSections: engine.activeLowerLP,
+                        crossoverFIRKernel: nil,  // FIR not yet supported
+                        sampleRate: sampleRate
+                    )
+                } else if source == .mainsLeftHigh || source == .mainsRightHigh {
+                    if engine.activeBandCount == 3 {
+                        crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                            crossoverSections: engine.activeUpperHP,
+                            crossoverFIRKernel: nil,  // FIR not yet supported
+                            sampleRate: sampleRate
+                        )
+                    } else {
+                        crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                            crossoverSections: engine.activeLowerHP,
+                            crossoverFIRKernel: nil,  // FIR not yet supported
+                            sampleRate: sampleRate
+                        )
+                    }
+                } else if source == .mainsLeftMid || source == .mainsRightMid {
+                    crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
+                        crossoverSections: engine.activeUpperLP,
+                        crossoverFIRKernel: nil,  // FIR not yet supported
+                        sampleRate: sampleRate
+                    )
+                } else {
+                    crossoverDelaySamples = 0
+                }
+            } else {
+                crossoverDelaySamples = 0
+            }
+
+            // Get EQ chain measured delay (from Option 3 or all-pass fitting)
+            // For now, use the adaptive excess phase corrector delay if enabled
+            let eqDelaySamples = adaptiveExcessPhaseCorrector.correctorDelaySamples
+
+            let totalLatency = crossoverDelaySamples + eqDelaySamples
+
+            pathLatencies[chIdx] = PathLatencyInfo(
+                totalLatencySamples: totalLatency,
+                crossoverFilterDelaySamples: crossoverDelaySamples,
+                eqChainMeasuredDelaySamples: eqDelaySamples,
+                isActive: true
+            )
+        }
+
+        crossoverPathAlignment.updatePathLatencies(pathLatencies)
     }
 
     /// Resolves a SignalSource to actual buffer pointers.
@@ -1108,15 +1309,30 @@ final class RenderCallbackContext: @unchecked Sendable {
         switch source {
         case .mainsLeft:      return (processingBuffers[0], nil)
         case .mainsRight:     return (processingBuffers[1], nil)
-        // For mainsLeft/mainsRight used as stereo pair: the output channel
-        // config assigns both to the same processor; see UI pairing note below.
-        // TODO: Integrate ActiveCrossoverEngine into DynamicsProcessor
-        case .mainsLeftHigh:  return (nil, nil)
-        case .mainsLeftMid:   return (nil, nil)
-        case .mainsLeftLow:   return (nil, nil)
-        case .mainsRightHigh: return (nil, nil)
-        case .mainsRightMid:  return (nil, nil)
-        case .mainsRightLow:  return (nil, nil)
+        case .mainsLeftHigh:
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.leftHighPtr, nil)
+        case .mainsLeftMid:
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 3 else { return (nil, nil) }
+            return (engine.leftMidPtr, nil)
+        case .mainsLeftLow:
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.leftLowPtr, nil)
+        case .mainsRightHigh:
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.rightHighPtr, nil)
+        case .mainsRightMid:
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 3 else { return (nil, nil) }
+            return (engine.rightMidPtr, nil)
+        case .mainsRightLow:
+            guard let engine = dynamics.activeCrossoverEngine,
+                  engine.activeBandCount >= 2 else { return (nil, nil) }
+            return (engine.rightLowPtr, nil)
         case .subMono:        return (monoLowOutputBuffer, nil)
         }
     }
@@ -1154,6 +1370,9 @@ final class RenderCallbackContext: @unchecked Sendable {
         #endif
 
         dynamicsProcessor.process(bufferList: bufferList, frameCount: frameCount)
+
+        // Copy mono-low bass signal to output buffer for .subMono output channels
+        dynamicsProcessor.copyMonoLowSignal(to: monoLowOutputBuffer, frameCount: Int(frameCount))
 
         if oversamplingOn {
             processWithOversampling(bufferList: bufferList, frameCount: frameCount)
@@ -1258,6 +1477,15 @@ final class RenderCallbackContext: @unchecked Sendable {
         convolutionEngine.setEnabled(enabled)
     }
 
+    /// Whether convolution processing is enabled.
+    var isConvolutionEnabled: Bool {
+        _convolutionEnabled.load(ordering: .relaxed) != 0
+    }
+    /// Returns the convolution engine's loaded IR delay in samples.
+    var convolutionEngineDelaySamples: Double {
+        convolutionEngine.loadedIRDelaySamples
+    }
+
     /// Resets convolution engine state (clears history and overlap buffers).
     func resetConvolution() {
         convolutionEngine.reset()
@@ -1328,10 +1556,10 @@ final class RenderCallbackContext: @unchecked Sendable {
             // --- Linear-phase FIR convolution path (unchanged) ---
             let bufL = processingBuffers[0]
             let bufR = channelCount > 1 ? processingBuffers[1] : nil
-            linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: Int(frameCount))
+            _linearPhaseEngine.process(bufL: bufL, bufR: bufR, frameCount: Int(frameCount))
 
         } else if _mixedPhaseEnabled.load(ordering: .relaxed) != 0 {
-            // --- Mixed-phase path: biquad IIR + all-pass phase correction ---
+            // --- Mixed-phase path: biquad IIR + all-pass phase correction + adaptive excess-phase correction ---
 
             // 1. Run biquad EQ chains (magnitude response, same as normal EQ mode)
             for chain in leftEQChains {
@@ -1351,6 +1579,16 @@ final class RenderCallbackContext: @unchecked Sendable {
             if channelCount > 1 {
                 rightAllPassChain.applyPendingUpdates()
                 rightAllPassChain.process(buffer: processingBuffers[1], frameCount: frameCount)
+            }
+
+            // 3. Apply adaptive excess-phase correction (FIR escalation when all-pass alone is insufficient)
+            if _adaptiveExcessPhaseCorrectorEnabled.load(ordering: .relaxed) != 0 {
+                adaptiveExcessPhaseCorrector.applyPendingUpdates()
+                adaptiveExcessPhaseCorrector.process(
+                    bufL: processingBuffers[0],
+                    bufR: channelCount > 1 ? processingBuffers[1] : nil,
+                    frameCount: Int(frameCount)
+                )
             }
 
         } else {
@@ -1579,5 +1817,20 @@ final class RenderCallbackContext: @unchecked Sendable {
             rightChannel: rightPtr ?? leftPtr,
             frameCount: frameCount
         )
+    }
+
+    /// Delivers externally captured mic samples to the RTA analyser's input ring buffer.
+    /// Called from MicCaptureSession's delivery queue (background thread).
+    /// This path is used when a separate physical mic device is supplying the signal
+    /// instead of the virtual driver's loopback input.
+    func deliverMicSamplesToRTA(_ samples: [Float]) {
+        guard let buf = rtaInputBuffer else { return }
+        samples.withUnsafeBufferPointer { ptr in
+            buf.writeStereoSamples(
+                leftChannel: ptr.baseAddress!,
+                rightChannel: ptr.baseAddress!,
+                frameCount: samples.count
+            )
+        }
     }
 }

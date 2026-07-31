@@ -232,6 +232,8 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         self.excursionProtection = excursionProtection
     }
 
+    static let `default` = OutputChannelConfig()
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()

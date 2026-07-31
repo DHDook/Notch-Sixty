@@ -37,7 +37,10 @@ enum IRFileLoader {
         let file = try AVAudioFile(forReading: url)
         let format = file.fileFormat
         
-        guard format.sampleRate <= 192_000 else {
+        // Allow IR files up to the driver's highest supported sample rate.
+        // IRs at rates above the target will be resampled by AVAudioConverter.
+        let maxSourceRate = DRIVER_SUPPORTED_SAMPLE_RATES.max() ?? 768_000
+        guard format.sampleRate <= maxSourceRate else {
             throw IRError.sampleRateTooHigh(format.sampleRate)
         }
         
@@ -145,7 +148,7 @@ enum IRFileLoader {
         var errorDescription: String? {
             switch self {
             case .sampleRateTooHigh(let rate):
-                return "Sample rate \(Int(rate)) Hz is too high (max 192 kHz)"
+                return "Sample rate \(Int(rate)) Hz exceeds the maximum supported rate"
             case .emptyFile:
                 return "Impulse response file is empty"
             case .bufferCreationFailed:

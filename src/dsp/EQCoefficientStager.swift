@@ -13,6 +13,13 @@ final class EQCoefficientStager {
     private let eqConfiguration: EQConfiguration
     private weak var renderPipeline: RenderPipeline?
 
+    // MARK: - Headroom Recomputation Hook
+    //
+    // Called after every band update (incremental or full) so the headroom
+    // compensator stays in sync with the current EQ state.
+    // EqualiserStore sets this closure to call recomputeStaticPreamp().
+    var onBandCoefficientsStaged: (() -> Void)?
+
     // MARK: - State
 
     /// Current sample rate for coefficient calculations.
@@ -106,6 +113,11 @@ final class EQCoefficientStager {
                                               actualRate: currentSampleRate,
                                               designRate: designRate)
                 : Double(band.frequency)
+            guard band.filterType != .fir else {
+                sections.append([])
+                bypassFlags.append(true)
+                continue
+            }
             let secs = BiquadMath.calculateSections(
                 type: band.filterType, sampleRate: designRate,
                 frequency: freq, q: Double(band.q),
@@ -121,6 +133,21 @@ final class EQCoefficientStager {
             activeBandCount: bands.count,
             layerBypass: false
         )
+
+        // Task 6: Write applied bands back into the model layer so preset save,
+        // CamillaDSP export, and headroom compensation can all read real data.
+        let correctionState = EQLayerState(
+            label: "Room Correction",
+            bands: {
+                var padded = EQConfiguration.defaultBands()
+                for (i, b) in bands.prefix(padded.count).enumerated() { padded[i] = b }
+                return padded
+            }(),
+            activeBandCount: bands.count,
+            bypass: false
+        )
+        eqConfiguration.setRoomCorrectionLayer(correctionState)
+
         refreshLinearPhaseIRIfNeeded()
         refreshMixedPhaseIRIfNeeded()
     }
@@ -135,6 +162,10 @@ final class EQCoefficientStager {
             activeBandCount: 0,
             layerBypass: true
         )
+
+        // Task 6: Reset the model layer to passthrough so downstream reads see empty bands.
+        eqConfiguration.clearRoomCorrectionLayer()
+
         refreshLinearPhaseIRIfNeeded()
         refreshMixedPhaseIRIfNeeded()
     }
@@ -145,16 +176,47 @@ final class EQCoefficientStager {
             layerIndex: EQLayerConstants.roomCorrectionLayerIndex,
             bypass: bypass
         )
+
+        // Task 6: Keep the model bypass flag in sync.
+        eqConfiguration.setRoomCorrectionLayerBypass(bypass)
     }
 
     func refreshLinearPhaseIRIfNeeded() {
         guard let pipeline = renderPipeline,
               let ctx = pipeline.callbackContext,
               ctx.isLinearPhaseEnabled else { return }
-        let leftBands = Array(eqConfiguration.leftState.userEQ.bands.prefix(
+
+        // Task 7: Merge userEQ + roomCorrection bands so the linear-phase IR
+        // reflects the full cascade, not just layer 0.
+        // The render pipeline's linear-phase branch bypasses per-layer biquad chains
+        // entirely and only runs linearPhaseEngine.process(), so there is no risk of
+        // double-applying room correction here.
+        let leftUserBands = Array(eqConfiguration.leftState.userEQ.bands.prefix(
             eqConfiguration.leftState.userEQ.activeBandCount))
-        let rightBands = Array(eqConfiguration.rightState.userEQ.bands.prefix(
+        let leftRCBands   = Array(eqConfiguration.leftState.roomCorrection.bands.prefix(
+            eqConfiguration.leftState.roomCorrection.activeBandCount))
+            .filter { !$0.bypass }
+        let leftBands = leftUserBands + leftRCBands
+
+        // For .fir bands on the right channel, substitute firKernelRight into the
+        // firKernelLeft slot so computeIRSpectrum uses the correct per-channel kernel.
+        let rawRightBands = Array(eqConfiguration.rightState.userEQ.bands.prefix(
             eqConfiguration.rightState.userEQ.activeBandCount))
+        let rightRCBands  = Array(eqConfiguration.rightState.roomCorrection.bands.prefix(
+            eqConfiguration.rightState.roomCorrection.activeBandCount))
+            .filter { !$0.bypass }
+        let rightUserRemapped: [EQBandConfiguration] = rawRightBands.map { band in
+            guard band.filterType == .fir,
+                  let rightKernel = band.firKernelRight,
+                  rightKernel != (band.firKernelLeft ?? []) else {
+                return band
+            }
+            var b = band
+            b.firKernelLeft = rightKernel
+            return b
+        }
+        let rightBands = rightUserRemapped + rightRCBands
+
         ctx.updateLinearPhaseIR(leftBands: leftBands,
                                  rightBands: rightBands,
                                  sampleRate: currentSampleRate)
@@ -165,15 +227,20 @@ final class EQCoefficientStager {
               let ctx = pipeline.callbackContext,
               ctx.isMixedPhaseEnabled else { return }
 
-        let activeCount = eqConfiguration.activeBandCount
         let decoupling  = eqConfiguration.dynamicsConfig.advanced.coefficientDecouplingEnabled
 
-        let leftBands  = Array(eqConfiguration.leftState.userEQ.bands.prefix(activeCount))
-        let rightBands = Array(eqConfiguration.rightState.userEQ.bands.prefix(activeCount))
+        // Task 7: Include room correction bands in the mixed-phase all-pass sections.
+        let activeCount = eqConfiguration.activeBandCount
+        let leftUserBands  = Array(eqConfiguration.leftState.userEQ.bands.prefix(activeCount))
+        let rightUserBands = Array(eqConfiguration.rightState.userEQ.bands.prefix(activeCount))
+        let leftRCBands    = Array(eqConfiguration.leftState.roomCorrection.bands.prefix(
+            eqConfiguration.leftState.roomCorrection.activeBandCount))
+            .filter { !$0.bypass }
+        let rightRCBands   = Array(eqConfiguration.rightState.roomCorrection.bands.prefix(
+            eqConfiguration.rightState.roomCorrection.activeBandCount))
+            .filter { !$0.bypass }
 
         // Build per-band section arrays (bypassed bands contribute no sections).
-        // The all-pass sections are derived from the same biquad coefficients used
-        // by the EQ chains, so we recalculate them here using the same design path.
         var leftSections:  [[BiquadCoefficients]] = []
         var rightSections: [[BiquadCoefficients]] = []
 
@@ -181,24 +248,8 @@ final class EQCoefficientStager {
             actualRate: currentSampleRate,
             coefficientDecouplingEnabled: decoupling)
 
-        for band in leftBands where !band.bypass && !band.isDynamic {
-            let freq = designRate != currentSampleRate
-                ? BiquadMath.prewarpFrequency(frequency: Double(band.frequency),
-                                              actualRate: currentSampleRate,
-                                              designRate: designRate)
-                : Double(band.frequency)
-            let secs = BiquadMath.calculateSections(
-                type: band.filterType, sampleRate: designRate,
-                frequency: freq, q: Double(band.q),
-                gain: Double(band.gain), slope: band.slope)
-            leftSections.append(secs)
-        }
-
-        // In linked mode, right = left; in stereo, compute independently.
-        if eqConfiguration.channelMode == .linked {
-            rightSections = leftSections
-        } else {
-            for band in rightBands where !band.bypass && !band.isDynamic {
+        func addSections(for bands: [EQBandConfiguration], into target: inout [[BiquadCoefficients]]) {
+            for band in bands where !band.bypass && !band.isDynamic && band.filterType != .fir {
                 let freq = designRate != currentSampleRate
                     ? BiquadMath.prewarpFrequency(frequency: Double(band.frequency),
                                                   actualRate: currentSampleRate,
@@ -208,8 +259,17 @@ final class EQCoefficientStager {
                     type: band.filterType, sampleRate: designRate,
                     frequency: freq, q: Double(band.q),
                     gain: Double(band.gain), slope: band.slope)
-                rightSections.append(secs)
+                target.append(secs)
             }
+        }
+
+        addSections(for: leftUserBands + leftRCBands,   into: &leftSections)
+
+        // In linked mode, right = left; in stereo, compute independently.
+        if eqConfiguration.channelMode == .linked {
+            rightSections = leftSections
+        } else {
+            addSections(for: rightUserBands + rightRCBands, into: &rightSections)
         }
 
         pipeline.updateMixedPhaseSections(
@@ -257,8 +317,55 @@ final class EQCoefficientStager {
 
     // MARK: - Private Coefficient Helpers
 
+    /// Computes biquad sections for a band, routing Linkwitz-Transform and constant-Q
+    /// through their dedicated math. Single source of truth used by both the incremental
+    /// (stageBandCoefficients) and full-reload (reapplyAllCoefficients) paths.
+    func computeSections(for config: EQBandConfiguration, warpedFrequency: Double, designRate: Double) -> [BiquadCoefficients] {
+        if config.filterType == .parametric && config.constantQ {
+            let single = BiquadMath.peakingEQConstantQ(
+                sampleRate: designRate,
+                frequency: warpedFrequency,
+                q: Double(config.q),
+                gain: Double(config.gain)
+            )
+            return [single]
+        } else if config.filterType == .linkwitzTransform {
+            let fp = config.linkwitzTargetHz.map { Double($0) } ?? (warpedFrequency * 0.7)
+            // BiquadMath.linkwitzTransform internally guards against non-positive Q values
+            // and non-finite results, returning identity coefficients if invalid — safe to call directly.
+            let single = BiquadMath.linkwitzTransform(
+                f0: warpedFrequency, q0: Double(config.q),
+                fp: fp, qp: Double(config.gain),
+                sampleRate: designRate
+            )
+            return [single]
+        } else {
+            return BiquadMath.calculateSections(
+                type: config.filterType,
+                sampleRate: designRate,
+                frequency: warpedFrequency,
+                q: Double(config.q),
+                gain: Double(config.gain),
+                slope: config.slope
+            )
+        }
+    }
+
     /// Stages coefficients for a single band (incremental update path).
     private func stageBandCoefficients(index: Int, config: EQBandConfiguration) {
+        if config.filterType == .fir {
+            renderPipeline?.updateBandCoefficients(
+                channel: .both,
+                layerIndex: EQLayerConstants.userEQLayerIndex,
+                bandIndex: index,
+                sections: [],
+                bypass: true,
+                needsDoublePrecision: false
+            )
+            refreshLinearPhaseIRIfNeeded()
+            refreshMixedPhaseIRIfNeeded()
+            return
+        }
         let designRate = BiquadMath.designSampleRate(
             actualRate: currentSampleRate,
             coefficientDecouplingEnabled: eqConfiguration.dynamicsConfig.advanced.coefficientDecouplingEnabled
@@ -273,14 +380,6 @@ final class EQCoefficientStager {
         } else {
             warpedFrequency = Double(config.frequency)
         }
-        let sections = BiquadMath.calculateSections(
-            type: config.filterType,
-            sampleRate: designRate,
-            frequency: warpedFrequency,
-            q: Double(config.q),
-            gain: Double(config.gain),
-            slope: config.slope
-        )
 
         let target: EQChannelTarget
         switch eqConfiguration.channelMode {
@@ -289,11 +388,63 @@ final class EQCoefficientStager {
         case .stereo:
             target = eqConfiguration.channelFocus == .left ? .left : .right
         case .midSide:
-            // Mid stored in leftState → leftEQChain
-            // Side stored in rightState → rightEQChain
             let editingMid = (eqConfiguration.channelFocus == .mid ||
                               eqConfiguration.channelFocus == .left)
             target = editingMid ? .left : .right
+        }
+
+        // Validate parameters before calculation.
+        let paramResult = BiquadValidator.validate(
+            type: config.filterType,
+            sampleRate: designRate,
+            frequency: warpedFrequency,
+            q: Double(config.q),
+            gain: Double(config.gain)
+        )
+        if case .invalid(let message) = paramResult {
+            logger.warning("Band \(index) invalid parameters: \(message) — using passthrough")
+            renderPipeline?.updateBandCoefficients(
+                channel: target,
+                layerIndex: EQLayerConstants.userEQLayerIndex,
+                bandIndex: index,
+                sections: [],
+                bypass: true,
+                needsDoublePrecision: false
+            )
+            return
+        }
+        if case .warning(let message) = paramResult {
+            logger.debug("Band \(index) parameter warning: \(message)")
+        }
+
+        let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
+
+        // Validate every computed section — a cascade is only as stable as its weakest section.
+        for (sectionIndex, section) in sections.enumerated() {
+            if !BiquadValidator.isFinite(section) {
+                logger.warning("Band \(index) section \(sectionIndex) coefficients are non-finite — using passthrough")
+                renderPipeline?.updateBandCoefficients(
+                    channel: target,
+                    layerIndex: EQLayerConstants.userEQLayerIndex,
+                    bandIndex: index,
+                    sections: [],
+                    bypass: true,
+                    needsDoublePrecision: false
+                )
+                return
+            }
+            if !BiquadValidator.isStable(section) {
+                logger.warning("Band \(index) section \(sectionIndex) coefficients are unstable — using passthrough")
+                renderPipeline?.updateBandCoefficients(
+                    channel: target,
+                    layerIndex: EQLayerConstants.userEQLayerIndex,
+                    bandIndex: index,
+                    sections: [],
+                    bypass: true,
+                    needsDoublePrecision: false
+                )
+                return
+            }
         }
 
         renderPipeline?.updateBandCoefficients(
@@ -305,6 +456,7 @@ final class EQCoefficientStager {
             needsDoublePrecision: !config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0)
         )
         refreshMixedPhaseIRIfNeeded()
+        onBandCoefficientsStaged?()
     }
 
     /// Recalculates and stages all coefficients for all active bands (full update path).
@@ -327,6 +479,13 @@ final class EQCoefficientStager {
         for index in 0..<activeCount {
             guard index < leftBands.count else { break }
             let config = leftBands[index]
+            // FIR bands produce no IIR coefficients — append identity slot and continue.
+            guard config.filterType != .fir else {
+                leftSections.append([])
+                leftBypassFlags.append(true)
+                leftNeedsDoublePrecision.append(false)
+                continue
+            }
             let warpedFrequency: Double
             if designRate != currentSampleRate {
                 warpedFrequency = BiquadMath.prewarpFrequency(
@@ -337,14 +496,7 @@ final class EQCoefficientStager {
             } else {
                 warpedFrequency = Double(config.frequency)
             }
-            let sections = BiquadMath.calculateSections(
-                type: config.filterType,
-                sampleRate: designRate,
-                frequency: warpedFrequency,
-                q: Double(config.q),
-                gain: Double(config.gain),
-                slope: config.slope
-            )
+            let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
             leftSections.append(sections)
             leftBypassFlags.append(config.bypass)
             leftNeedsDoublePrecision.append(!config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0))
@@ -371,6 +523,13 @@ final class EQCoefficientStager {
             for index in 0..<activeCount {
                 guard index < rightBands.count else { break }
                 let config = rightBands[index]
+                // FIR bands produce no IIR coefficients — append identity slot and continue.
+                guard config.filterType != .fir else {
+                    rightSections.append([])
+                    rightBypassFlags.append(true)
+                    rightNeedsDoublePrecision.append(false)
+                    continue
+                }
                 let warpedFrequency: Double
                 if designRate != currentSampleRate {
                     warpedFrequency = BiquadMath.prewarpFrequency(
@@ -381,14 +540,7 @@ final class EQCoefficientStager {
                 } else {
                     warpedFrequency = Double(config.frequency)
                 }
-                let sections = BiquadMath.calculateSections(
-                    type: config.filterType,
-                    sampleRate: designRate,
-                    frequency: warpedFrequency,
-                    q: Double(config.q),
-                    gain: Double(config.gain),
-                    slope: config.slope
-                )
+                let sections = computeSections(for: config, warpedFrequency: warpedFrequency, designRate: designRate)
                 rightSections.append(sections)
                 rightBypassFlags.append(config.bypass)
                 rightNeedsDoublePrecision.append(!config.bypass && (Double(config.q) > 4.0 || Double(config.frequency) < 300.0))
@@ -406,5 +558,6 @@ final class EQCoefficientStager {
         }
         refreshLinearPhaseIRIfNeeded()
         refreshMixedPhaseIRIfNeeded()
+        onBandCoefficientsStaged?()
     }
 }

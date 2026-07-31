@@ -91,6 +91,29 @@ final class EqualiserStore: ObservableObject {
     /// User preference for displaying bandwidth as octaves or Q factor.
     @Published var bandwidthDisplayMode: BandwidthDisplayMode = .qFactor
 
+    /// User preference for app appearance: follow the system, or force light/dark.
+    @Published var appearanceMode: AppearanceMode = .system {
+        didSet {
+            applyAppearance()
+        }
+    }
+
+    /// User preference for whether the app shows a Dock icon, a menu bar (tray) icon, or both.
+    @Published var interfaceStyle: InterfaceStyle = .both {
+        didSet {
+            onInterfaceStyleChanged?(interfaceStyle)
+        }
+    }
+
+    /// Set externally (by EqualiserMain) so the store can notify WindowActivationController
+    /// without owning a reference to it. Same pattern as `compareModeTimer.onRevert` /
+    /// `routingCoordinator.eqStager.onBandCoefficientsStaged`.
+    var onInterfaceStyleChanged: ((InterfaceStyle) -> Void)?
+
+    /// Live normalised system volume gain (0.0–1.0), updated whenever the volume changes.
+    /// Published so SwiftUI views (e.g. the loudness contour preview) re-render on volume change.
+    @Published var liveSystemVolumeGain: Float = 1.0
+
     /// Convolution engine configuration.
     @Published var convolutionConfig: ConvolutionConfig = ConvolutionConfig()
     /// Error message from the most recent IR load attempt.
@@ -241,6 +264,109 @@ final class EqualiserStore: ObservableObject {
         resonanceCandidates[channelIndex] = candidates
     }
 
+    // MARK: - Output Channel EQ Band Helpers
+
+    /// Appends an EQ band to the per-output-channel EQ at the given channel index.
+    ///
+    /// Finds the first inactive slot (at `activeBandCount`) and writes the new band
+    /// there, incrementing `activeBandCount`. If all 64 slots are occupied, the band
+    /// is not applied and a warning is logged.
+    ///
+    /// After mutation, re-stages the output channel matrix so the render pipeline
+    /// picks up the change immediately.
+    ///
+    /// - Parameters:
+    ///   - channelIndex: Index into `outputChannelMatrix.channels`.
+    ///   - band: The `EQBandConfiguration` to append.
+    /// - Returns: `true` if the band was applied; `false` if all slots are full.
+    @discardableResult
+    func appendBandToOutputChannel(index channelIndex: Int, band: EQBandConfiguration) -> Bool {
+        guard channelIndex < outputChannelMatrix.channels.count else { return false }
+
+        let maxBands = EQConfiguration.maxBandCount
+        var channel = outputChannelMatrix.channels[channelIndex]
+
+        guard channel.eq.activeBandCount < maxBands else {
+            logger.warning("appendBandToOutputChannel: all \(maxBands) slots occupied for channel \(channelIndex)")
+            return false
+        }
+
+        let targetIndex = channel.eq.activeBandCount
+        channel.eq.bands[targetIndex] = band
+        channel.eq.activeBandCount += 1
+        outputChannelMatrix.channels[channelIndex] = channel
+
+        // Re-stage so the render pipeline picks up the change
+        routingCoordinator.reapplyConfiguration()
+        return true
+    }
+
+    /// Applies a baffle step compensation shelf to the per-output-channel EQ.
+    ///
+    /// Appends a low shelf at `result.transitionHz / 1.5` Hz with the recommended
+    /// gain and Q from the calculator result.
+    ///
+    /// - Parameters:
+    ///   - channelIndex: Index into `outputChannelMatrix.channels`.
+    ///   - result: Output of `BaffleStepCalculator.computeCompensation(geometry:)`.
+    func applyBaffleStepToChannel(index channelIndex: Int, result: BaffleStepCalculator.BaffleStepResult) {
+        let shelfFreq = result.transitionHz / 1.5
+        let band = EQBandConfiguration(
+            frequency: shelfFreq,
+            q: result.recommendedQ,
+            gain: result.recommendedGainDB,
+            filterType: .lowShelf,
+            bypass: false
+        )
+        appendBandToOutputChannel(index: channelIndex, band: band)
+    }
+
+    /// Applies the current appearance preference at the AppKit level so it
+    /// cascades to every window, the menu bar extra, and system-drawn chrome.
+    private func applyAppearance() {
+        switch appearanceMode {
+        case .system:
+            NSApp.appearance = nil
+            NSApp.applicationIconImage = nil // revert to the bundle's default, system-driven icon
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+            NSApp.applicationIconImage = Self.runtimeIcon(named: "AppIconRuntime-light")
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+            NSApp.applicationIconImage = Self.runtimeIcon(named: "AppIconRuntime-dark")
+        }
+    }
+
+    private static func runtimeIcon(named name: String) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }
+
+    /// Applies selected resonance detection candidates as notch bands on the
+    /// per-output-channel EQ.
+    ///
+    /// Candidates are applied in order of decreasing prominence (highest first),
+    /// stopping when the band limit is reached.
+    ///
+    /// - Parameters:
+    ///   - channelIndex: Index into `outputChannelMatrix.channels`.
+    ///   - candidates: Array of candidates from `DiaphragmResonanceDetector.detect`.
+    func applyResonanceCorrection(
+        channelIndex: Int,
+        candidates: [DiaphragmResonanceDetector.ResonanceCandidate]
+    ) {
+        let sorted = candidates.sorted { $0.prominenceDB > $1.prominenceDB }
+        for candidate in sorted {
+            let applied = appendBandToOutputChannel(
+                index: channelIndex,
+                band: candidate.suggestedNotch
+            )
+            if !applied { break }
+        }
+    }
+
     // MARK: - Combined Multi-Driver Measurement (Part 2 Task AD)
 
     @Published var combinedMeasurementResult: CombinedMeasurementResult? = nil
@@ -263,13 +389,74 @@ final class EqualiserStore: ObservableObject {
         sweepDurationSeconds: Double = 10.0,
         repetitions: Int = 1
     ) async -> CombinedMeasurementResult? {
-        // TODO: Implement combined measurement logic
-        // This requires:
-        // 1. Setting up sweep injection before crossover in render pipeline
-        // 2. Capturing from microphone input
-        // 3. Computing impulse response and frequency response
-        // 4. Returning CombinedMeasurementResult
-        return nil
+        guard measurementState == .idle else {
+            logger.warning("runCombinedVerificationMeasurement called while not idle")
+            return nil
+        }
+
+        measurementState  = .playing
+        measurementError  = nil
+
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let analyser = SweepAnalyser(
+            sampleRate: sr,
+            duration: sweepDurationSeconds,
+            startFrequency: 20.0,
+            endFrequency: 20000.0
+        )
+        sweepAnalyser = analyser
+        let sweep = analyser.sweepSignal
+
+        // Start mic capture
+        let session = MicCaptureSession(deviceID: micInputDeviceID, sampleRate: sr, channelCount: 1)
+        session.start { [weak analyser] audioBuffer in
+            guard let samples = audioBuffer[0] else { return }
+            analyser?.recordSamples(samples)
+        }
+
+        // Wire up the sweep analyser for recording from the render pipeline's mic path too
+        // (supports dual-path: physical mic via session AND virtual driver loopback)
+        routingCoordinator.pipelineManager.renderPipeline?.setSweepAnalyser(analyser)
+
+        // Await sweep completion
+        await withCheckedContinuation { continuation in
+            routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = {
+                continuation.resume()
+            }
+            analyser.startRecording()
+            routingCoordinator.pipelineManager.renderPipeline?.startSweepPlayback(signal: sweep)
+        }
+
+        // Stop capture
+        session.stop()
+        measurementState = .capturing
+
+        // Reverb tail wait
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        analyser.stopRecording()
+
+        // Compute on background thread
+        measurementState = .computing
+        let calibration = micCalibration  // Capture before Task
+        let result: CombinedMeasurementResult? = await Task(priority: .userInitiated) {
+            let ir       = analyser.computeImpulseResponse(referenceSweep: sweep)
+            let response = analyser.computeFrequencyResponse(ir: ir, micCalibration: calibration)
+            return CombinedMeasurementResult(
+                impulseResponse: ir,
+                magnitudeResponseDB: response,
+                complexResponse: [],  // Not computed in this implementation
+                sampleRate: sr,
+                capturedAt: Date(),
+                individualMeasurements: nil
+            )
+        }.value
+
+        measurementState            = .done
+        combinedMeasurementResult   = result
+        if let r = result {
+            measuredResponse = r.magnitudeResponseDB
+        }
+        return result
     }
 
     // MARK: - Loopback Measurement State
@@ -324,6 +511,7 @@ final class EqualiserStore: ObservableObject {
             timestamp: Date()
         )
         snapshots[key] = snapshot
+        selectedSnapshotKey = key
         logger.info("Saved EQ snapshot to slot: \(key)")
     }
 
@@ -576,10 +764,17 @@ final class EqualiserStore: ObservableObject {
             inputDeviceID: manualModeEnabled ? routingCoordinator.selectedInputDeviceID : nil,
             outputDeviceID: routingCoordinator.selectedOutputDeviceID,
             bandwidthDisplayMode: bandwidthDisplayMode.rawValue,
+            appearanceMode: appearanceMode.rawValue,
+            interfaceStyle: interfaceStyle.rawValue,
             manualModeEnabled: manualModeEnabled,
             captureMode: routingCoordinator.captureMode.rawValue,
             dynamicsConfig: eqConfiguration.dynamicsConfig,
-            metersEnabled: meterStore.metersEnabled
+            metersEnabled: meterStore.metersEnabled,
+            rtaEnabled: meterStore.rtaEnabled,
+            goniometerEnabled: meterStore.goniometerEnabled,
+            analyticsMetersEnabled: meterStore.analyticsMetersEnabled,
+            gainStructureEnabled: meterStore.gainStructureEnabled,
+            levelMetersEnabled: meterStore.levelMetersEnabled
         )
     }
 
@@ -661,14 +856,21 @@ final class EqualiserStore: ObservableObject {
     /// Updates advanced processing parameters (sections A–J) and propagates to the audio pipeline.
     func updateAdvancedProcessing(_ advanced: AdvancedProcessingConfig) {
         let prevDecoupling = dynamicsConfig.advanced.coefficientDecouplingEnabled
+        let prevAdvanced = eqConfiguration.dynamicsConfig.advanced
         var config = eqConfiguration.dynamicsConfig
         config.advanced = advanced
         dynamicsConfig = config
         if prevDecoupling != advanced.coefficientDecouplingEnabled {
             refreshHighResDecouplingStatus(forceReapply: true)
         }
-        // Recompute static preamp when bass management gain changes
-        recomputeStaticPreamp()
+        // Only recompute static preamp when a field that actually feeds
+        // EQHeadroomCompensator.computeStaticPreampDB changed — this sweep runs
+        // 200 frequency bins and shouldn't fire on every unrelated toggle.
+        if prevAdvanced.eqHeadroomCompensationEnabled != advanced.eqHeadroomCompensationEnabled
+            || prevAdvanced.eqHeadroomMaxAttenuationDB != advanced.eqHeadroomMaxAttenuationDB
+            || prevAdvanced.bassManagement.lowBandGainDB != advanced.bassManagement.lowBandGainDB {
+            recomputeStaticPreamp()
+        }
     }
 
     /// Recomputes the static preamp gain based on current EQ, room correction, target curve, and bass management settings.
@@ -690,12 +892,15 @@ final class EqualiserStore: ObservableObject {
                 gain: band.gain,
                 filterType: band.filterType,
                 bypass: band.bypass,
-                slope: band.slope
+                slope: band.slope,
+                constantQ: band.constantQ,
+                linkwitzTargetHz: band.linkwitzTargetHz
             )
         }
 
-        // Gather room correction layer bands
-        let roomCorrectionLayer = eqConfiguration.leftState.roomCorrection.bands.map { band in
+        // Gather room correction layer bands (active bands only)
+        let rcLayer = eqConfiguration.leftState.roomCorrection
+        let roomCorrectionLayer = rcLayer.bands.prefix(rcLayer.activeBandCount).map { band in
             PresetBand(
                 frequency: band.frequency,
                 q: band.q,
@@ -706,8 +911,8 @@ final class EqualiserStore: ObservableObject {
             )
         }
 
-        // Build target curve
-        let targetCurve = buildTargetCurve()
+        // Use the UI-visible targetCurve — the single source of truth (Task 2).
+        let targetCurveForPreamp = targetCurve
 
         // Get bass management low band gain
         let lowBandGainDB = dynamicsConfig.advanced.bassManagement.lowBandGainDB
@@ -715,9 +920,10 @@ final class EqualiserStore: ObservableObject {
         // Compute static preamp gain
         let staticPreampDB = EQHeadroomCompensator.computeStaticPreampDB(
             eqLayer: eqLayer,
-            roomCorrectionLayer: roomCorrectionLayer,
-            targetCurve: targetCurve,
-            lowBandGainDB: lowBandGainDB
+            roomCorrectionLayer: Array(roomCorrectionLayer),
+            targetCurve: targetCurveForPreamp,
+            lowBandGainDB: lowBandGainDB,
+            maxAttenuationDB: dynamicsConfig.advanced.eqHeadroomMaxAttenuationDB
         )
 
         // Apply to render pipeline
@@ -729,9 +935,14 @@ final class EqualiserStore: ObservableObject {
     @Published var roomCorrectionBandCount: Int = 0
     @Published var customREWTargetCurve: [(frequency: Double, gainDB: Double)]? = nil
 
-    /// Accumulated measurement curves for multi-seat averaging (Part 4.2).
-    /// Each element is one full-range frequency response measurement with complex data.
-    @Published var seatMeasurements: [SeatMeasurement] = []
+    /// Most recent raw impulse response (in samples), stored so visualization views can display it.
+    /// Populated by `stopSweepMeasurement` and `startLoopbackMeasurement` completion handlers.
+    @Published var lastMeasuredImpulseResponse: [Float] = []
+
+    /// Per-seat measurements keyed by seat index (0 = Centre, 1 = Left, 2 = Right).
+    /// Using a dictionary ensures out-of-order measurements never pad skipped slots
+    /// with duplicate data — an absent key means that seat has not yet been measured.
+    @Published var seatMeasurements: [Int: SeatMeasurement] = [:]
 
     /// Seat measurement with complex frequency response and weighting (Part 4.2).
     struct SeatMeasurement: Codable, Sendable {
@@ -783,6 +994,20 @@ final class EqualiserStore: ObservableObject {
     /// True if the brickwall limiter ceiling was breached since the last `clearTruePeakFlags()`.
     var truePeakLimiterTripped: Bool {
         routingCoordinator.pipelineManager.renderPipeline?.truePeakLimiterTripped ?? false
+    }
+    /// Continuous inter-sample true-peak level (dBTP) measured on the final output signal.
+    var liveTruePeakDB: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.liveTruePeakDB ?? -90.0
+    }
+    /// Whether the signal path is currently running through the 4× oversampled clipper/limiter.
+    var isOversamplingActive: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.isOversamplingActive ?? false
+    }
+    /// Total pipeline latency in milliseconds.
+    /// Sum of all active processing stages: limiter look-ahead, oversampling,
+    /// FIR convolution, speaker/room correction convolution, IR alignment, and linear-phase EQ.
+    var totalLatencyMs: Double {
+        routingCoordinator.pipelineManager.renderPipeline?.totalLatencyMs ?? 0.0
     }
     /// Resets sticky true-peak trip indicators (call from main thread after displaying).
     func clearTruePeakFlags() {
@@ -836,9 +1061,27 @@ final class EqualiserStore: ObservableObject {
     /// is not yet integrated into DynamicsProcessor. This is a placeholder for
     /// when the crossover engine is integrated (see TODO in RenderCallbackContext.swift).
     func activeCrossoverCoefficients(for source: SignalSource) -> (sections: ActiveCrossoverEngine.SectionArray?, firKernel: [Float]?) {
-        // TODO: Read from DynamicsProcessor.activeCrossoverEngine once integrated
-        // For now, return nil since the crossover engine is not yet integrated
-        return (nil, nil)
+        guard let engine = routingCoordinator.pipelineManager.renderPipeline?
+                .callbackContext?.dynamicsProcessor.activeCrossoverEngine
+        else { return (nil, nil) }
+
+        // Map the signal source to the relevant crossover filter section array.
+        // The HP side of the lower crossover drives Low, the LP side drives Mid+High (bi-amp)
+        // or just Mid (tri-amp); the HP side of the upper crossover drives High (tri-amp).
+        switch source {
+        case .mainsLeftLow,  .mainsRightLow:
+            return (engine.activeLowerLP, nil)
+        case .mainsLeftMid,  .mainsRightMid:
+            return (engine.activeLowerHP, nil)
+        case .mainsLeftHigh, .mainsRightHigh:
+            if engine.activeBandCount >= 3 {
+                return (engine.activeUpperHP, nil)
+            } else {
+                return (engine.activeLowerHP, nil)
+            }
+        default:
+            return (nil, nil)
+        }
     }
     
     // MARK: - Initialization
@@ -854,7 +1097,14 @@ final class EqualiserStore: ObservableObject {
 
         // Initialize other components
         self.presetManager = PresetManager()
-        self.meterStore = MeterStore(metersEnabled: snapshot.metersEnabled)
+        self.meterStore = MeterStore(
+            metersEnabled: snapshot.metersEnabled,
+            rtaEnabled: snapshot.rtaEnabled,
+            goniometerEnabled: snapshot.goniometerEnabled,
+            analyticsMetersEnabled: snapshot.analyticsMetersEnabled,
+            gainStructureEnabled: snapshot.gainStructureEnabled,
+            levelMetersEnabled: snapshot.levelMetersEnabled
+        )
 
         // Set reset flag if state was reset
         self.didResetStateOnLaunch = didReset
@@ -893,6 +1143,8 @@ final class EqualiserStore: ObservableObject {
         // Restore app-level state
         logger.debug("Loading from snapshot: outputDeviceID=\(snapshot.outputDeviceID ?? "nil"), manualMode=\(snapshot.manualModeEnabled)")
         _bandwidthDisplayMode = Published(initialValue: BandwidthDisplayMode(rawValue: snapshot.bandwidthDisplayMode) ?? .qFactor)
+        _appearanceMode = Published(initialValue: AppearanceMode(rawValue: snapshot.appearanceMode) ?? .system)
+        _interfaceStyle = Published(initialValue: InterfaceStyle(rawValue: snapshot.interfaceStyle) ?? .both)
 
         // Restore capture mode preference
         routingCoordinator.captureMode = CaptureMode(rawValue: snapshot.captureMode) ?? .sharedMemory
@@ -911,6 +1163,18 @@ final class EqualiserStore: ObservableObject {
 
         compareModeTimer.onRevert = { [weak self] in
             self?.compareMode = .eq
+        }
+
+        // Wire liveSystemVolumeGain: update the published property whenever volume changes
+        // so the loudness contour preview in DynamicsView re-renders automatically.
+        routingCoordinator.pipelineManager.onVolumeGainDidChange = { [weak self] volumeGain in
+            self?.liveSystemVolumeGain = volumeGain
+        }
+
+        // Wire EQ headroom recomputation: called after every incremental band update
+        // so the static preamp stays in sync without waiting for a full preset load.
+        routingCoordinator.eqStager.onBandCoefficientsStaged = { [weak self] in
+            self?.recomputeStaticPreamp()
         }
 
         persistence.setStore(self)
@@ -1029,6 +1293,36 @@ final class EqualiserStore: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Pause/resume the RTA analyzer's 60Hz FFT timer in lockstep with the
+        // meters-enabled toggle — previously this toggle only blanked the RTA's
+        // displayed bars while the underlying analysis kept running unconditionally.
+        meterStore.$metersEnabled
+            .sink { [weak self] enabled in
+                self?.rtaAnalyzer.setMetersEnabled(enabled)
+                self?.goniometerEngine.setMetersEnabled(enabled)
+            }
+            .store(in: &cancellables)
+
+        // Sync initial metersEnabled state to RTA analyzer (subscription only fires on changes)
+        rtaAnalyzer.setMetersEnabled(meterStore.metersEnabled)
+        goniometerEngine.setMetersEnabled(meterStore.metersEnabled)
+
+        // RTA individual enable/disable toggle
+        meterStore.$rtaEnabled
+            .sink { [weak self] enabled in
+                self?.rtaAnalyzer.setIndividuallyEnabled(enabled)
+            }
+            .store(in: &cancellables)
+        rtaAnalyzer.setIndividuallyEnabled(meterStore.rtaEnabled)
+
+        // Goniometer individual enable/disable toggle
+        meterStore.$goniometerEnabled
+            .sink { [weak self] enabled in
+                self?.goniometerEngine.setIndividuallyEnabled(enabled)
+            }
+            .store(in: &cancellables)
+        goniometerEngine.setIndividuallyEnabled(meterStore.goniometerEnabled)
+
         // Listen for app termination
         NotificationCenter.default.addObserver(
             self,
@@ -1050,6 +1344,9 @@ final class EqualiserStore: ObservableObject {
                 presetManager.isModified = true
             }
         }
+
+        // Apply the saved appearance preference on launch
+        applyAppearance()
     }
     
     deinit {
@@ -1104,6 +1401,15 @@ final class EqualiserStore: ObservableObject {
     /// Generates a sweep, plays it through the output, captures via mic input,
     /// and computes the room response.
     func startLoopbackMeasurement() {
+        startLoopbackMeasurement(micDeviceID: nil)
+    }
+
+    /// Starts a measurement using a physical measurement microphone.
+    /// When `micDeviceID` is nil, falls back to the virtual driver loopback.
+    /// This is a thin single-seat wrapper: it runs a sweep and populates
+    /// `pendingMeasuredCurve` via `stopSweepMeasurement(seatIndex: 0)`,
+    /// unifying it with the System A measurement pipeline.
+    func startLoopbackMeasurement(micDeviceID: AudioDeviceID?) {
         measurementState = .playing
         measurementError = nil
 
@@ -1111,68 +1417,75 @@ final class EqualiserStore: ObservableObject {
         let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
         let analyser = SweepAnalyser(sampleRate: sampleRate, duration: 10.0, startFrequency: 20.0, endFrequency: 20000.0)
         sweepAnalyser = analyser
+        analyser.startRecording()
 
         // Store reference sweep signal
         let sweep = analyser.sweepSignal
 
-        // Start sweep playback
+        // If a physical mic device is specified, also start MicCaptureSession
+        var micSession: MicCaptureSession?
+        if let devID = micDeviceID {
+            let session = MicCaptureSession(deviceID: devID, sampleRate: sampleRate, channelCount: 1)
+            session.start { [weak analyser] audioBuffer in
+                guard let samples = audioBuffer[0] else { return }
+                analyser?.recordSamples(samples)
+            }
+            micSession = session
+        }
+
+        // Install completion handler — owns the callback for its full lifecycle.
+        // .onAppear must NOT overwrite this while a measurement is in flight (see Task 5).
         routingCoordinator.pipelineManager.renderPipeline?.setSweepAnalyser(analyser)
         routingCoordinator.pipelineManager.renderPipeline?.onSweepPlaybackComplete = { [weak self] in
             guard let self = self else { return }
+            micSession?.stop()
             Task { @MainActor in
                 // Wait 0.5s for reverb tail
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 self.measurementState = .capturing
                 self.sweepAnalyser?.stopRecording()
 
-                // Compute impulse response and frequency response on background thread
+                // Compute impulse response and frequency response
                 self.measurementState = .computing
 
-                // Capture data needed for computation
                 guard let analyser = self.sweepAnalyser else { return }
                 let capturedSweep = sweep
+                let calibration = self.micCalibration
 
-                Task { @MainActor in
-                    let ir = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
-                    let response = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
+                let (ir, response): ([Float], [(frequency: Double, gainDB: Double)]) = await Task(priority: .userInitiated) {
+                    let computedIR = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
+                    let computedResponse = analyser.computeFrequencyResponse(ir: computedIR, micCalibration: calibration)
+                    return (computedIR, computedResponse)
+                }.value
 
-                    self.measuredResponse = response
-                    self.measurementState = .done
-                }
+                // Store the impulse response so visualization views can use it
+                self.lastMeasuredImpulseResponse = ir
+
+                // Route into the unified pending-curve pipeline (same as System A)
+                self.pendingMeasuredCurve = response
+                self.measuredResponse = response
+                self.measurementState = .done
             }
         }
         routingCoordinator.pipelineManager.renderPipeline?.startSweepPlayback(signal: sweep)
     }
 
-    /// Applies room correction bands to the current EQ.
-    /// - Parameter maxBands: Maximum number of correction bands (8-20, default 16)
+    /// Applies room correction bands to the current EQ using the unified pending-curve state.
+    /// - Parameter maxBands: Maximum number of correction bands (8–20, default 16)
     func applyRoomCorrection(maxBands: Int = 16) {
-        let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
-        let bands = RoomCorrectionEngine.fitBands(
-            measured: measuredResponse,
-            target: targetCurve,
-            sampleRate: sampleRate,
-            maxBands: maxBands
-        )
-
-        // Apply bands using the existing stager API
-        routingCoordinator.eqStager.applyRoomCorrectionBands(bands)
-
-        // Enable room correction
-        var adv = dynamicsConfig.advanced
-        adv.roomCorrectionEnabled = true
-        updateAdvancedProcessing(adv)
-        roomCorrectionBandCount = bands.count
+        // Delegate to the unified apply entry point so both the Loopback section
+        // and the Correction Filters section go through the same path.
+        applyRoomCalibration(maxBands: maxBands)
     }
 
     /// Computes and loads a minimum-phase FIR correction from the most recent loopback measurement.
-    /// Call after `applyRoomCorrection()` to upgrade from IIR to FIR correction.
+    /// Operates on `pendingMeasuredCurve` — the unified measurement state.
     /// - Parameters:
     ///   - tapCount: IR length in samples. Must be a power of two. 4096 ≈ 85 ms at 48 kHz.
     func applyFIRRoomCorrection(tapCount: Int = 4096) {
-        guard !measuredResponse.isEmpty else { return }
+        guard let pending = pendingMeasuredCurve, !pending.isEmpty else { return }
         let sr  = Double(streamSampleRate)
-        let measured = measuredResponse
+        let measured = pending
         let tgt = targetCurve
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -1246,26 +1559,43 @@ final class EqualiserStore: ObservableObject {
         sweepAnalyser?.stopRecording()
         guard let analyser = sweepAnalyser else { return }
         let ir = analyser.computeImpulseResponse(referenceSweep: analyser.sweepSignal)
-        let curve = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
-        if seatIndex == 0 || pendingMeasuredCurve == nil {
-            pendingMeasuredCurve = curve
-        } else {
-            // Average with existing measurement (logarithmic average in dB).
-            pendingMeasuredCurve = averageFrequencyCurves(pendingMeasuredCurve!, curve)
-        }
-    }
 
-    /// Adds a single-seat measurement to the multi-seat collection (Part 4.2).
-    func addSeatMeasurement() {
-        guard let curve = pendingMeasuredCurve else { return }
-        // For now, convert magnitude-only to complex with zero phase (legacy path)
-        // TODO: Update to use complex data from SweepAnalyser
+        // Store the raw impulse response for visualization views
+        lastMeasuredImpulseResponse = ir
+
+        let curve = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
+
+        // Build complex response from magnitude curve.
+        // Zero phase is used here since SweepAnalyser currently produces magnitude-only data.
         let complexResponse = curve.map { point in
             let magnitude = pow(10.0, point.gainDB / 20.0)
-            return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0) // Zero phase for legacy
+            return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0)
         }
-        let weight = seatMeasurements.isEmpty ? 1.5 : 1.0 // Primary seat gets higher weight
-        seatMeasurements.append(SeatMeasurement(complexResponse: complexResponse, weight: weight))
+
+        // B2 fix: use a flat weight of 1.0 for every seat regardless of measurement order.
+        // The 1.5× bias on the first-measured seat was a correctness bug.
+        let newSeat = SeatMeasurement(complexResponse: complexResponse, weight: 1.0)
+
+        // B2 fix: seatMeasurements is now a dictionary [seatIndex → SeatMeasurement]
+        // so out-of-order measurements never pad skipped slots with duplicate data.
+        seatMeasurements[seatIndex] = newSeat
+
+        // Recompute the pending curve as a proper equal-weighted average across all seats
+        pendingMeasuredCurve = averageComplexResponses(Array(seatMeasurements.values))
+        measuredResponse = pendingMeasuredCurve ?? curve
+    }
+
+    /// Adds the current single-seat measurement into the multi-seat dictionary
+    /// at the next available integer key (Part 4.2).
+    func addSeatMeasurement() {
+        guard let curve = pendingMeasuredCurve else { return }
+        let complexResponse = curve.map { point in
+            let magnitude = pow(10.0, point.gainDB / 20.0)
+            return SeatMeasurement.ComplexPoint(frequency: point.frequency, real: magnitude, imag: 0.0)
+        }
+        // B2 fix: flat 1.0 weight, keyed by next available index
+        let key = (seatMeasurements.keys.max() ?? -1) + 1
+        seatMeasurements[key] = SeatMeasurement(complexResponse: complexResponse, weight: 1.0)
         pendingMeasuredCurve = nil
         roomCorrectionPresetManager.markAsModified()
     }
@@ -1277,9 +1607,9 @@ final class EqualiserStore: ObservableObject {
     }
 
     /// Updates the weight for a specific seat measurement (Part 4.2).
-    func updateSeatWeight(at index: Int, weight: Double) {
-        guard index >= 0 && index < seatMeasurements.count else { return }
-        seatMeasurements[index].weight = max(0.25, min(2.0, weight))
+    func updateSeatWeight(at seatIndex: Int, weight: Double) {
+        guard seatMeasurements[seatIndex] != nil else { return }
+        seatMeasurements[seatIndex]!.weight = max(0.25, min(2.0, weight))
         roomCorrectionPresetManager.markAsModified()
     }
 
@@ -1289,11 +1619,11 @@ final class EqualiserStore: ObservableObject {
             do {
                 let result = try REWImporter.importMeasurement(from: url)
                 await MainActor.run { [self] in
-                    let weight = self.seatMeasurements.isEmpty ? 1.5 : 1.0 // Primary seat gets higher weight
-                    let seatMeasurement = SeatMeasurement(complexResponse: result.complexResponse, weight: weight)
-                    self.seatMeasurements.append(seatMeasurement)
+                    let key = (self.seatMeasurements.keys.max() ?? -1) + 1
+                    // B2 fix: flat 1.0 weight for imported measurements too
+                    let seatMeasurement = SeatMeasurement(complexResponse: result.complexResponse, weight: 1.0)
+                    self.seatMeasurements[key] = seatMeasurement
                     self.roomCorrectionPresetManager.markAsModified()
-                    // Show warnings if any
                     if !result.warnings.isEmpty {
                         self.measurementError = result.warnings.joined(separator: "\n")
                     }
@@ -1309,7 +1639,7 @@ final class EqualiserStore: ObservableObject {
     /// Computes complex average of all seat measurements and stores in pendingMeasuredCurve (Part 4.2).
     func applyMultiSeatCalibration() {
         guard !seatMeasurements.isEmpty else { return }
-        pendingMeasuredCurve = averageComplexResponses(seatMeasurements)
+        pendingMeasuredCurve = averageComplexResponses(Array(seatMeasurements.values))
     }
 
     /// Computes weighted complex average of seat measurements (Part 4.2).
@@ -1421,6 +1751,18 @@ final class EqualiserStore: ObservableObject {
         presetManager.markAsModified()
     }
 
+    func updateBandConstantQ(index: Int, constantQ: Bool) {
+        eqConfiguration.updateBandConstantQ(index: index, constantQ: constantQ)
+        routingCoordinator.updateBandFilterType(index: index)  // recompute coefficients via same path as filter type change
+        presetManager.markAsModified()
+    }
+
+    func updateBandLinkwitzTargetHz(index: Int, targetHz: Float?) {
+        eqConfiguration.updateBandLinkwitzTargetHz(index: index, targetHz: targetHz)
+        routingCoordinator.updateBandFilterType(index: index)  // recompute coefficients
+        presetManager.markAsModified()
+    }
+
     /// Updates the bypass state for a specific EQ band.
     func updateBandBypass(index: Int, bypass: Bool) {
         eqConfiguration.updateBandBypass(index: index, bypass: bypass)
@@ -1496,6 +1838,7 @@ final class EqualiserStore: ObservableObject {
     /// Sets the window reference for visibility checking.
     func setEqualiserWindow(_ window: NSWindow?) {
         meterStore.setEqualiserWindow(window)
+        rtaAnalyzer.setEqualiserWindow(window)
     }
 
     /// Starts noise profile capture on the denoiser.
@@ -1607,7 +1950,7 @@ final class EqualiserStore: ObservableObject {
         let settings = RoomCorrectionPresetSettings(
             targetCurveName: selectedTargetCurveName,
             customTargetCurve: selectedTargetCurveName == "Custom…" ? targetCurve.map(TargetCurvePoint.init) : nil,
-            seatMeasurements: seatMeasurements,
+            seatMeasurements: Array(seatMeasurements.values),
             measuredResponse: measuredResponse.map(TargetCurvePoint.init),
             micCalibration: micCalibration,
             appliedBands: eqConfiguration.leftState.roomCorrection.bands
@@ -1640,7 +1983,10 @@ final class EqualiserStore: ObservableObject {
         } else if let curve = TargetCurveLibrary.allCurves.first(where: { $0.name == preset.settings.targetCurveName }) {
             targetCurve = curve.curve
         }
-        seatMeasurements = preset.settings.seatMeasurements
+        // Restore as a dictionary keyed by sequential indices (matching the save path)
+        seatMeasurements = Dictionary(
+            uniqueKeysWithValues: preset.settings.seatMeasurements.enumerated().map { ($0.offset, $0.element) }
+        )
         measuredResponse = preset.settings.measuredResponse.map { ($0.frequency, $0.gainDB) }
         micCalibration = preset.settings.micCalibration
 
@@ -1670,12 +2016,22 @@ final class EqualiserStore: ObservableObject {
         loadRoomCorrectionPreset(preset)
     }
 
+    /// Discards all pending measurements and resets to a clean slate.
+    /// This is the canonical "Discard All" action — resets both the pending curve
+    /// and all accumulated seat measurements so no stale data can contaminate a fresh run.
+    func discardAllMeasurements() {
+        pendingMeasuredCurve = nil
+        seatMeasurements.removeAll()
+        measuredResponse = []
+        lastMeasuredImpulseResponse = []
+        measurementState = .idle
+        roomCorrectionPresetManager.markAsModified()
+    }
+
     /// Discards the current room correction calibration and deselects any preset.
     func createNewRoomCorrectionPreset() {
         clearRoomCalibration()
-        clearSeatMeasurements()
-        measuredResponse = []
-        pendingMeasuredCurve = nil
+        discardAllMeasurements()
         roomCorrectionPresetManager.selectPreset(named: nil)
     }
 
@@ -1784,11 +2140,14 @@ final class EqualiserStore: ObservableObject {
         routingCoordinator.pipelineManager.renderPipeline?.setGoniometerEngine(goniometerEngine)
     }
 
-    func applyRoomCalibration() {
+    /// Unified apply entry point for IIR room correction.
+    /// Reads from `pendingMeasuredCurve` and applies against the UI-visible `targetCurve`.
+    /// - Parameter maxBands: Maximum number of correction bands (8–20, default 16).
+    func applyRoomCalibration(maxBands: Int = 16) {
         guard let measured = pendingMeasuredCurve else { return }
-        let target = buildTargetCurve()
+        // Use the UI-visible targetCurve — the single source of truth for the target curve.
         let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
-        let bands = RoomCorrectionEngine.fitBands(measured: measured, target: target, sampleRate: sr)
+        let bands = RoomCorrectionEngine.fitBands(measured: measured, target: targetCurve, sampleRate: sr, maxBands: maxBands)
         routingCoordinator.eqStager.applyRoomCorrectionBands(bands)
         var adv = dynamicsConfig.advanced
         adv.roomCorrectionEnabled = true
@@ -1889,6 +2248,83 @@ final class EqualiserStore: ObservableObject {
         updateAdvancedProcessing(adv)
     }
 
+    /// Loads a FIR kernel from a WAV/AIFF file into a specific EQ band.
+    /// The band must have filterType == .fir for the kernel to be applied.
+    func loadFIRBandKernel(url: URL, bandIndex: Int) {
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        Task.detached(priority: .userInitiated) {
+            do {
+                let result = try IRFileLoader.load(url: url, targetSampleRate: sr)
+                await MainActor.run {
+                    self.eqConfiguration.updateFIRBandKernel(
+                        index: bandIndex,
+                        leftKernel:  result.leftSamples,
+                        rightKernel: result.rightSamples,
+                        displayName: result.displayName
+                    )
+                    // Restage EQ to pick up the new kernel in LinearPhaseEQEngine.
+                    self.routingCoordinator.reapplyConfiguration()
+                    self.presetManager.markAsModified()
+                }
+            } catch {
+                await MainActor.run {
+                    self.convolutionLoadError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Clears the FIR kernel from a specific EQ band.
+    func clearFIRBandKernel(bandIndex: Int) {
+        eqConfiguration.updateFIRBandKernel(
+            index: bandIndex,
+            leftKernel: nil, rightKernel: nil, displayName: nil)
+        routingCoordinator.reapplyConfiguration()
+        presetManager.markAsModified()
+    }
+
+    /// Exports the complete current configuration as a CamillaDSP YAML string.
+    ///
+    /// Includes: main-chain EQ bands, room correction, active crossover, output channel routing,
+    /// per-channel delays/gain/polarity/EQ/limiters, and group delay all-pass corrections.
+    /// FIR bands are included as inline Conv filters (kernel values embedded in YAML).
+    ///
+    /// - Returns: A YAML string loadable directly by CamillaDSP.
+    func exportCamillaDSP() -> String {
+        let sr = Int(streamSampleRate)
+        let playbackName = outputChannelMatrix.channels.first(where: { $0.isEnabled })?
+            .target?.displayLabel ?? "Default Output Device"
+
+        let leftRC  = Array(eqConfiguration.leftState.roomCorrection.bands
+            .prefix(eqConfiguration.leftState.roomCorrection.activeBandCount))
+
+        let config = CamillaDSPExportConfig(
+            sampleRate: sr,
+            chunkSize: 1024,
+            captureDeviceName: "Notch Sixty",
+            playbackDeviceName: playbackName,
+            leftEQBands:  Array(eqConfiguration.leftState.userEQ.bands
+                .prefix(eqConfiguration.leftState.userEQ.activeBandCount)),
+            rightEQBands: Array(eqConfiguration.rightState.userEQ.bands
+                .prefix(eqConfiguration.rightState.userEQ.activeBandCount)),
+            roomCorrectionBands: leftRC,
+            activeCrossover: dynamicsConfig.advanced.activeCrossover.isEnabled
+                ? dynamicsConfig.advanced.activeCrossover
+                : nil,
+            outputMatrix: outputChannelMatrix.isEnabled
+                ? outputChannelMatrix
+                : nil,
+            bassManagementCrossoverHz: dynamicsConfig.advanced.bassManagement.enabled
+                ? dynamicsConfig.advanced.bassManagement.crossoverHz
+                : nil,
+            bassManagementSlope: dynamicsConfig.advanced.bassManagement.enabled
+                ? dynamicsConfig.advanced.bassManagement.slope
+                : nil
+        )
+
+        return CamillaDSPExporter.exportToYAML(config)
+    }
+
     // MARK: - Microphone Calibration (Part 4.1)
 
     func loadMicCalibration(url: URL) {
@@ -1933,11 +2369,13 @@ final class EqualiserStore: ObservableObject {
     private func buildTargetCurve() -> [(frequency: Double, gainDB: Double)] {
         switch dynamicsConfig.advanced.targetCurveType {
         case .flat:
-            return [(20, 0), (20000, 0)]
+            return TargetCurveLibrary.flat
         case .houseCurve:
-            return [(20, 2.0), (80, 2.0), (500, 0.0), (2000, 0.0), (10000, -1.0), (20000, -2.5)]
+            // B&K / IEC 268-13 house curve: 3 dB/octave bass rise below 1 kHz.
+            // Matches the "B&K house" option in the room correction target curve picker.
+            return TargetCurveLibrary.bkHouse
         case .customREW:
-            return customREWTargetCurve ?? [(20, 0), (20000, 0)]
+            return customREWTargetCurve ?? TargetCurveLibrary.flat
         }
     }
 }

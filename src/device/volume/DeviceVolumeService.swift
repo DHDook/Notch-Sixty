@@ -16,7 +16,7 @@ final class DeviceVolumeService: VolumeControlling {
     private nonisolated(unsafe) var deviceVolumePropertySelectors: [AudioDeviceID: AudioObjectPropertySelector] = [:]
     private nonisolated(unsafe) var muteListenerBlocks: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
     private nonisolated(unsafe) var virtualMuteListenerBlocks: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
-    private let listenerQueue = DispatchQueue(label: "net.knage.equaliser.DeviceVolumeService.listener")
+    private let listenerQueue = DispatchQueue(label: "net.knage.equaliser.DeviceVolumeService.listener", qos: .userInitiated)
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "DeviceVolumeService")
     
     // MARK: - Virtual Master Volume

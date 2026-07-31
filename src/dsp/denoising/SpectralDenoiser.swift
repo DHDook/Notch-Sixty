@@ -41,18 +41,12 @@ final class SpectralDenoiser: @unchecked Sendable {
     private var halfN: Int
     private var sampleRate: Double = 48000.0
 
-    // Gain smoother time constants.
-    // Attack  = how quickly gain rises when a signal appears  (~20 ms → fast, avoids smearing onsets)
-    // Release = how quickly gain falls when a signal disappears (~80 ms → slow, avoids musical noise)
-    // Expressed as per-frame IIR coefficients: alpha = exp(-1 / (tau_ms / frame_ms))
-    // At 48 kHz, frame_ms = hopSize / sampleRate * 1000 = 512 / 48000 * 1000 ≈ 10.67 ms
-    // Attack alpha = 0.15 ≈ 1-frame time constant (~11 ms at 48 kHz / 512-sample hop).
-    // Eliminates single-frame gain discontinuities on transient onsets without
-    // audibly smearing attack envelopes.
-    private static let gainAttackAlpha:  Float = 0.15
-    private static let gainReleaseAlpha: Float = 0.3      // tau ≈ 2 frames (~21 ms) — just enough
-                                                         // to prevent single-frame gain spikes
-                                                         // without starving spectrally active bins
+    // Gain smoother time constants (instance variables — configurable via setGainSmoothingMs).
+    // Defaults match the former hardcoded values (attack ≈ 11 ms, release ≈ 21 ms at 48 kHz/512-hop).
+    private var gainAttackMs:    Float = 11.0
+    private var gainReleaseMs:   Float = 21.0
+    private var gainAttackAlpha:  Float = 0.15
+    private var gainReleaseAlpha: Float = 0.30
 
     // Minimum statistics noise estimator.
     // historyLength: number of frames of power history to retain.
@@ -254,6 +248,8 @@ final class SpectralDenoiser: @unchecked Sendable {
     func updateSampleRate(_ newSampleRate: Double) {
         sampleRate = newSampleRate
         rebuildMaskingBias()
+        // Use stored ms values directly — no reverse-derivation that would drift on repeated calls.
+        setGainSmoothingMs(attackMs: gainAttackMs, releaseMs: gainReleaseMs, sampleRate: newSampleRate)
         // Per-bin noise floor estimates are in the old frequency scale; discard them.
         reset()
     }
@@ -313,6 +309,19 @@ final class SpectralDenoiser: @unchecked Sendable {
             Self.floatBits(amount.clamped(to: 0.0...1.0)),
             ordering: .relaxed
         )
+    }
+
+    /// Updates gain-smoothing time constants. Call from the main thread only.
+    /// - Parameters:
+    ///   - attackMs:  Gain attack time in milliseconds (how quickly gain rises to unity).
+    ///   - releaseMs: Gain release time in milliseconds (how quickly gain falls).
+    ///   - sampleRate: Current sample rate (used together with hopSize).
+    func setGainSmoothingMs(attackMs: Float, releaseMs: Float, sampleRate: Double) {
+        gainAttackMs  = attackMs
+        gainReleaseMs = releaseMs
+        let frameMs = Float(hopSize) / Float(sampleRate) * 1000.0
+        gainAttackAlpha  = max(0.0, min(0.999, Float(exp(-Double(frameMs / max(attackMs,  0.1))))))
+        gainReleaseAlpha = max(0.0, min(0.999, Float(exp(-Double(frameMs / max(releaseMs, 0.1))))))
     }
 
     /// Changes the processing mode. This reinitialises all internal state and
@@ -452,7 +461,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                         var sc = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
                         rp.baseAddress!.withMemoryRebound(to: DSPComplex.self,
                                                            capacity: halfN) { cBuf in
-                            vDSP_ctoz(cBuf, 2, &sc, 1, vDSP_Length(halfN))
+                            vDSP_ctoz(cBuf, 1, &sc, 1, vDSP_Length(halfN))
                         }
 
                         // Forward FFT.
@@ -534,8 +543,8 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // where alpha = gainAttackAlpha when G_instant > G_smooth (gain rising)
                         //       alpha = gainReleaseAlpha when G_instant < G_smooth (gain falling)
 
-                        let attackAlpha  = Self.gainAttackAlpha
-                        let releaseAlpha = Self.gainReleaseAlpha
+                        let attackAlpha  = gainAttackAlpha
+                        let releaseAlpha = gainReleaseAlpha
 
                         // DC bin (index 0 in prevGain)
                         let dcMagSq   = rp[0] * rp[0]
@@ -585,7 +594,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // Convert split-complex back to interleaved real (ztoc).
                         rp.baseAddress!.withMemoryRebound(to: DSPComplex.self,
                                                            capacity: halfN) { cBuf in
-                            vDSP_ztoc(&sc, 1, cBuf, 2, vDSP_Length(halfN))
+                            vDSP_ztoc(&sc, 1, cBuf, 1, vDSP_Length(halfN))
                         }
                     }
                 }
