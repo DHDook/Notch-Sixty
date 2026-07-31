@@ -35,7 +35,7 @@ struct MenuBarContentView: View {
     private var headerSection: some View {
         HStack(spacing: 8) {
             Image(nsImage: {
-                let img = NSImage(named: "MenuBarIcon")
+                let img = NSImage(named: "TrayIcon")
                     ?? NSImage(systemSymbolName: "slider.vertical.3",
                                accessibilityDescription: "Notch Sixty")!
                 img.isTemplate = true

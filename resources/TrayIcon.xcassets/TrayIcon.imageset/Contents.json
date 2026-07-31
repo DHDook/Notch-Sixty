@@ -1,0 +1,16 @@
+{
+  "images" : [
+    {
+      "filename" : "notch_sixty_tray_icon_final_tightcrop.svg",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  },
+  "properties" : {
+    "preserves-vector-representation" : true,
+    "template-rendering" : true
+  }
+}
