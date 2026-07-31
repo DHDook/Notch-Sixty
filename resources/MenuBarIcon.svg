@@ -1,23 +1,36 @@
 <svg width="512" height="512" viewBox="61 61 110 110" xmlns="http://www.w3.org/2000/svg">
-<title>Notch Sixty menu bar tray icon (template image source)</title>
-<g transform="translate(116,116)">
-<rect x="-52" y="-52" width="104" height="104" rx="16" fill="none" stroke="#1A1A1A" stroke-width="6"/>
-<path d="M -33.83 -4.31 A 36 36 0 0 1 23.14 -19.58" fill="none" stroke="#1A1A1A" stroke-width="5" stroke-linecap="round"/>
-<path d="M 23.14 -19.58 A 36 36 0 0 1 33.83 -4.31" fill="none" stroke="#1A1A1A" stroke-width="5" stroke-linecap="round"/>
-<g stroke="#1A1A1A" stroke-width="3.5" stroke-linecap="round">
-<line x1="-33.83" y1="-4.31" x2="-13.16" y2="3.21"/>
-<line x1="-19.34" y1="-22.36" x2="-13.43" y2="-13.08"/>
-<line x1="0" y1="-28" x2="0" y2="-6"/>
-<line x1="19.34" y1="-22.36" x2="13.43" y2="-13.08"/>
-<line x1="33.83" y1="-4.31" x2="13.16" y2="3.21"/>
-</g>
-<line x1="0" y1="8" x2="-27.53" y2="-23.32" stroke="#1A1A1A" stroke-width="3" stroke-linecap="round"/>
-<circle cx="0" cy="8" r="3.5" fill="#1A1A1A"/>
-<g transform="translate(-16,26)">
-<line x1="-9" y1="0" x2="-2" y2="0" stroke="#1A1A1A" stroke-width="3" stroke-linecap="round"/>
-<line x1="2" y1="0" x2="9" y2="0" stroke="#1A1A1A" stroke-width="3" stroke-linecap="round"/>
-<rect x="-2" y="-7" width="4" height="14" fill="#1A1A1A" rx="1.5"/>
-</g>
-<text x="5" y="32" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#1A1A1A">60</text>
-</g>
+<title>Notch Sixty menu bar tray icon (inverted template — solid rect, cutout meter)</title>
+<!--
+  Inverted/negative-space template image:
+  A solid filled rounded rect with the meter ticks, arc, needle, pivot, and
+  "60" text punched out as transparent negative space via an SVG mask.
+  Designed to be used as isTemplate = true — AppKit auto-tints for light/dark.
+-->
+<defs>
+  <mask id="cutout">
+    <!-- Mask base: white = keep (fill), black = cut out -->
+    <rect x="61" y="61" width="110" height="110" fill="white"/>
+    <!-- Arc segments -->
+    <path d="M 82.17 111.69 A 36 36 0 0 1 139.14 96.42" fill="none" stroke="black" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M 139.14 96.42 A 36 36 0 0 1 149.83 111.69" fill="none" stroke="black" stroke-width="5.5" stroke-linecap="round"/>
+    <!-- Tick marks -->
+    <line x1="82.17" y1="111.69" x2="102.84" y2="119.21" stroke="black" stroke-width="4" stroke-linecap="round"/>
+    <line x1="96.66" y1="93.64"  x2="102.57" y2="102.92" stroke="black" stroke-width="4" stroke-linecap="round"/>
+    <line x1="116"   y1="88"     x2="116"    y2="110"    stroke="black" stroke-width="4" stroke-linecap="round"/>
+    <line x1="135.34" y1="93.64" x2="129.43" y2="102.92" stroke="black" stroke-width="4" stroke-linecap="round"/>
+    <line x1="149.83" y1="111.69" x2="129.16" y2="119.21" stroke="black" stroke-width="4" stroke-linecap="round"/>
+    <!-- Needle (pointing upper-left, ~-45°) -->
+    <line x1="116" y1="124" x2="88.47" y2="92.68" stroke="black" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- Pivot dot -->
+    <circle cx="116" cy="124" r="4" fill="black"/>
+    <!-- "60" text -->
+    <text x="121" y="148" font-family="Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="black">60</text>
+    <!-- Input jack icon (two horizontal dashes + vertical rect) -->
+    <line x1="91" y1="142" x2="98" y2="142" stroke="black" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="102" y1="142" x2="109" y2="142" stroke="black" stroke-width="3.5" stroke-linecap="round"/>
+    <rect x="98" y="135" width="4" height="14" fill="black" rx="1.5"/>
+  </mask>
+</defs>
+<!-- Solid rounded rect with cutouts applied via mask -->
+<rect x="64" y="64" width="104" height="104" rx="16" fill="black" mask="url(#cutout)"/>
 </svg>
