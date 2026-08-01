@@ -1335,6 +1335,8 @@ final class UserGuideSettingsViewController: NSViewController {
         body("")
 
         h2("Part 1 — System Overview")
+
+        h2("1.1 Architecture Overview")
         body("This application inserts a real-time digital signal processing pipeline between macOS CoreAudio and your chosen output device. A virtual audio driver captures the system's audio stream, routes it through a chain of parametric EQ, dynamics, spatial, and correction stages, and delivers the processed signal to your speakers, headphones, or multi-amplifier system. Every stage operates in the digital domain at the stream's native sample rate, using double-precision coefficient design and single-precision (Float32) sample processing.")
 
         h2("1.2 Signal Path at a Glance")
@@ -1350,6 +1352,8 @@ final class UserGuideSettingsViewController: NSViewController {
         body("Use Flat for level-matched A/B listening — it prevents the \"louder sounds better\" bias from confusing your judgement of the EQ itself. Use Delta to confirm a stage is actually doing something: if Delta is silent, nothing downstream is currently modifying the signal.")
 
         h2("Part 2 — The Parametric EQ Engine")
+
+        h2("2.1 Biquad Filter Fundamentals")
         body("Every EQ band, crossover point, and correction filter in the application is built from second-order IIR sections (\"biquads\"), designed using the standard formulas from the RBJ Audio EQ Cookbook. A biquad implements the difference equation:")
         code("y[n] = b0·x[n] + b1·x[n-1] + b2·x[n-2] − a1·y[n-1] − a2·y[n-2]")
         body("with transfer function:")
@@ -1395,28 +1399,34 @@ final class UserGuideSettingsViewController: NSViewController {
 
         h2("2.8 4× Oversampling")
         body("An optional 4× polyphase FIR oversampler (Kaiser-windowed sinc, β = 8.0, 96 taps per phase, normalised cutoff 0.45× Nyquist) wraps the nonlinear stages — the soft clipper and the brickwall limiter. Nonlinear processing at the base sample rate generates harmonics that can alias back into the audible band; running those two stages at 4× the sample rate pushes the alias products above the (upsampled) Nyquist frequency, where they are removed by the downsampling filter before the signal returns to the base rate.")
+        body("Enabling this also moves where the clipper and limiter sit in the chain: instead of running mid-chain immediately after Bass Management (§3.11–§3.12), they're deferred to a separate oversampled pass that runs after the rest of the dynamics chain has already completed — after De-Harsh, Speaker IR Alignment, Symmetry Balance, Panning, Crosstalk Cancellation, Pause Gate, Dither, and Active Crossover. With 4× Oversampling off, they run in their usual mid-chain position instead.")
 
         h2("2.9 EQ Headroom Compensation")
         body("Because Room Correction, the target curve, User EQ, and Bass Management sub-trim can all add gain simultaneously, the engine continuously computes the worst-case combined boost across a log-spaced grid of 20 Hz – 96 kHz and applies a single static, attenuation-only preamp ahead of the whole chain to guarantee the combined boost cannot clip:")
         code("linearGain(f) = 10^(EQ(f)/20) · 10^(RoomCorrection(f)/20) · 10^(TargetCurve(f)/20)\n                 · [10^(subGain/20) if f < 300 Hz]\nstaticPreampDB = −min(max(20·log10(max linearGain(f)), 0), maxAttenuationDB)")
         body("maxAttenuationDB is itself adjustable (3–24 dB, default 12 dB) — raise it if your correction stack is aggressive enough that 12 dB of headroom isn't sufficient, or lower it to cap how much the compensator is allowed to pull the whole signal down.")
 
+        h2("2.10 Dynamic EQ")
+        body("Any parametric EQ band can be switched from Static to Dynamic in its band options, turning a fixed filter into a threshold-triggered dynamic processor — similar to a single-band compressor or expander built directly into the EQ, rather than always-on boost or cut. Up to 16 bands may be Dynamic at once across the active channel(s).")
+        code("Direction   Cut, Boost, or Both — which side of the threshold triggers a gain change\nThreshold   −60 … 0 dB\nRatio       1:1 … 10:1\nAttack      1 … 100 ms    (default 10 ms)\nRelease     10 … 1000 ms  (default 100 ms)\nRange       −24 … 0 dB    (Cut/Both only — caps the maximum attenuation)")
+        body("Dynamic EQ bands are evaluated before the rest of the dynamics chain (Part 3) and before the Dialogue-Relative Leveler, so their effect is already present in the signal that the Dialogue-Relative Leveler, Multiband Compressor, and other dynamics stages react to. In Stereo or Mid-Side channel mode, Dynamic EQ currently applies identically to all channels rather than per-channel.")
+
         h2("Part 3 — The Dynamics Processing Chain")
         body("Ten always-present stages plus several optional gates run in strict order, before the EQ and crossover stages described in Parts 2 and 7. Each stage can be enabled/disabled independently; disabling a stage makes it a true zero-cost passthrough.")
 
-        h2("3.1 Dialogue-Relative Leveler")
+        h2("3.1 Infrasonic High-Pass Filter")
+        body("A dedicated protection filter separate from the DC blocker, intended to remove content below the range that contributes to audible reproduction but that can still consume driver excursion and amplifier headroom (HVAC rumble, record warps, room pressurisation transients). Cutoff is adjustable 5–30 Hz (default 18 Hz), with slope options of 24, 48 (default), or 96 dB/octave built from cascaded Butterworth sections. It can be routed to the main stereo chain, to the subwoofer output path only, or to both independently — useful if the mains already roll off adequately on their own but the subwoofer channel needs separate protection. This is the very first stage in the entire processing chain, ahead of every other dynamics, EQ, or correction stage.")
+
+        h2("3.2 Dialogue-Relative Leveler")
         body("A specialised dynamic processor that boosts dialogue only when it's being masked by other audio content in the mix. Unlike a conventional single-band dynamic EQ that reacts to the dialogue band's absolute level, this processor compares the dialogue band's level against the full program level and applies gain only when the gap between them exceeds a configurable threshold:")
         code("shortfall_dB = (program_dB − targetGap_dB) − dialogue_dB\ntargetBoost_dB = shortfall_dB · (boostRatio − 1) / boostRatio\ntargetBoost_dB = min(targetBoost_dB, maxBoost_dB)")
         body("The dialogue band is isolated with a configurable bandpass filter (default 300–3500 Hz, adjustable 100–8000 Hz). Both the dialogue band and the full program are measured with RMS envelope detectors (configurable window, default 300 ms). The gain correction uses asymmetric attack/release times (default 150 ms attack, 900 ms release) for natural response: fast attack when masking worsens, slow release when it eases. A program gate (default −50 dBFS) freezes correction during near-silence to prevent chasing the noise floor. The maximum boost is clamped (default 8 dB, adjustable 0–15 dB). This stage runs immediately after Dynamic EQ and before FIR Impulse Response in the signal chain.")
         body("An optional Voice-Activity Gate scales this stage's correction by how speech-like the dialogue band's envelope currently looks, using its syllabic modulation rate (energy concentrated around 3-8 Hz, the same property behind the Speech Transmission Index metric) as the cue rather than pitch — this avoids requiring continuous voicing, so it doesn't drop out on unvoiced consonants the way a pitch-based detector would. A configurable floor ensures the correction never drops to zero outright, so unusual or heavily processed dialogue still receives partial rescue. Not a perfect classifier: strongly rhythmic content with modulation energy that happens to fall in the same 3-8 Hz range (e.g. fast tremolo picking, some rhythmic strumming) can still register as speech-like — this is a probabilistic cue, not a guarantee.")
 
-        h2("3.2 DC Offset Filter")
+        h2("3.3 DC Offset Filter")
         body("A first-order high-pass tuned to an exact 0.5 Hz corner, implemented as the classic DC-blocking difference equation:")
         code("y[n] = x[n] − x[n−1] + R·y[n−1]           R = exp(−π / fs)")
         body("At 48 kHz, R ≈ 0.9999346; the pole radius is recomputed whenever the sample rate changes, keeping the −3 dB point pinned at 0.5 Hz regardless of rate. At 20 Hz the resulting attenuation is under 0.0001 dB — completely inaudible — while any sub-Hz DC bias inherited from a source file or ADC is fully removed before it can bias downstream dynamics detectors or force a power amplifier's output stage to dissipate energy at idle. Recommended: leave on.")
-
-        h2("3.3 Infrasonic High-Pass Filter")
-        body("A dedicated protection filter separate from the DC blocker, intended to remove content below the range that contributes to audible reproduction but that can still consume driver excursion and amplifier headroom (HVAC rumble, record warps, room pressurisation transients). Cutoff is adjustable 5–30 Hz (default 18 Hz), with slope options of 24, 48 (default), or 96 dB/octave built from cascaded Butterworth sections. It can be routed to the main stereo chain, to the subwoofer output path only, or to both independently — useful if the mains already roll off adequately on their own but the subwoofer channel needs separate protection.")
 
         h2("3.4 Stereo Widener (3-Band M/S)")
         body("Splits the stereo image into three frequency bands (crossovers adjustable, default 200 Hz and 4000 Hz) and applies an independent mid/side width factor to each:")
@@ -1455,13 +1465,13 @@ final class UserGuideSettingsViewController: NSViewController {
         code("Quadratic       parabolic knee, flat top above the upper bound  (default)\nCubic           tanh-style odd-harmonic saturation — \"tape\" character\nSine            sin()-based saturation — smoother, fewer high harmonics\nTube            sign-dependent asymmetric shaping — even-harmonic \"tube\" character")
         body("The knee width is expressed as a fraction of the remaining headroom between the threshold and 0 dBFS (0.0–1.0), rather than an absolute dB span — this keeps the same knee setting producing proportionally similar shaping regardless of where the threshold itself is set. Defaults: threshold −1.5 dB, knee 0.5, drive 0 dB. An Auto-Compensate Gain option automatically trims output level to offset the perceptual loudness increase that drive introduces, so you can audition curve character without a loudness bias skewing the comparison. A separate asymmetry trim biases the positive and negative half-cycles independently, which can recover 1–2 dB of headroom on waveforms with inherent DC-like asymmetry (common in some acoustic and vintage-mastered material).")
 
-        h2("3.12 De-Harsh Tilt Filter")
-        body("A first-order high-shelf tilt applied after the soft clipper, gently attenuating the top end above a configurable centre (default 3500 Hz) by a configurable amount (default −1.5 dB) — a broad, musical way to tame digital harshness or an overly forward tweeter without dulling the whole mix.")
-
-        h2("3.13 Brickwall Limiter and True-Peak Guard")
-        body("The final safety stage: a look-ahead limiter that delays the signal by the look-ahead time so it can \"see\" upcoming peaks before they arrive, then applies just enough gain reduction to keep every sample at or below the ceiling:")
+        h2("3.12 Brickwall Limiter and True-Peak Guard")
+        body("A look-ahead limiter that delays the signal by the look-ahead time so it can \"see\" upcoming peaks before they arrive, then applies just enough gain reduction to keep every sample at or below the ceiling:")
         code("y[n] = x[n − lookaheadSamples] × gain[n]\ngain_dB[n] = ceiling_dB − max(|x[n]|, |x[n−1]|, …, |x[n−lookaheadSamples]|)_dB\ngain[n]   = min(gain[n], gain[n−1] + releaseRate)      (release is rate-limited; attack is instantaneous)")
-        body("Defaults: ceiling −0.2 dB, attack effectively instantaneous (0.1 ms), release 20 ms, look-ahead 2 ms. With True-Peak Guard enabled, the same 4× oversampler described in §2.8 detects inter-sample peaks — the analogue reconstruction filter in a DAC can produce a peak between two digital samples that is higher than either sample itself, and a limiter operating only on the discrete samples would miss it. True-Peak Guard measures peaks at 4× the sample rate so the ceiling is honoured in the analogue domain too, not just on paper. Recommendation: keep a small amount of headroom below full scale (e.g. −0.5 dB or lower) with True-Peak Guard engaged if your downstream DAC or streaming pipeline is sensitive to inter-sample overs.")
+        body("Defaults: ceiling −0.2 dB, attack effectively instantaneous (0.1 ms), release 20 ms, look-ahead 2 ms. With True-Peak Guard enabled, the same 4× oversampler described in §2.8 detects inter-sample peaks — the analogue reconstruction filter in a DAC can produce a peak between two digital samples that is higher than either sample itself, and a limiter operating only on the discrete samples would miss it. True-Peak Guard measures peaks at 4× the sample rate so the ceiling is honoured in the analogue domain too, not just on paper. Recommendation: keep a small amount of headroom below full scale (e.g. −0.5 dB or lower) with True-Peak Guard engaged if your downstream DAC or streaming pipeline is sensitive to inter-sample overs. Note: this mid-chain position applies with 4× Oversampling off; turning 4× Oversampling on moves the clipper and limiter to run after the rest of the dynamics chain instead — see §2.8.")
+
+        h2("3.13 De-Harsh Tilt Filter")
+        body("A first-order high-shelf tilt applied after the soft clipper and brickwall limiter, gently attenuating the top end above a configurable centre (default 3500 Hz) by a configurable amount (default −1.5 dB) — a broad, musical way to tame digital harshness or an overly forward tweeter without dulling the whole mix.")
 
         h2("3.14 Auto-Headroom Gain Rider")
         body("An optional slow-acting control-rate process that watches the sustained gain reduction reported by the limiter and, if it stays persistently above a target amount, gradually turns down the drive into the clipper/limiter so the limiter can relax back toward transparent, occasional-peak-only operation rather than continuously working. Configurable target sustained gain reduction (0.5–6.0 dB, default 3.0 dB), a maximum reduction ceiling (3–12 dB, default 6.0 dB), and a response speed (Fast ≈ 3 s, Medium ≈ 10 s, Slow ≈ 30 s time constant).")
@@ -1479,6 +1489,9 @@ final class UserGuideSettingsViewController: NSViewController {
         body("The final stage before output, applied only when bit-depth reduction downstream could otherwise introduce quantisation distortion:")
         code("Off          No dither\nTPDF         Triangular probability density function — minimum-bias, flat noise floor\nShaped       Frequency-weighted noise shaping for 44.1/48 kHz\nHigh-Order   5th-order Wannamaker/Lipshitz psychoacoustic noise shaping (optimal for 44.1/48 kHz)")
         body("Use TPDF when your output path truncates to a lower bit depth than the processing chain; use one of the shaped modes to push residual noise into a frequency range the ear is least sensitive to.")
+
+        h2("3.17 FIR Impulse Response")
+        body("A general-purpose convolution stage that loads a user-supplied WAV/AIFF impulse response and convolves it with the signal — a separate convolution slot from FIR Correction, which is Room Correction's own convolution filter (§6.6). Intended for headphone or speaker correction profiles distributed as a raw impulse response (for example AutoEq or manufacturer headphone-correction files) rather than a measurement-derived filter. Runs early in the dynamics chain, immediately after the Dialogue-Relative Leveler (§3.2). Once a file is loaded, the control shows the tap count and the impulse response's native sample rate; Clear removes it.")
 
         h2("Part 4 — Spatial, Correction, and System Utilities")
         body("This suite of independently-toggled processes sits alongside the main dynamics chain and addresses stereo image, room, and multi-listener correction problems that a conventional EQ/dynamics chain cannot solve on its own.")
@@ -1517,7 +1530,7 @@ final class UserGuideSettingsViewController: NSViewController {
         body("The unified subwoofer-integration module: a configurable crossover (default 80 Hz, 40–200 Hz range) built from Linkwitz-Riley, Butterworth, or Bessel alignment, with independent sub trim gain (±12 dB), polarity inversion, fractional-sample sub delay, an optional low-shelf for room-gain compensation, per-speaker/subwoofer distance entry for time-alignment calculations, and up to 8 dedicated parametric EQ bands that apply only to the low-band (subwoofer) signal — useful for taming room modes in the sub's bandwidth without touching the mains' EQ.")
 
         h2("4.10 Stereo Mode Fold-Down")
-        body("The very first stage in the chain (§3.1): Stereo (default, unmodified), Wide Mono (mid-only signal sent to both channels, useful for checking mono compatibility), or True Mono (L+R summed and halved, identical output on both channels).")
+        body("The very first stage in the chain (§1.2): Stereo (default, unmodified), Wide Mono (mid-only signal sent to both channels, useful for checking mono compatibility), or True Mono (L+R summed and halved, identical output on both channels).")
 
         h2("Part 5 — Metering and Analysis")
 

@@ -262,8 +262,6 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Sync Buffer", body: "Synchronises processing buffer to latency mode, preventing dropouts at low latency settings.")
                         Divider()
-                        definitionEntry(title: "Pipeline Latency", body: "If using with video, your AV receiver or display's audio delay/lip-sync setting may need adjustment by the algorithmic latency amount.")
-                        Divider()
                         definitionEntry(title: "EQ Headroom Compensation", body: "Predictive static preamp gain, computed from EQ and room-correction filter design data, that backs off input level ahead of time to prevent EQ/correction boosts from clipping. Complements the reactive Dynamic Gain Rider.")
                         Divider()
                         definitionEntry(title: "Multi-Seat Avg.", body: "Composite HRTF correction averaged across multiple listening positions for more robust room correction.")
