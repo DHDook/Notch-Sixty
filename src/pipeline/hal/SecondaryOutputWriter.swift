@@ -46,6 +46,7 @@ final class SecondaryOutputWriter: @unchecked Sendable {
     private let ringBuffers: [AudioRingBuffer]
     private let channelCount: Int
     private let config: Config
+    private var isCallbackRefRetained = false
 
     // Atomic gain applied before ring-buffer write (linear, ≥ 0)
     private let _gainBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(1.0).bitPattern))
@@ -152,6 +153,7 @@ final class SecondaryOutputWriter: @unchecked Sendable {
             inputProc:       Self.secondaryRenderCallback,
             inputProcRefCon: Unmanaged.passRetained(self).toOpaque()
         )
+        isCallbackRefRetained = true
         let cbStatus = AudioUnitSetProperty(unit,
                                              kAudioUnitProperty_SetRenderCallback,
                                              kAudioUnitScope_Input,
@@ -160,18 +162,20 @@ final class SecondaryOutputWriter: @unchecked Sendable {
                                              UInt32(MemoryLayout<AURenderCallbackStruct>.size))
         guard cbStatus == noErr else {
             logger.error("SecondaryOutputWriter: set render callback failed (\(cbStatus))")
-            Unmanaged.passUnretained(self).release()
+            releaseCallbackRefIfNeeded()
             AudioComponentInstanceDispose(unit)
             return false
         }
 
         guard AudioUnitInitialize(unit) == noErr else {
             logger.error("SecondaryOutputWriter: AudioUnitInitialize failed")
+            releaseCallbackRefIfNeeded()
             AudioComponentInstanceDispose(unit)
             return false
         }
         guard AudioOutputUnitStart(unit) == noErr else {
             logger.error("SecondaryOutputWriter: AudioOutputUnitStart failed")
+            releaseCallbackRefIfNeeded()
             AudioUnitUninitialize(unit)
             AudioComponentInstanceDispose(unit)
             return false
@@ -189,7 +193,16 @@ final class SecondaryOutputWriter: @unchecked Sendable {
         AudioUnitUninitialize(unit)
         AudioComponentInstanceDispose(unit)
         audioUnit = nil
+        releaseCallbackRefIfNeeded()
         logger.info("SecondaryOutputWriter: stopped for device \(self.config.deviceID)")
+    }
+
+    /// Releases the manual retain taken on self for the C render callback.
+    /// Idempotent, safe to call from multiple exit paths and from deinit.
+    private func releaseCallbackRefIfNeeded() {
+        guard isCallbackRefRetained else { return }
+        Unmanaged.passUnretained(self).release()
+        isCallbackRefRetained = false
     }
 
     // MARK: - Write (Primary Render Callback Thread)

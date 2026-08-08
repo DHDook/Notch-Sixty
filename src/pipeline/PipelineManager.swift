@@ -68,6 +68,12 @@ final class PipelineManager {
         driverID: AudioDeviceID?,
         driverOutputDeviceID: AudioDeviceID
     ) -> PipelineStartResult {
+        // Never silently overwrite a running pipeline.
+        if renderPipeline != nil {
+            logger.warning("startPipeline called with an existing pipeline still running -- stopping it first")
+            stopPipeline()
+        }
+
         let pipeline = RenderPipeline(eqConfiguration: eqConfiguration)
 
         switch pipeline.configure(

@@ -159,6 +159,7 @@ final class RenderPipeline {
     deinit {
         // Perform synchronous cleanup directly since we can't call actor-isolated methods.
         // The HAL managers' deinit will handle stopping the audio units.
+        driverCapture?.stop()
         callbackContext = nil
     }
 

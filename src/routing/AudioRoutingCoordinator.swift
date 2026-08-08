@@ -128,6 +128,7 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     let pipelineManager: PipelineManager
     private var observedOutputDeviceID: AudioDeviceID?
+    private var observedVolumeDeviceID: AudioDeviceID?
     private var isReconfiguring = false
     private var cancellables = Set<AnyCancellable>()
     let eqStager: EQCoefficientStager
@@ -401,7 +402,6 @@ final class AudioRoutingCoordinator: ObservableObject {
             // Delay to allow CoreAudio to propagate sample rate change
             logger.debug("Waiting for driver sample rate propagation before HAL input configuration")
             DispatchQueue.main.asyncAfter(deadline: .now() + Constants.sampleRatePropagationDelay) { [weak self] in
-                self?.isReconfiguring = false
                 self?.continueRoutingConfiguration(
                     inputDeviceID: devices.inputDeviceID,
                     outputDeviceID: devices.outputDeviceID,
@@ -413,7 +413,6 @@ final class AudioRoutingCoordinator: ObservableObject {
                 )
             }
         } else {
-            isReconfiguring = false
             continueRoutingConfiguration(
                 inputDeviceID: devices.inputDeviceID,
                 outputDeviceID: devices.outputDeviceID,
@@ -552,6 +551,7 @@ final class AudioRoutingCoordinator: ObservableObject {
         resolvedCaptureMode: CaptureMode,
         captureDecision: CaptureModeDecision
     ) {
+        defer { isReconfiguring = false }
 
         // Set up jack connection listener on built-in device (Intel Macs: headphone jack detection)
         // Note: Apple Silicon uses device count change detection in DeviceEnumerationService instead
@@ -1045,7 +1045,10 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     private func setupVolumeListener(for outputDeviceID: AudioDeviceID) {
         // Clean up previous listener if any
-        volumeService.stopObservingDeviceVolumeChanges(deviceID: outputDeviceID)
+        if let previousDeviceID = observedVolumeDeviceID {
+            volumeService.stopObservingDeviceVolumeChanges(deviceID: previousDeviceID)
+        }
+        observedVolumeDeviceID = outputDeviceID
 
         // Start observing volume changes for loudness compensation
         volumeService.observeDeviceVolumeChanges(deviceID: outputDeviceID) { [weak self] volume in

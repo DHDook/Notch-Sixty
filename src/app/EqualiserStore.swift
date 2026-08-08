@@ -738,10 +738,11 @@ final class EqualiserStore: ObservableObject {
     private let compareModeTimer = CompareModeTimer()
     
     // MARK: - Private Properties
-    
+
     let persistence: AppStatePersistence
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "EqualiserStore")
     private var cancellables = Set<AnyCancellable>()
+    private var listeningRTATimerCancellable: AnyCancellable?
 
     private func makeSweepAnalyser() -> SweepAnalyser {
         let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
@@ -1282,13 +1283,14 @@ final class EqualiserStore: ObservableObject {
             .sink { [weak self] mode in
                 guard let self = self else { return }
                 if case .slowAverage = mode {
-                    // Publish slow average data periodically
-                    Timer.publish(every: 0.1, on: .main, in: .common)
+                    self.listeningRTATimerCancellable = Timer.publish(every: 0.1, on: .main, in: .common)
                         .autoconnect()
                         .sink { [weak self] _ in
                             self?.listeningRTAData = self?.rtaAnalyzer.getSlowAverageData() ?? []
                         }
-                        .store(in: &self.cancellables)
+                } else {
+                    self.listeningRTATimerCancellable?.cancel()
+                    self.listeningRTATimerCancellable = nil
                 }
             }
             .store(in: &cancellables)

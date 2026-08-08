@@ -12,7 +12,7 @@ import Atomics
 ///
 /// Each crossover point carries independent LP and HP coefficients,
 /// supporting asymmetric frequencies, slopes, and types per side.
-struct ActiveCrossoverEngine {
+final class ActiveCrossoverEngine {
     static let maxSections = 8
 
     // MARK: - Band Output Buffers
@@ -135,8 +135,19 @@ struct ActiveCrossoverEngine {
         upperHPConvolution = nil
     }
 
+    deinit {
+        _leftLow.deinitialize(count: _maxFrameCount);   _leftLow.deallocate()
+        _leftMid.deinitialize(count: _maxFrameCount);   _leftMid.deallocate()
+        _leftHigh.deinitialize(count: _maxFrameCount);  _leftHigh.deallocate()
+        _rightLow.deinitialize(count: _maxFrameCount);  _rightLow.deallocate()
+        _rightMid.deinitialize(count: _maxFrameCount);  _rightMid.deallocate()
+        _rightHigh.deinitialize(count: _maxFrameCount); _rightHigh.deallocate()
+        leftWorkBuf.deinitialize(count: _maxFrameCount);  leftWorkBuf.deallocate()
+        rightWorkBuf.deinitialize(count: _maxFrameCount); rightWorkBuf.deallocate()
+    }
+
     // MARK: - Processing
-    mutating func process(leftIn: UnsafePointer<Float>, rightIn: UnsafePointer<Float>, frameCount: Int) {
+    func process(leftIn: UnsafePointer<Float>, rightIn: UnsafePointer<Float>, frameCount: Int) {
         guard activeBandCount > 1 else { return }
 
         // Apply pending IIR update
@@ -203,7 +214,7 @@ struct ActiveCrossoverEngine {
     // MARK: - Filter Section Application
 
     @inline(__always)
-    private mutating func applyFilterSections(
+    private func applyFilterSections(
         _ buf: UnsafeMutablePointer<Float>,
         sections: SectionArray,
         stateOffset: Int,
@@ -224,7 +235,7 @@ struct ActiveCrossoverEngine {
     }
 
     // MARK: - Pending Update Application
-    mutating func applyPendingUpdate() {
+    func applyPendingUpdate() {
         if hasIIRPendingUpdate.exchange(false, ordering: .acquiringAndReleasing) {
             activeLowerLP = pendingLowerLP
             activeLowerHP = pendingLowerHP

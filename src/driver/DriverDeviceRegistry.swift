@@ -336,11 +336,14 @@ public final class DriverDeviceRegistry: ObservableObject, DriverDeviceDiscoveri
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        
+
         var name: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        
+
         let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &name)
+        if status == noErr {
+            _ = name?.takeRetainedValue()
+        }
         return status == noErr
     }
     
