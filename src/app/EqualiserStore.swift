@@ -1954,6 +1954,8 @@ final class EqualiserStore: ObservableObject {
     /// Saves the current room correction settings as a new preset.
     @discardableResult
     func saveCurrentAsRoomCorrectionPreset(named name: String) throws -> RoomCorrectionPreset {
+        let isFIRActive = convolutionConfig.enabled && convolutionConfig.irDisplayName == "Room Correction (FIR)"
+
         let settings = RoomCorrectionPresetSettings(
             targetCurveName: selectedTargetCurveName,
             customTargetCurve: selectedTargetCurveName == "Custom…" ? targetCurve.map(TargetCurvePoint.init) : nil,
@@ -1964,8 +1966,8 @@ final class EqualiserStore: ObservableObject {
                 .prefix(eqConfiguration.leftState.roomCorrection.activeBandCount)
                 .map { PresetBand(from: $0) },
             roomCorrectionEnabled: dynamicsConfig.advanced.roomCorrectionEnabled,
-            firTapCount: nil, // FIR correction not yet implemented for room correction presets
-            firCorrectionApplied: false
+            firTapCount: isFIRActive ? firCorrectionTapCount : nil,
+            firCorrectionApplied: isFIRActive
         )
         let preset = RoomCorrectionPreset(
             metadata: RoomCorrectionPresetMetadata(name: name, createdAt: Date(), modifiedAt: Date()),
@@ -2003,10 +2005,33 @@ final class EqualiserStore: ObservableObject {
         roomCorrectionBandCount = bands.count
         routingCoordinator.eqStager.setRoomCorrectionLayerBypass(!preset.settings.roomCorrectionEnabled)
 
-        if preset.settings.firCorrectionApplied, preset.settings.firTapCount != nil {
-            // Recompute path, per §4.2 recommendation — re-derive rather than store raw samples.
-            // Note: FIR room correction not yet implemented, this is a placeholder.
-            logger.info("FIR room correction not yet implemented")
+        if preset.settings.firCorrectionApplied, let tapCount = preset.settings.firTapCount {
+            // Recompute path, per §4.2 recommendation — re-derive rather than store raw
+            // samples. Mirrors applyFIRRoomCorrection(tapCount:) exactly, using the
+            // measuredResponse/targetCurve already restored above from this preset.
+            let measured = measuredResponse
+            let tgt = targetCurve
+            let sr = Double(streamSampleRate)
+
+            Task.detached(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                let (left, right) = RoomCorrectionEngine.minimumPhaseFIRCorrection(
+                    measured:   measured,
+                    target:     tgt,
+                    sampleRate: sr,
+                    tapCount:   tapCount
+                )
+                await MainActor.run {
+                    self.routingCoordinator.pipelineManager.renderPipeline?
+                        .callbackContext?.updateConvolutionIR(left: left, right: right)
+                    self.routingCoordinator.pipelineManager.renderPipeline?
+                        .callbackContext?.setConvolutionEnabled(true)
+                    self.convolutionConfig.enabled = true
+                    self.convolutionConfig.irDisplayName = "Room Correction (FIR)"
+                    self.convolutionConfig.irBookmark = nil
+                    self.firCorrectionTapCount = tapCount   // keep the tap-count picker in sync
+                }
+            }
         }
 
         var adv = dynamicsConfig.advanced
