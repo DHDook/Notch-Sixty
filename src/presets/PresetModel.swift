@@ -82,6 +82,7 @@ struct PresetSettings: Codable, Sendable {
         case rightBands
         case bands  // v1: decode as leftBands and rightBands
         case dynamicsConfig
+        case compareMode
     }
 
     var globalBypass: Bool
@@ -94,6 +95,9 @@ struct PresetSettings: Codable, Sendable {
     /// Dynamics configuration (soft clipper + brickwall limiter).
     /// Missing in presets saved before this field was added; defaults to `.default`.
     var dynamicsConfig: DynamicsConfig
+    /// EQ processing mode (biquad / linear phase / mixed phase / etc).
+    /// Missing in presets saved before this field was added; defaults to `.eq`.
+    var compareMode: CompareMode
 
     /// Creates PresetSettings with default values (empty bands).
     init(
@@ -103,7 +107,8 @@ struct PresetSettings: Codable, Sendable {
         channelMode: String = "linked",
         leftBands: [PresetBand] = [],
         rightBands: [PresetBand] = [],
-        dynamicsConfig: DynamicsConfig = .default
+        dynamicsConfig: DynamicsConfig = .default,
+        compareMode: CompareMode = .eq
     ) {
         self.globalBypass = globalBypass
         self.inputGain = inputGain
@@ -114,6 +119,7 @@ struct PresetSettings: Codable, Sendable {
         // Derive activeBandCount from left bands (linked mode uses same count for both)
         self.activeBandCount = leftBands.count
         self.dynamicsConfig = dynamicsConfig
+        self.compareMode = compareMode
     }
 
     init(from decoder: Decoder) throws {
@@ -168,6 +174,8 @@ struct PresetSettings: Codable, Sendable {
 
         // Added after initial release — missing in older presets; safe to default.
         dynamicsConfig = try container.decodeIfPresent(DynamicsConfig.self, forKey: .dynamicsConfig) ?? .default
+        // Added after initial release — missing in older presets; safe to default.
+        compareMode = try container.decodeIfPresent(CompareMode.self, forKey: .compareMode) ?? .eq
     }
 
     func encode(to encoder: Encoder) throws {
@@ -179,6 +187,7 @@ struct PresetSettings: Codable, Sendable {
         try container.encode(leftBands, forKey: .leftBands)
         try container.encode(rightBands, forKey: .rightBands)
         try container.encode(dynamicsConfig, forKey: .dynamicsConfig)
+        try container.encode(compareMode, forKey: .compareMode)
         // Note: We don't encode the legacy "bands" key - clean break for new saves
     }
 }
@@ -343,7 +352,7 @@ struct Preset: Codable, Sendable, Identifiable {
 
     /// Creates a preset from the current EQConfiguration state.
     @MainActor
-    init(name: String, from config: EQConfiguration, inputGain: Float = 0, outputGain: Float = 0) {
+    init(name: String, from config: EQConfiguration, inputGain: Float = 0, outputGain: Float = 0, compareMode: CompareMode = .eq) {
         self.version = Preset.currentVersion
         self.metadata = PresetMetadata(name: name)
 
@@ -357,7 +366,8 @@ struct Preset: Codable, Sendable, Identifiable {
             channelMode: config.channelMode.rawValue,
             leftBands: config.leftState.userEQ.bands.prefix(leftActiveCount).map { PresetBand(from: $0) },
             rightBands: config.rightState.userEQ.bands.prefix(rightActiveCount).map { PresetBand(from: $0) },
-            dynamicsConfig: config.dynamicsConfig
+            dynamicsConfig: config.dynamicsConfig,
+            compareMode: compareMode
         )
     }
 

@@ -318,7 +318,7 @@ final class PresetManager: ObservableObject {
     @MainActor
     private func createDefaultFlatPreset() -> Preset {
         let config = EQConfiguration(initialBandCount: EQConfiguration.defaultBandCount)
-        return Preset(name: "Default", from: config, inputGain: 0.0, outputGain: 0.0)
+        return Preset(name: "Default", from: config, inputGain: 0.0, outputGain: 0.0, compareMode: .eq)
     }
 
     // MARK: - Preset Creation and Application
@@ -326,8 +326,8 @@ final class PresetManager: ObservableObject {
     /// Creates a new preset from the current EQ configuration.
     /// Note: New presets always have isFactoryPreset=false (user-owned).
     @MainActor
-    func createPreset(named name: String, from config: EQConfiguration, inputGain: Float, outputGain: Float) throws -> Preset {
-        var preset = Preset(name: name, from: config, inputGain: inputGain, outputGain: outputGain)
+    func createPreset(named name: String, from config: EQConfiguration, inputGain: Float, outputGain: Float, compareMode: CompareMode = .eq) throws -> Preset {
+        var preset = Preset(name: name, from: config, inputGain: inputGain, outputGain: outputGain, compareMode: compareMode)
         preset.metadata.isFactoryPreset = false  // Explicit: user presets are never factory
         try savePreset(preset)
         return preset
@@ -414,7 +414,8 @@ final class PresetManager: ObservableObject {
         bands: [EQBandConfiguration],
         inputGain: Float,
         outputGain: Float,
-        dynamicsConfig: DynamicsConfig
+        dynamicsConfig: DynamicsConfig,
+        compareMode: CompareMode
     ) -> Bool {
         guard let presetName = selectedPresetName,
               let preset = preset(named: presetName) else {
@@ -426,7 +427,8 @@ final class PresetManager: ObservableObject {
         guard settings.activeBandCount == activeBandCount,
               settings.inputGain == inputGain,
               settings.outputGain == outputGain,
-              settings.dynamicsConfig == dynamicsConfig else {
+              settings.dynamicsConfig == dynamicsConfig,
+              settings.compareMode == compareMode else {
             return false
         }
 

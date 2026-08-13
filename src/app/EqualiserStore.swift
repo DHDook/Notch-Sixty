@@ -85,6 +85,8 @@ final class EqualiserStore: ObservableObject {
             if compareMode == .mixedPhase {
                 routingCoordinator.eqStager.refreshMixedPhaseIRIfNeeded()
             }
+
+            presetManager.markAsModified()
         }
     }
     
@@ -1340,7 +1342,8 @@ final class EqualiserStore: ObservableObject {
                 bands: eqConfiguration.bands,
                 inputGain: eqConfiguration.inputGain,
                 outputGain: eqConfiguration.outputGain,
-                dynamicsConfig: eqConfiguration.dynamicsConfig
+                dynamicsConfig: eqConfiguration.dynamicsConfig,
+                compareMode: compareMode
             )
             if !matches {
                 presetManager.isModified = true
@@ -1862,7 +1865,8 @@ final class EqualiserStore: ObservableObject {
             named: name,
             from: eqConfiguration,
             inputGain: inputGain,
-            outputGain: outputGain
+            outputGain: outputGain,
+            compareMode: compareMode
         )
         presetManager.selectPreset(named: name)
         return preset
@@ -1882,6 +1886,7 @@ final class EqualiserStore: ObservableObject {
         // Apply input/output gains
         inputGain = preset.settings.inputGain
         outputGain = preset.settings.outputGain
+        compareMode = preset.settings.compareMode
 
         // Push dynamics config to the running pipeline (pipeline rebuild via
         // reapplyConfiguration also picks it up, but an explicit push ensures
