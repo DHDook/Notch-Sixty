@@ -6,8 +6,7 @@ import SwiftUI
 /// View model for EQ band configuration UI.
 /// Derives presentation state from EqualiserStore without containing business logic.
 @MainActor
-@Observable
-final class EQViewModel {
+struct EQViewModel {
     private unowned let store: EqualiserStore
 
     init(store: EqualiserStore) {

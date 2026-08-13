@@ -6,8 +6,7 @@ import SwiftUI
 /// View model for preset management UI.
 /// Derives presentation state from EqualiserStore without containing business logic.
 @MainActor
-@Observable
-final class PresetViewModel {
+struct PresetViewModel {
     private unowned let store: EqualiserStore
     
     init(store: EqualiserStore) {

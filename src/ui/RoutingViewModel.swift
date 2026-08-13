@@ -6,8 +6,7 @@ import SwiftUI
 /// View model for routing status display.
 /// Derives presentation state from EqualiserStore without containing business logic.
 @MainActor
-@Observable
-final class RoutingViewModel {
+struct RoutingViewModel {
     private unowned let store: EqualiserStore
     
     init(store: EqualiserStore) {
