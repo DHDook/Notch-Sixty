@@ -138,6 +138,7 @@ final class AudioRingBuffer: @unchecked Sendable {
     ///   - destination: Pointer to the buffer to read into.
     ///   - count: Number of samples to read.
     /// - Returns: The number of samples actually read (may be less than `count` if buffer is empty).
+    @discardableResult
     @inline(__always)
     func read(into destination: UnsafeMutablePointer<Float>, count: Int) -> Int {
         // Load indices atomically with acquire semantics

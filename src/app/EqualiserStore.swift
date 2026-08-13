@@ -199,7 +199,7 @@ final class EqualiserStore: ObservableObject {
                 }
 
                 // Play sweeps at this position
-                var positionSweeps: [SingleSweepMeasurement] = []
+                let positionSweeps: [SingleSweepMeasurement] = []
 
                 for sweepIndex in 0..<sweepsPerPosition {
                     tfMeasurementStep = .playingSweep(
@@ -2003,7 +2003,7 @@ final class EqualiserStore: ObservableObject {
         roomCorrectionBandCount = bands.count
         routingCoordinator.eqStager.setRoomCorrectionLayerBypass(!preset.settings.roomCorrectionEnabled)
 
-        if preset.settings.firCorrectionApplied, let tapCount = preset.settings.firTapCount {
+        if preset.settings.firCorrectionApplied, preset.settings.firTapCount != nil {
             // Recompute path, per §4.2 recommendation — re-derive rather than store raw samples.
             // Note: FIR room correction not yet implemented, this is a placeholder.
             logger.info("FIR room correction not yet implemented")
