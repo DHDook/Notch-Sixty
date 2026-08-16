@@ -70,7 +70,7 @@ final class PresetViewModelTests: XCTestCase {
     
     func testBandwidthDisplayMode_canBeSet() {
         let store = EqualiserStore()
-        let vm = PresetViewModel(store: store)
+        var vm = PresetViewModel(store: store)
         
         vm.bandwidthDisplayMode = .qFactor
         

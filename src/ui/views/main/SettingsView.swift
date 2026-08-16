@@ -1157,6 +1157,13 @@ struct RoomCalibrationTab: View {
             } header: {
                 Text("Correction Filters")
             }
+
+            // ── Multi-Channel Transfer Function Measurement (Phase 3) ─────────
+            Section {
+                MultiChannelMeasurementView()
+            } header: {
+                Text("Multi-Channel Measurement")
+            }
         }
         .formStyle(.grouped)
         .padding()

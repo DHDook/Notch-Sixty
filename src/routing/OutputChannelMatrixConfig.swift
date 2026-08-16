@@ -176,6 +176,9 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
     var polarityInverted: Bool = false
     /// Time delay for speaker time alignment (ms). Range: 0–100 ms.
     var delayMs: Float = 0.0
+    /// FIR compensation delay (ms) to align channels with different FIR latencies.
+    /// Automatically computed by recomputeDelayCompensation. Not user-configurable.
+    var firCompensationDelayMs: Float = 0.0
     var limiter: OutputChannelLimiterConfig = .default
     /// Group delay all-pass coefficients for crossover phase alignment.
     /// Fitted by CrossoverGroupDelayEngine to minimise group delay error at crossover points.
@@ -198,7 +201,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, label, source, target, isEnabled, eq
-        case gainTrimDB, polarityInverted, delayMs, limiter, groupDelayAllPassCoefficients
+        case gainTrimDB, polarityInverted, delayMs, firCompensationDelayMs, limiter, groupDelayAllPassCoefficients
         case eqOversamplingEnabled, excursionProtection
     }
 
@@ -212,6 +215,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         gainTrimDB: Float = 0.0,
         polarityInverted: Bool = false,
         delayMs: Float = 0.0,
+        firCompensationDelayMs: Float = 0.0,
         limiter: OutputChannelLimiterConfig = .default,
         groupDelayAllPassCoefficients: [BiquadCoefficients] = [],
         eqOversamplingEnabled: Bool = false,
@@ -226,6 +230,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         self.gainTrimDB = gainTrimDB
         self.polarityInverted = polarityInverted
         self.delayMs = delayMs
+        self.firCompensationDelayMs = firCompensationDelayMs
         self.limiter = limiter
         self.groupDelayAllPassCoefficients = groupDelayAllPassCoefficients
         self.eqOversamplingEnabled = eqOversamplingEnabled
@@ -245,6 +250,7 @@ struct OutputChannelConfig: Codable, Sendable, Identifiable {
         gainTrimDB = try c.decodeIfPresent(Float.self, forKey: .gainTrimDB) ?? 0.0
         polarityInverted = try c.decodeIfPresent(Bool.self, forKey: .polarityInverted) ?? false
         delayMs = try c.decodeIfPresent(Float.self, forKey: .delayMs) ?? 0.0
+        firCompensationDelayMs = try c.decodeIfPresent(Float.self, forKey: .firCompensationDelayMs) ?? 0.0
         limiter = try c.decodeIfPresent(OutputChannelLimiterConfig.self, forKey: .limiter) ?? .default
         groupDelayAllPassCoefficients = try c.decodeIfPresent([BiquadCoefficients].self, forKey: .groupDelayAllPassCoefficients) ?? []
         eqOversamplingEnabled = try c.decodeIfPresent(Bool.self, forKey: .eqOversamplingEnabled) ?? false

@@ -141,9 +141,19 @@ final class EqualiserStore: ObservableObject {
 
     @Published var tfMeasurementStep: TransferFunctionMeasurementStep = .idle
     @Published var transferFunctionDataset: TransferFunctionDataset = TransferFunctionDataset()
+    @Published var combinedMeasurementResult: CombinedMeasurementResult?
 
     // MARK: - Diaphragm Resonance Detection (Part 2 Task AB)
     @Published var resonanceCandidates: [Int: [DiaphragmResonanceDetector.ResonanceCandidate]] = [:]
+
+    // MARK: - FIR Correction Tracking for Delay Compensation
+    /// Tracks the last applied correction result per channel for delay compensation.
+    /// Used to compute FIR latency differences between channels.
+    @Published private(set) var lastAppliedCorrections: [Int: ChannelCorrectionResult] = [:]
+
+    // MARK: - Multi-Channel Correction Preset Manager
+    /// Manages persistence of multi-channel room correction measurements and corrections.
+    @Published var multiChannelCorrectionPresetManager = MultiChannelCorrectionPresetManager()
 
     private var micPositionContinuation: CheckedContinuation<Void, Never>?
 
@@ -151,6 +161,156 @@ final class EqualiserStore: ObservableObject {
     func confirmMicPositioned() {
         micPositionContinuation?.resume()
         micPositionContinuation = nil
+    }
+
+    // MARK: - Private Helpers for Transfer Function Measurement
+
+    /// Plays one sweep and captures the response. Reuses the exact mechanism
+    /// startSweepMeasurement() uses, wrapped to be awaitable for sequential
+    /// multi-sweep/multi-channel measurement.
+    @MainActor
+    private func captureSingleSweep(
+        micDeviceID: AudioDeviceID,
+        sweepDurationSeconds: Double,
+        onProgress: @escaping (Double) -> Void
+    ) async -> SingleSweepMeasurement? {
+        guard let pipeline = routingCoordinator.pipelineManager.renderPipeline else { return nil }
+        let sampleRate = pipeline.sampleRate
+
+        let analyser = SweepAnalyser(
+            sampleRate: sampleRate,
+            duration: sweepDurationSeconds,
+            startFrequency: 20.0,
+            endFrequency: 20000.0
+        )
+        analyser.startRecording()
+        let sweep = analyser.sweepSignal
+
+        let session = MicCaptureSession(deviceID: micDeviceID, sampleRate: sampleRate, channelCount: 1)
+        session.start { [weak analyser] audioBuffer in
+            guard let samples = audioBuffer[0] else { return }
+            analyser?.recordSamples(samples)
+        }
+
+        pipeline.setSweepAnalyser(analyser)
+
+        return await withCheckedContinuation { continuation in
+            pipeline.onSweepPlaybackComplete = { [weak self] in
+                guard let self else { continuation.resume(returning: nil); return }
+                session.stop()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 500_000_000) // reverb tail, matches startSweepMeasurement
+                    analyser.stopRecording()
+
+                    let (ir, complexResponse, response, snr):
+                        ([Float], [ComplexResponsePoint], [TargetCurvePoint], Double) =
+                        await Task(priority: .userInitiated) {
+                            let computedIR = analyser.computeImpulseResponse(referenceSweep: sweep)
+                            // Call the complex version once and derive magnitude-dB from it locally,
+                            // rather than calling computeFrequencyResponse separately — that method
+                            // is just a thin wrapper around computeComplexFrequencyResponse internally,
+                            // so calling both would run the FFT twice for the same IR.
+                            let computedComplex = analyser.computeComplexFrequencyResponse(ir: computedIR, micCalibration: self.micCalibration)
+                            let complexPoints = computedComplex.map { ComplexResponsePoint(frequency: $0.frequency, real: $0.real, imag: $0.imag) }
+                            let computedResponse = computedComplex.map { point -> TargetCurvePoint in
+                                let magnitude = sqrt(point.real * point.real + point.imag * point.imag)
+                                let gainDB = magnitude > 0 ? 20.0 * log10(magnitude) : -120.0
+                                return TargetCurvePoint(frequency: point.frequency, gainDB: gainDB)
+                            }
+                            let computedSNR = RoomCorrectionEngine.estimateSNR(ir: computedIR, sampleRate: sampleRate)
+                            return (computedIR, complexPoints, computedResponse, computedSNR)
+                        }.value
+
+                    continuation.resume(returning: SingleSweepMeasurement(
+                        impulseResponse: ir,
+                        complexResponse: complexResponse,
+                        magnitudeResponseDB: response,
+                        estimatedSNRDB: snr,
+                        sampleRate: sampleRate,
+                        capturedAt: Date()
+                    ))
+                }
+            }
+            pipeline.startSweepPlayback(signal: sweep)
+        }
+    }
+
+    /// Temporarily disables every output channel except `channelIndex` so it can be
+    /// measured in isolation. Returns the original enabled-state snapshot to restore
+    /// afterward. No-op (returns empty) if channelIndex == -1 (measuring the main chain).
+    @MainActor
+    private func soloOutputChannel(_ channelIndex: Int) -> [Int: Bool] {
+        guard channelIndex >= 0, channelIndex < outputChannelMatrix.channels.count else { return [:] }
+        var previousStates: [Int: Bool] = [:]
+        for i in outputChannelMatrix.channels.indices {
+            previousStates[i] = outputChannelMatrix.channels[i].isEnabled
+            outputChannelMatrix.channels[i].isEnabled = (i == channelIndex)
+        }
+        routingCoordinator.reapplyConfiguration()
+        return previousStates
+    }
+
+    @MainActor
+    private func restoreOutputChannelStates(_ previousStates: [Int: Bool]) {
+        guard !previousStates.isEmpty else { return }
+        for (i, enabled) in previousStates {
+            guard i < outputChannelMatrix.channels.count else { continue }
+            outputChannelMatrix.channels[i].isEnabled = enabled
+        }
+        routingCoordinator.reapplyConfiguration()
+    }
+
+    /// Temporarily enables exactly the given channels (disabling all others) for
+    /// a combined measurement. Returns the original enabled-state snapshot to
+    /// restore afterward.
+    @MainActor
+    private func soloOutputChannels(_ channelIndices: Set<Int>) -> [Int: Bool] {
+        var previousStates: [Int: Bool] = [:]
+        for i in outputChannelMatrix.channels.indices {
+            previousStates[i] = outputChannelMatrix.channels[i].isEnabled
+            outputChannelMatrix.channels[i].isEnabled = channelIndices.contains(i)
+        }
+        routingCoordinator.reapplyConfiguration()
+        return previousStates
+    }
+
+    /// Measures multiple output channels playing together, for comparison against
+    /// their individual measurements (captured separately via
+    /// runTransferFunctionMeasurement). Uses the existing per-channel measurements
+    /// already in transferFunctionDataset, if present, as individualMeasurements.
+    @MainActor
+    func runCombinedMeasurement(
+        micInputDeviceID: AudioDeviceID,
+        channelIndices: [Int],
+        sweepDurationSeconds: Double = 10.0
+    ) async {
+        tfMeasurementStep = .preparingChannel(channelIndex: -2, label: "Combined")
+
+        let previousStates = soloOutputChannels(Set(channelIndices))
+        try? await Task.sleep(nanoseconds: 250_000_000) // let solo state take effect, matches Phase 1
+
+        guard let measurement = await captureSingleSweep(
+            micDeviceID: micInputDeviceID,
+            sweepDurationSeconds: sweepDurationSeconds,
+            onProgress: { _ in }
+        ) else {
+            restoreOutputChannelStates(previousStates)
+            tfMeasurementStep = .idle
+            return
+        }
+
+        restoreOutputChannelStates(previousStates)
+
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        combinedMeasurementResult = CombinedMeasurementResult(
+            impulseResponse: measurement.impulseResponse,
+            magnitudeResponseDB: measurement.magnitudeResponseDB,
+            complexResponse: measurement.complexResponse,
+            sampleRate: sr,
+            capturedAt: Date(),
+            individualMeasurements: transferFunctionDataset.channels.isEmpty ? nil : transferFunctionDataset
+        )
+        tfMeasurementStep = .allChannelsComplete
     }
 
     /// Runs a multi-channel transfer function measurement.
@@ -174,22 +334,35 @@ final class EqualiserStore: ObservableObject {
         tfMeasurementStep = .idle
         transferFunctionDataset = TransferFunctionDataset()
 
-        for (channelIdx, channelIndex) in channelIndices.enumerated() {
+        for (_, channelIndex) in channelIndices.enumerated() {
+            try? Task.checkCancellation()
+
             let label = channelIndex == -1 ? "Main Chain" : "Channel \(channelIndex)"
 
             // Prepare channel
             tfMeasurementStep = .preparingChannel(channelIndex: channelIndex, label: label)
 
+            let source: SignalSource = channelIndex == -1
+                ? .mainsLeft
+                : (channelIndex < outputChannelMatrix.channels.count
+                    ? outputChannelMatrix.channels[channelIndex].source
+                    : .mainsLeft)
+
             // Initialize channel data
             var channelData = ChannelTransferFunctionData(
                 channelIndex: channelIndex,
                 channelLabel: label,
-                signalSource: .mainsLeft // Placeholder - should be derived from channelIndex
+                signalSource: source
             )
             channelData.sweepsByPosition = Array(repeating: [], count: micPositionCount)
 
+            let previousChannelStates = soloOutputChannel(channelIndex)
+            try? await Task.sleep(nanoseconds: 250_000_000) // let solo state take effect
+
             // Measure at each position
             for positionIndex in 0..<micPositionCount {
+                try? Task.checkCancellation()
+
                 // Pause for mic repositioning if not first position
                 if positionIndex > 0 {
                     tfMeasurementStep = .awaitingMicPosition(positionIndex: positionIndex, totalPositions: micPositionCount)
@@ -199,9 +372,11 @@ final class EqualiserStore: ObservableObject {
                 }
 
                 // Play sweeps at this position
-                let positionSweeps: [SingleSweepMeasurement] = []
+                var positionSweeps: [SingleSweepMeasurement] = []
 
                 for sweepIndex in 0..<sweepsPerPosition {
+                    try? Task.checkCancellation()
+
                     tfMeasurementStep = .playingSweep(
                         channelIndex: channelIndex,
                         label: label,
@@ -211,39 +386,61 @@ final class EqualiserStore: ObservableObject {
                         progress: 0.0
                     )
 
-                    // TODO: Implement actual sweep playback and capture
-                    // This requires integration with RenderCallbackContext
-                    // For now, this is a placeholder
-
-                    // Simulate progress
-                    for progress in stride(from: 0.0, through: 1.0, by: 0.1) {
-                        tfMeasurementStep = .playingSweep(
-                            channelIndex: channelIndex,
-                            label: label,
-                            sweepIndex: sweepIndex,
-                            totalSweeps: sweepsPerPosition,
-                            positionIndex: positionIndex,
-                            progress: progress
-                        )
-                        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                    if let measurement = await captureSingleSweep(
+                        micDeviceID: micInputDeviceID,
+                        sweepDurationSeconds: sweepDurationSeconds,
+                        onProgress: { progress in
+                            self.tfMeasurementStep = .playingSweep(
+                                channelIndex: channelIndex, label: label,
+                                sweepIndex: sweepIndex, totalSweeps: sweepsPerPosition,
+                                positionIndex: positionIndex, progress: progress
+                            )
+                        }
+                    ) {
+                        positionSweeps.append(measurement)
                     }
-
-                    // TODO: Store actual sweep measurement
-                    // positionSweeps.append(sweepMeasurement)
                 }
 
                 channelData.sweepsByPosition[positionIndex] = positionSweeps
             }
 
+            restoreOutputChannelStates(previousChannelStates)
+
             // Compute averaged IR for this channel
             tfMeasurementStep = .computingIR(channelIndex: channelIndex, label: label)
 
-            // TODO: Compute averaged IR using RoomCorrectionEngine.averageImpulseResponses
-            // TODO: Estimate SNR using RoomCorrectionEngine.estimateSNR
-            let averageSNR = 40.0 // Placeholder
+            let allSweeps = channelData.sweepsByPosition.flatMap { $0 }
+            let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
 
-            // Set placeholder averaged IR to mark as measured
-            channelData.averagedIR = [Float](repeating: 0.0, count: 48000) // Placeholder
+            let (averagedIR, averagedComplex, averagedMagnitude, averageSNR):
+                ([Float], [ComplexResponsePoint], [TargetCurvePoint], Double) =
+                await Task(priority: .userInitiated) {
+                    let ir = RoomCorrectionEngine.averageImpulseResponses(
+                        allSweeps.map { (ir: $0.impulseResponse, snrDB: $0.estimatedSNRDB) },
+                        sampleRate: sr
+                    )
+                    let snr = RoomCorrectionEngine.estimateSNR(ir: ir, sampleRate: sr)
+                    guard !ir.isEmpty else { return (ir, [], [], snr) }
+                    // Instantiate one SweepAnalyser purely to reach computeComplexFrequencyResponse,
+                    // which is a pure function of (ir, micCalibration) — doesn't depend on any
+                    // recording state. Reuse this single instance for both complex and magnitude,
+                    // deriving magnitude from the complex result rather than calling the two
+                    // methods separately (same reasoning as in captureSingleSweep above — avoids
+                    // running the FFT twice).
+                    let analyser = SweepAnalyser(sampleRate: sr)
+                    let complex = analyser.computeComplexFrequencyResponse(ir: ir, micCalibration: self.micCalibration)
+                    let complexPoints = complex.map { ComplexResponsePoint(frequency: $0.frequency, real: $0.real, imag: $0.imag) }
+                    let magnitude = complex.map { point -> TargetCurvePoint in
+                        let mag = sqrt(point.real * point.real + point.imag * point.imag)
+                        let gainDB = mag > 0 ? 20.0 * log10(mag) : -120.0
+                        return TargetCurvePoint(frequency: point.frequency, gainDB: gainDB)
+                    }
+                    return (ir, complexPoints, magnitude, snr)
+                }.value
+
+            channelData.averagedIR = averagedIR.isEmpty ? nil : averagedIR
+            channelData.averagedComplexResponse = averagedComplex.isEmpty ? nil : averagedComplex
+            channelData.averagedMagnitudeDB = averagedMagnitude.isEmpty ? nil : averagedMagnitude
 
             // Add to dataset
             transferFunctionDataset.channels.append(channelData)
@@ -262,7 +459,8 @@ final class EqualiserStore: ObservableObject {
     func detectResonances(for channelIndex: Int, params: DiaphragmResonanceDetector.DetectionParameters = .init()) {
         guard let channel = transferFunctionDataset.channels.first(where: { $0.channelIndex == channelIndex }),
               let magnitude = channel.averagedMagnitudeDB else { return }
-        let candidates = DiaphragmResonanceDetector.detect(magnitudeResponseDB: magnitude, params: params)
+        let magnitudeTuples = magnitude.map { ($0.frequency, $0.gainDB) }
+        let candidates = DiaphragmResonanceDetector.detect(magnitudeResponseDB: magnitudeTuples, params: params)
         resonanceCandidates[channelIndex] = candidates
     }
 
@@ -371,8 +569,6 @@ final class EqualiserStore: ObservableObject {
 
     // MARK: - Combined Multi-Driver Measurement (Part 2 Task AD)
 
-    @Published var combinedMeasurementResult: CombinedMeasurementResult? = nil
-
     /// Plays a log-swept sine through ALL enabled output channels simultaneously
     /// and captures the result at the listening position.
     ///
@@ -445,7 +641,7 @@ final class EqualiserStore: ObservableObject {
             let response = analyser.computeFrequencyResponse(ir: ir, micCalibration: calibration)
             return CombinedMeasurementResult(
                 impulseResponse: ir,
-                magnitudeResponseDB: response,
+                magnitudeResponseDB: response.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) },
                 complexResponse: [],  // Not computed in this implementation
                 sampleRate: sr,
                 capturedAt: Date(),
@@ -456,7 +652,7 @@ final class EqualiserStore: ObservableObject {
         measurementState            = .done
         combinedMeasurementResult   = result
         if let r = result {
-            measuredResponse = r.magnitudeResponseDB
+            measuredResponse = r.magnitudeResponseDB.map { ($0.frequency, $0.gainDB) }
         }
         return result
     }
@@ -1481,6 +1677,227 @@ final class EqualiserStore: ObservableObject {
         // Delegate to the unified apply entry point so both the Loopback section
         // and the Correction Filters section go through the same path.
         applyRoomCalibration(maxBands: maxBands)
+    }
+
+    // MARK: - Per-Channel Transfer Function Correction (Phase 4)
+
+    /// Computes an IIR parametric correction for one measured channel.
+    /// - Parameters:
+    ///   - channelIndex: Which measured channel (must exist in transferFunctionDataset.channels).
+    ///   - maxBands: Maximum correction bands, matching the pattern used by the
+    ///     existing global applyRoomCorrection(maxBands:).
+    @MainActor
+    func computeIIRCorrection(for channelIndex: Int, maxBands: Int = 16) -> ChannelCorrectionResult? {
+        guard let channel = transferFunctionDataset.channels.first(where: { $0.channelIndex == channelIndex }),
+              let magnitude = channel.averagedMagnitudeDB else { return nil }
+
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+
+        let magnitudeTuples = magnitude.map { ($0.frequency, $0.gainDB) }
+        let targetTuples = targetCurve.map { ($0.frequency, $0.gainDB) }
+
+        let bands = RoomCorrectionEngine.fitBands(
+            measured: magnitudeTuples,
+            target: targetTuples,
+            sampleRate: sr,
+            maxBands: maxBands
+        )
+
+        let result = ChannelCorrectionResult(
+            channelIndex: channelIndex,
+            channelLabel: channel.channelLabel,
+            firKernelLeft: [],
+            firKernelRight: [],
+            excessPhaseCoefficients: [],
+            iirBands: bands,
+            correctionMode: .iirParametric,
+            targetCurve: magnitude,
+            residualResponseDB: nil
+        )
+
+        return result
+    }
+
+    /// Applies IIR correction to a specific output channel.
+    /// - Parameters:
+    ///   - channelIndex: Which channel to apply correction to (0..<outputChannelMatrix.channels.count).
+    ///   - maxBands: Maximum correction bands (8–20, default 16).
+    @MainActor
+    func applyIIRCorrectionToChannel(_ channelIndex: Int, maxBands: Int = 16) {
+        guard let result = computeIIRCorrection(for: channelIndex, maxBands: maxBands) else { return }
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+
+        // Access the output channel processor via the callback context
+        if let processors = routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.outputChannelProcessors,
+           channelIndex >= 0 && channelIndex < processors.count,
+           let processor = processors[channelIndex] {
+            processor.applyCorrectionResult(result, sampleRate: sr)
+            // Track the applied result for delay compensation
+            lastAppliedCorrections[channelIndex] = result
+            // Recompute delay compensation across all channels
+            recomputeDelayCompensation()
+        }
+    }
+
+    /// Applies FIR correction to a specific output channel.
+    /// - Parameters:
+    ///   - channelIndex: Which channel to apply correction to (0..<outputChannelMatrix.channels.count).
+    ///   - withPhaseCorrection: Whether to include excess-phase all-pass correction.
+    ///   - tapCount: FIR kernel length in samples (default 4096).
+    @MainActor
+    func applyFIRCorrectionToChannel(
+        _ channelIndex: Int,
+        withPhaseCorrection: Bool,
+        tapCount: Int = 4096
+    ) {
+        // Capture necessary data before entering detached task
+        guard let channel = transferFunctionDataset.channels.first(where: { $0.channelIndex == channelIndex }),
+              let magnitude = channel.averagedMagnitudeDB,
+              let rawIR = channel.averagedIR else { return }
+
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let tgt = targetCurve.map { ($0.frequency, $0.gainDB) }
+        let chLabel = channel.channelLabel
+        let magTuples = magnitude.map { ($0.frequency, $0.gainDB) }
+
+        // Run FIR computation off main thread (expensive operation)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let (left, right) = RoomCorrectionEngine.minimumPhaseFIRCorrection(
+                measured: magTuples,
+                target: tgt,
+                sampleRate: sr,
+                tapCount: tapCount
+            )
+
+            var excessPhaseCoeffs: [BiquadCoefficients] = []
+            if withPhaseCorrection {
+                let minPhaseIR = RoomCorrectionEngine.extractMinimumPhaseIR(ir: rawIR, tapCount: tapCount)
+                let excessPhaseIR = RoomCorrectionEngine.computeExcessPhaseIR(
+                    measuredIR: rawIR,
+                    minimumPhaseIR: minPhaseIR,
+                    tapCount: tapCount
+                )
+                excessPhaseCoeffs = RoomCorrectionEngine.fitAllPassChainToExcessPhase(
+                    excessPhaseIR: excessPhaseIR,
+                    sampleRate: sr
+                )
+            }
+
+            let result = ChannelCorrectionResult(
+                channelIndex: channelIndex,
+                channelLabel: chLabel,
+                firKernelLeft: left,
+                firKernelRight: right,
+                excessPhaseCoefficients: excessPhaseCoeffs,
+                iirBands: [],
+                correctionMode: withPhaseCorrection ? .firWithPhaseCorrection : .firMinimumPhase,
+                targetCurve: magnitude,
+                residualResponseDB: nil
+            )
+
+            await MainActor.run {
+                guard let self else { return }
+
+                // Access the output channel processor via the callback context
+                if let processors = self.routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.outputChannelProcessors,
+                   channelIndex >= 0 && channelIndex < processors.count,
+                   let processor = processors[channelIndex] {
+                    processor.applyCorrectionResult(result, sampleRate: sr)
+                    self.lastAppliedCorrections[channelIndex] = result
+                    // Recompute delay compensation across all channels
+                    self.recomputeDelayCompensation()
+                }
+            }
+        }
+    }
+
+    /// Recomputes delay compensation across all output channels so that any
+    /// FIR-correction-induced latency differences between channels don't cause
+    /// driver misalignment. Should be called after applying, changing, or
+    /// removing a correction on any channel.
+    ///
+    /// Design: each channel's *total* delay is its own user-configured baseline
+    /// (physical driver placement, set via the existing per-channel delay control)
+    /// plus however much extra latency its current FIR correction adds. To keep
+    /// every channel's *acoustic arrival time* aligned, every channel needs
+    /// (maxFIRLatency - thisChannelFIRLatency) added on top of its own baseline —
+    /// so the channel with the longest FIR filter defines the floor, and every
+    /// other channel gets bumped up to match it.
+    @MainActor
+    func recomputeDelayCompensation() {
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+
+        func firLatencyMs(for channelIndex: Int) -> Double {
+            guard let result = lastAppliedCorrections[channelIndex],
+                  result.correctionMode != .iirParametric else { return 0.0 }
+            let tapCount = result.firKernelLeft.count
+            return Double(tapCount) / sr * 1000.0
+        }
+
+        let maxFIRLatencyMs = outputChannelMatrix.channels.indices.map(firLatencyMs).max() ?? 0.0
+
+        for i in outputChannelMatrix.channels.indices {
+            let baselineMs = Double(outputChannelMatrix.channels[i].delayMs)
+            // Subtract this channel's own FIR latency from the baseline first, so
+            // repeated calls to this function don't keep compounding — always
+            // compute from the channel's *original* user-set baseline, not from
+            // whatever compensation was added last time.
+            let thisFIRLatencyMs = firLatencyMs(for: i)
+            let compensationMs = maxFIRLatencyMs - thisFIRLatencyMs
+            let totalMs = baselineMs + compensationMs
+
+            // Update the FIR compensation delay in the config
+            outputChannelMatrix.channels[i].firCompensationDelayMs = Float(compensationMs)
+
+            // Apply the total delay to the processor
+            if let processors = routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.outputChannelProcessors,
+               i < processors.count,
+               let processor = processors[i] {
+                processor.setDelayMs(Float(totalMs), sampleRate: sr)
+            }
+        }
+    }
+
+    // MARK: - Multi-Channel Correction Preset Save/Load
+
+    /// Saves the current multi-channel measurement and applied corrections as a preset.
+    @MainActor
+    func saveCurrentAsMultiChannelCorrectionPreset(named name: String) throws -> MultiChannelCorrectionPreset {
+        let settings = MultiChannelCorrectionPresetSettings(
+            channels: transferFunctionDataset.channels,
+            appliedCorrections: lastAppliedCorrections,
+            combinedMeasurement: combinedMeasurementResult
+        )
+        let preset = MultiChannelCorrectionPreset(
+            metadata: MultiChannelCorrectionPresetMetadata(name: name, createdAt: Date(), modifiedAt: Date()),
+            settings: settings
+        )
+        try multiChannelCorrectionPresetManager.savePreset(preset)
+        multiChannelCorrectionPresetManager.selectPreset(named: name)
+        return preset
+    }
+
+    /// Loads a multi-channel correction preset and restores measurements and corrections.
+    @MainActor
+    func loadMultiChannelCorrectionPreset(_ preset: MultiChannelCorrectionPreset) {
+        transferFunctionDataset = TransferFunctionDataset(channels: preset.settings.channels)
+        combinedMeasurementResult = preset.settings.combinedMeasurement
+
+        // Re-apply each channel's correction — reuses Phase 4/5's apply path directly,
+        // so corrections are re-computed-and-applied consistently rather than trying
+        // to restore raw DSP state (FIR kernels, all-pass coefficients) directly,
+        // matching the "re-derive rather than store raw samples" principle already
+        // established by the FIR-preset-persistence fix earlier in this project.
+        let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        for (channelIndex, result) in preset.settings.appliedCorrections {
+            if let processors = routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.outputChannelProcessors,
+               channelIndex >= 0 && channelIndex < processors.count,
+               let processor = processors[channelIndex] {
+                processor.applyCorrectionResult(result, sampleRate: sr)
+                lastAppliedCorrections[channelIndex] = result
+            }
+        }
+        multiChannelCorrectionPresetManager.selectPreset(named: preset.metadata.name)
     }
 
     /// Computes and loads a minimum-phase FIR correction from the most recent loopback measurement.

@@ -5,11 +5,24 @@
 
 import Foundation
 
+/// Helper struct for complex frequency response points (Codable-compatible tuple replacement).
+struct ComplexResponsePoint: Codable, Sendable {
+    let frequency: Double
+    let real: Double
+    let imag: Double
+
+    init(frequency: Double, real: Double, imag: Double) {
+        self.frequency = frequency
+        self.real = real
+        self.imag = imag
+    }
+}
+
 /// One complete measurement from a single sweep at a single mic position.
-struct SingleSweepMeasurement: Sendable {
+struct SingleSweepMeasurement: Codable, Sendable {
     var impulseResponse: [Float]
-    var complexResponse: [(frequency: Double, real: Double, imag: Double)]
-    var magnitudeResponseDB: [(frequency: Double, gainDB: Double)]
+    var complexResponse: [ComplexResponsePoint]
+    var magnitudeResponseDB: [TargetCurvePoint]
     /// SNR estimate in dB. Computed as peak IR energy vs pre-sweep noise floor.
     var estimatedSNRDB: Double
     var sampleRate: Double
@@ -17,7 +30,7 @@ struct SingleSweepMeasurement: Sendable {
 }
 
 /// All measurements for one output channel across all positions and sweeps.
-struct ChannelTransferFunctionData: Identifiable, Sendable {
+struct ChannelTransferFunctionData: Identifiable, Codable, Sendable {
     var id: UUID = UUID()
     /// Index in OutputChannelMatrixConfig.channels. –1 = main stereo output.
     var channelIndex: Int
@@ -26,14 +39,14 @@ struct ChannelTransferFunctionData: Identifiable, Sendable {
     /// [position][sweep] — sweepsByPosition[p][s] = sweep s at position p.
     var sweepsByPosition: [[SingleSweepMeasurement]] = []
     var averagedIR: [Float]? = nil
-    var averagedComplexResponse: [(frequency: Double, real: Double, imag: Double)]? = nil
-    var averagedMagnitudeDB: [(frequency: Double, gainDB: Double)]? = nil
+    var averagedComplexResponse: [ComplexResponsePoint]? = nil
+    var averagedMagnitudeDB: [TargetCurvePoint]? = nil
     var isMeasured: Bool { averagedIR != nil }
     var totalSweepCount: Int { sweepsByPosition.flatMap { $0 }.count }
 }
 
 /// Complete dataset for all channels.
-struct TransferFunctionDataset: Sendable {
+struct TransferFunctionDataset: Codable, Sendable {
     var channels: [ChannelTransferFunctionData] = []
     var sampleRate: Double = 48000
     var micCalibration: MicCalibration? = nil
@@ -45,10 +58,10 @@ struct TransferFunctionDataset: Sendable {
 // MARK: - Combined Multi-Driver Measurement (Part 2 Task AD)
 
 /// The result of a combined multi-driver measurement.
-struct CombinedMeasurementResult: Sendable {
+struct CombinedMeasurementResult: Codable, Sendable {
     var impulseResponse: [Float]
-    var magnitudeResponseDB: [(frequency: Double, gainDB: Double)]
-    var complexResponse: [(frequency: Double, real: Double, imag: Double)]
+    var magnitudeResponseDB: [TargetCurvePoint]
+    var complexResponse: [ComplexResponsePoint]
     var sampleRate: Double
     var capturedAt: Date
     /// Individual driver measurements used for comparison.
@@ -57,7 +70,7 @@ struct CombinedMeasurementResult: Sendable {
 }
 
 /// Correction result for one channel.
-struct ChannelCorrectionResult: Sendable {
+struct ChannelCorrectionResult: Codable, Sendable {
     var channelIndex: Int
     var channelLabel: String
     var firKernelLeft: [Float]
@@ -65,9 +78,9 @@ struct ChannelCorrectionResult: Sendable {
     var excessPhaseCoefficients: [BiquadCoefficients]
     var iirBands: [EQBandConfiguration]
     var correctionMode: CorrectionMode
-    var targetCurve: [(frequency: Double, gainDB: Double)]
+    var targetCurve: [TargetCurvePoint]
     /// Residual response measured with correction active. nil until verification.
-    var residualResponseDB: [(frequency: Double, gainDB: Double)]?
+    var residualResponseDB: [TargetCurvePoint]?
 }
 
 /// How the correction is applied to the signal chain.

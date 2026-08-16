@@ -169,8 +169,8 @@ enum TransferFunctionDatasetStore {
                     excessPhaseCoefficients: codableCorrection.excessPhaseCoefficients,
                     iirBands: codableCorrection.iirBands,
                     correctionMode: codableCorrection.correctionMode,
-                    targetCurve: codableCorrection.targetCurve.map { (frequency: $0.frequency, gainDB: $0.gainDB) },
-                    residualResponseDB: codableCorrection.residualResponseDB?.map { (frequency: $0.frequency, gainDB: $0.gainDB) }
+                    targetCurve: codableCorrection.targetCurve.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) },
+                    residualResponseDB: codableCorrection.residualResponseDB?.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) }
                 )
             }
         }

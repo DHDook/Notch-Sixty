@@ -114,7 +114,7 @@ enum TransferFunctionCorrectionEngine {
             excessPhaseCoefficients: excessPhaseCoefficients,
             iirBands: iirBands,
             correctionMode: params.mode,
-            targetCurve: params.targetCurve,
+            targetCurve: params.targetCurve.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) },
             residualResponseDB: nil
         )
     }

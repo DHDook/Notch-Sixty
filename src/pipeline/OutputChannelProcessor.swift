@@ -14,6 +14,14 @@ final class OutputChannelProcessor {
     // Applied between the calibration trim and the per-output EQ.
     private var groupDelayAllPassChain = AllPassChain()
 
+    // MARK: - Room Correction FIR and Phase Correction
+    // Dedicated convolution engine for per-channel FIR room correction.
+    // Separate from the main chain's global convolution.
+    private var roomCorrectionConvolution: ConvolutionEngine?
+    // Dedicated all-pass chain for room correction excess-phase correction.
+    // Independent of groupDelayAllPassChain (used for crossover phase alignment).
+    private var roomCorrectionAllPassChain = AllPassChain()
+
     // MARK: - Pre-EQ Calibration Trim + Post-EQ DSP (polarity, delay, limiter)
     // gainTrimDB is applied BEFORE the EQ chain (pre-EQ calibration trim).
     // Polarity, delay, and limiter are applied AFTER the EQ chain.
@@ -83,7 +91,9 @@ final class OutputChannelProcessor {
         eqProcessor.applyEQConfig(config.eq, sampleRate: sampleRate)
         setCalibrationTrimDB(config.gainTrimDB)
         setPolarity(inverted: config.polarityInverted)
-        setDelayMs(config.delayMs, sampleRate: sampleRate)
+        // Sum baseline delay with FIR compensation delay
+        let totalDelayMs = config.delayMs + config.firCompensationDelayMs
+        setDelayMs(totalDelayMs, sampleRate: sampleRate)
         setLimiterConfig(config.limiter, sampleRate: sampleRate)
         setEQOversamplingEnabled(config.eqOversamplingEnabled, sampleRate: sampleRate)
         setExcursionProtectionConfig(config.excursionProtection, baseCeilingDB: config.limiter.ceilingDB, sampleRate: sampleRate)
@@ -158,14 +168,25 @@ final class OutputChannelProcessor {
         case .iirParametric:
             // Apply IIR bands to the per-output EQ
             applyIIRCorrection(result.iirBands, sampleRate: sampleRate)
+            // Clear any prior FIR state
+            roomCorrectionConvolution = nil
+            roomCorrectionAllPassChain.stageSections(from: [[]], sampleRate: sampleRate)
+
         case .firMinimumPhase:
-            // FIR correction would require adding a ConvolutionEngine to each output channel
-            // This is a future enhancement - for now, we only support IIR mode
-            break
+            // Apply FIR magnitude correction only
+            let convolution = roomCorrectionConvolution ?? ConvolutionEngine()
+            convolution.updateIR(left: result.firKernelLeft, right: result.firKernelRight)
+            roomCorrectionConvolution = convolution
+            // Clear any prior phase correction (magnitude-only mode)
+            roomCorrectionAllPassChain.stageSections(from: [[]], sampleRate: sampleRate)
+
         case .firWithPhaseCorrection:
-            // FIR + phase correction would require ConvolutionEngine + all-pass chain
-            // This is a future enhancement - for now, we only support IIR mode
-            break
+            // Apply FIR magnitude correction + excess phase correction
+            let convolution = roomCorrectionConvolution ?? ConvolutionEngine()
+            convolution.updateIR(left: result.firKernelLeft, right: result.firKernelRight)
+            roomCorrectionConvolution = convolution
+            // Apply excess phase correction via all-pass chain
+            roomCorrectionAllPassChain.stageSections(from: [result.excessPhaseCoefficients], sampleRate: sampleRate)
         }
     }
 
@@ -208,6 +229,15 @@ final class OutputChannelProcessor {
         groupDelayAllPassChain.applyPendingUpdates()
         groupDelayAllPassChain.process(buffer: leftBuf, frameCount: UInt32(frameCount))
         if let r = rightBuf { groupDelayAllPassChain.process(buffer: r, frameCount: UInt32(frameCount)) }
+
+        // 2.5. Room correction FIR + phase correction
+        // Applied after crossover phase alignment, before parametric EQ.
+        if let convolution = roomCorrectionConvolution {
+            convolution.process(bufL: leftBuf, bufR: rightBuf, frameCount: frameCount)
+        }
+        roomCorrectionAllPassChain.applyPendingUpdates()
+        roomCorrectionAllPassChain.process(buffer: leftBuf, frameCount: UInt32(frameCount))
+        if let r = rightBuf { roomCorrectionAllPassChain.process(buffer: r, frameCount: UInt32(frameCount)) }
 
         // 3. Per-output EQ (all modes: bypass, flat, standard, linear, mixed, delta)
         // EQ always sees the calibrated signal level — inputGainDB and outputGainDB
