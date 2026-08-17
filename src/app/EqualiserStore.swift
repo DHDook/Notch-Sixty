@@ -284,6 +284,10 @@ final class EqualiserStore: ObservableObject {
         channelIndices: [Int],
         sweepDurationSeconds: Double = 10.0
     ) async {
+        guard routingCoordinator.pipelineManager.renderPipeline != nil else {
+            tfMeasurementStep = .failed(channelIndex: -2, reason: "Audio pipeline is not running — check your output device and try again.")
+            return
+        }
         tfMeasurementStep = .preparingChannel(channelIndex: -2, label: "Combined")
 
         let previousStates = soloOutputChannels(Set(channelIndices))
@@ -295,7 +299,7 @@ final class EqualiserStore: ObservableObject {
             onProgress: { _ in }
         ) else {
             restoreOutputChannelStates(previousStates)
-            tfMeasurementStep = .idle
+            tfMeasurementStep = .failed(channelIndex: -2, reason: "Sweep capture failed")
             return
         }
 
@@ -331,6 +335,13 @@ final class EqualiserStore: ObservableObject {
         sweepDurationSeconds: Double = 10.0,
         minSNRDB: Double = 30.0
     ) async {
+        guard routingCoordinator.pipelineManager.renderPipeline != nil else {
+            tfMeasurementStep = .failed(
+                channelIndex: channelIndices.first ?? -1,
+                reason: "Audio pipeline is not running — check your output device and try again."
+            )
+            return
+        }
         tfMeasurementStep = .idle
         transferFunctionDataset = TransferFunctionDataset()
 
@@ -410,6 +421,15 @@ final class EqualiserStore: ObservableObject {
             tfMeasurementStep = .computingIR(channelIndex: channelIndex, label: label)
 
             let allSweeps = channelData.sweepsByPosition.flatMap { $0 }
+
+            guard !allSweeps.isEmpty else {
+                tfMeasurementStep = .failed(
+                    channelIndex: channelIndex,
+                    reason: "No sweeps could be captured for \(label) — check the microphone input device."
+                )
+                return
+            }
+
             let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
 
             let (averagedIR, averagedComplex, averagedMagnitude, averageSNR):
@@ -1711,7 +1731,7 @@ final class EqualiserStore: ObservableObject {
             excessPhaseCoefficients: [],
             iirBands: bands,
             correctionMode: .iirParametric,
-            targetCurve: magnitude,
+            targetCurve: targetCurve.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) },
             residualResponseDB: nil
         )
 
@@ -1757,6 +1777,7 @@ final class EqualiserStore: ObservableObject {
 
         let sr = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
         let tgt = targetCurve.map { ($0.frequency, $0.gainDB) }
+        let capturedTargetCurve = targetCurve.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) }
         let chLabel = channel.channelLabel
         let magTuples = magnitude.map { ($0.frequency, $0.gainDB) }
 
@@ -1791,7 +1812,7 @@ final class EqualiserStore: ObservableObject {
                 excessPhaseCoefficients: excessPhaseCoeffs,
                 iirBands: [],
                 correctionMode: withPhaseCorrection ? .firWithPhaseCorrection : .firMinimumPhase,
-                targetCurve: magnitude,
+                targetCurve: capturedTargetCurve,
                 residualResponseDB: nil
             )
 
@@ -1897,6 +1918,7 @@ final class EqualiserStore: ObservableObject {
                 lastAppliedCorrections[channelIndex] = result
             }
         }
+        recomputeDelayCompensation()
         multiChannelCorrectionPresetManager.selectPreset(named: preset.metadata.name)
     }
 
