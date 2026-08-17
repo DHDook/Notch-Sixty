@@ -57,7 +57,7 @@ struct EqualiserMain: App {
                 }
         }
         .defaultPosition(.center)
-        .defaultSize(width: 1060, height: 530)
+        .defaultSize(width: 1060, height: 450)
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {
@@ -106,6 +106,36 @@ struct EqualiserMain: App {
                     bootstrapAppDelegate()
                 }
         }
+
+        // RTA Analyser window
+        Window("RTA Analyser", id: "rta-window") {
+            RTAWindowView()
+                .environmentObject(store)
+                .environmentObject(windowActivation)
+        }
+        .defaultPosition(.center)
+        .defaultSize(width: 600, height: 500)
+        .windowResizability(.contentSize)
+
+        // Peak & RMS Meters window
+        Window("Peak & RMS Meters", id: "levels-window") {
+            LevelMetersWindowView()
+                .environmentObject(store)
+                .environmentObject(windowActivation)
+        }
+        .defaultPosition(.center)
+        .defaultSize(width: 400, height: 350)
+        .windowResizability(.contentSize)
+
+        // Analytics meters window
+        Window("Meters", id: "analytics-window") {
+            AnalyticsMetersWindowView()
+                .environmentObject(store)
+                .environmentObject(windowActivation)
+        }
+        .defaultPosition(.center)
+        .defaultSize(width: 500, height: 650)
+        .windowResizability(.contentSize)
     }
 
     private func bootstrapAppDelegate() {

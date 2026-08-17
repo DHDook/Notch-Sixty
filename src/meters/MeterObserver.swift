@@ -1,7 +1,7 @@
 import Foundation
 
 /// Identifies which meter type an observer wants to subscribe to.
-enum MeterType: CaseIterable {
+enum MeterType: CaseIterable, Codable, Sendable {
     case inputPeakLeft
     case inputPeakRight
     case inputRMSLeft
@@ -10,6 +10,15 @@ enum MeterType: CaseIterable {
     case outputPeakRight
     case outputRMSLeft
     case outputRMSRight
+    case inputVULeft
+    case inputVURight
+    case outputVULeft
+    case outputVURight
+}
+
+enum VUSource: Codable, Sendable {
+    case input
+    case output
 }
 
 /// Protocol for objects that receive meter updates directly from MeterStore.

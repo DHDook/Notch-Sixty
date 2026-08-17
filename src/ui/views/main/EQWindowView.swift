@@ -4,6 +4,7 @@ import Combine
 /// The main EQ settings window - detailed controls.
 struct EQWindowView: View {
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject var store: EqualiserStore
     @EnvironmentObject var windowActivation: WindowActivationController
     @StateObject private var driverManager = DriverManager.shared
@@ -89,17 +90,13 @@ struct EQWindowView: View {
         }
     }
 
-    /// Meters and EQ curve column.
-    private var metersAndCurveColumn: some View {
+    /// VU meters and EQ curve column.
+    private var vuAndCurveColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if store.meterStore.levelMetersEnabled {
-                LevelMetersView(meterStore: store.meterStore)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-                    .opacity(metersEnabledUI ? 1.0 : 0.35)
-                    .saturation(metersEnabledUI ? 1.0 : 0.0)
-                    .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
-            }
+            VUMeterPairView(meterStore: store.meterStore)
+                .opacity(metersEnabledUI ? 1.0 : 0.35)
+                .saturation(metersEnabledUI ? 1.0 : 0.0)
+                .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
 
             EQCurveView(metersEnabled: metersEnabledUI)
                 .frame(width: 333, alignment: .leading)
@@ -114,14 +111,10 @@ struct EQWindowView: View {
             HStack(alignment: .top, spacing: 12) {
                 preampVolumeColumn
                 Divider()
-                metersAndCurveColumn
-                Divider()
                 DynamicsInlineView()
+                Divider()
+                vuAndCurveColumn
             }
-
-            // Dual 31-band real-time spectrum analyser
-            RTADashboardView(analyzer: store.rtaAnalyzer, metersEnabled: metersEnabledUI)
-                .padding(.top, -8)
 
             Divider()
 
@@ -367,7 +360,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 12)
-        .frame(minWidth: 1280, minHeight: 700)
+        .frame(minWidth: 1280, minHeight: 550)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
@@ -388,6 +381,48 @@ struct EQWindowView: View {
                 .padding(.bottom, 2)
                 .padding(.leading, 4)
                 .padding(.trailing, 8)
+
+                VStack(spacing: 2) {
+                    Text("Meters")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    Toggle("", isOn: $metersEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .help("Master switch for all level meters, RTA, and analytics graphs. Disabling reduces CPU overhead.")
+                }
+                .frame(minWidth: 40, alignment: .center)
+
+                Button {
+                    windowActivation.prepareToShowWindow()
+                    openWindow(id: "rta-window")
+                } label: {
+                    Image(systemName: "waveform.path")
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .help("RTA Analyser")
+
+                Button {
+                    windowActivation.prepareToShowWindow()
+                    openWindow(id: "levels-window")
+                } label: {
+                    Image(systemName: "chart.bar.fill")
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .help("Peak & RMS Meters")
+
+                Button {
+                    windowActivation.prepareToShowWindow()
+                    openWindow(id: "analytics-window")
+                } label: {
+                    Image(systemName: "gauge")
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .help("Analytics Meters")
 
                 Button {
                     openSettings()
@@ -415,6 +450,9 @@ struct EQWindowView: View {
         }
         .onChange(of: metersEnabledUI) { _, newValue in
             store.meterStore.metersEnabled = newValue
+        }
+        .onReceive(store.meterStore.$metersEnabled) { newValue in
+            metersEnabledUI = newValue
         }
         .onReceive(store.meterStore.$metersEnabled.removeDuplicates()) { value in
             if metersEnabledUI != value { metersEnabledUI = value }

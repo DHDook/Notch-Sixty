@@ -40,10 +40,10 @@ struct AppStateSnapshot: Sendable {
 
     var metersEnabled: Bool
     var rtaEnabled: Bool
-    var goniometerEnabled: Bool
-    var analyticsMetersEnabled: Bool
-    var gainStructureEnabled: Bool
+    var remainingMetersEnabled: Bool
     var levelMetersEnabled: Bool
+    var vuMetersEnabled: Bool
+    var vuMeterSource: VUSource
 
     // MARK: - Defaults
 
@@ -66,10 +66,10 @@ struct AppStateSnapshot: Sendable {
             dynamicsConfig: .default,
             metersEnabled: true,
             rtaEnabled: true,
-            goniometerEnabled: true,
-            analyticsMetersEnabled: true,
-            gainStructureEnabled: true,
-            levelMetersEnabled: true
+            remainingMetersEnabled: true,
+            levelMetersEnabled: true,
+            vuMetersEnabled: true,
+            vuMeterSource: .output
         )
     }
 }
@@ -95,10 +95,14 @@ extension AppStateSnapshot: Codable {
         case dynamicsConfig
         case metersEnabled
         case rtaEnabled
+        case remainingMetersEnabled
+        case levelMetersEnabled
+        case vuMetersEnabled
+        case vuMeterSource
+        // Legacy keys for migration
         case goniometerEnabled
         case analyticsMetersEnabled
         case gainStructureEnabled
-        case levelMetersEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -125,12 +129,28 @@ extension AppStateSnapshot: Codable {
         manualModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .manualModeEnabled) ?? false
         captureMode = try container.decodeIfPresent(Int.self, forKey: .captureMode)
             ?? CaptureMode.sharedMemory.rawValue
+        
+        // Meter state with migration from old flags
         metersEnabled = try container.decodeIfPresent(Bool.self, forKey: .metersEnabled) ?? true
         rtaEnabled = try container.decodeIfPresent(Bool.self, forKey: .rtaEnabled) ?? true
-        goniometerEnabled = try container.decodeIfPresent(Bool.self, forKey: .goniometerEnabled) ?? true
-        analyticsMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .analyticsMetersEnabled) ?? true
-        gainStructureEnabled = try container.decodeIfPresent(Bool.self, forKey: .gainStructureEnabled) ?? true
+        
+        // Try new consolidated flag first, fall back to migrating from old individual flags
+        if let newRemainingMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .remainingMetersEnabled) {
+            remainingMetersEnabled = newRemainingMetersEnabled
+        } else {
+            // Migrate from old individual flags to consolidated remainingMetersEnabled
+            let goniometerEnabled = try container.decodeIfPresent(Bool.self, forKey: .goniometerEnabled) ?? true
+            let analyticsMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .analyticsMetersEnabled) ?? true
+            let gainStructureEnabled = try container.decodeIfPresent(Bool.self, forKey: .gainStructureEnabled) ?? true
+            remainingMetersEnabled = goniometerEnabled && analyticsMetersEnabled && gainStructureEnabled
+        }
+        
         levelMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .levelMetersEnabled) ?? true
+        
+        // VU meter fields - default if not present in old snapshots
+        vuMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .vuMetersEnabled) ?? true
+        vuMeterSource = try container.decodeIfPresent(VUSource.self, forKey: .vuMeterSource) ?? .output
+        
         dynamicsConfig = try container.decodeIfPresent(DynamicsConfig.self, forKey: .dynamicsConfig) ?? .default
     }
 
@@ -155,12 +175,14 @@ extension AppStateSnapshot: Codable {
         try container.encode(manualModeEnabled, forKey: .manualModeEnabled)
         try container.encode(captureMode, forKey: .captureMode)
         try container.encode(dynamicsConfig, forKey: .dynamicsConfig)
+        
+        // Meter state - new consolidated format
         try container.encode(metersEnabled, forKey: .metersEnabled)
         try container.encode(rtaEnabled, forKey: .rtaEnabled)
-        try container.encode(goniometerEnabled, forKey: .goniometerEnabled)
-        try container.encode(analyticsMetersEnabled, forKey: .analyticsMetersEnabled)
-        try container.encode(gainStructureEnabled, forKey: .gainStructureEnabled)
+        try container.encode(remainingMetersEnabled, forKey: .remainingMetersEnabled)
         try container.encode(levelMetersEnabled, forKey: .levelMetersEnabled)
+        try container.encode(vuMetersEnabled, forKey: .vuMetersEnabled)
+        try container.encode(vuMeterSource, forKey: .vuMeterSource)
     }
 }
 

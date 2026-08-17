@@ -146,32 +146,20 @@ struct DynamicsInlineView: View {
     @EnvironmentObject var store: EqualiserStore
 
     @State private var showDefinitions   = false
-    @StateObject private var inlineMeterBridge = InlineMeterBridge()
-    @State private var rtaEnabledUI = true
-    @State private var goniometerEnabledUI = true
-    @State private var analyticsEnabledUI = true
-    @State private var gainStructureEnabledUI = true
-    @State private var levelMetersEnabledUI = true
-    @State private var metersMasterEnabledUI = true
-    @State private var showMetersHelp = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
-
-            HStack(alignment: .top, spacing: 12) {
-                controlColumns
-                Divider()
-                column6
-            }
+            controlColumns
+            pickersRow
+            LatencyReadoutView(
+                totalLatencyMs: store.totalLatencyMs,
+                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
+                sampleRate: store.streamSampleRate
+            )
         }
-        .onAppear { inlineMeterBridge.register(with: store.meterStore, equaliserStore: store) }
     }
 
-    // Columns 1–5 grouped into their own container so the goniometer's updates
-    // (column6, which redraws whenever the goniometer is active) don't force
-    // SwiftUI to re-run stack sizing across these five static/control-heavy
-    // columns on every tick.
     private var controlColumns: some View {
         HStack(alignment: .top, spacing: 12) {
             column1
@@ -179,10 +167,26 @@ struct DynamicsInlineView: View {
             column2
             Divider()
             column3
-            Divider()
-            column4
-            Divider()
-            column5
+        }
+    }
+
+    private var pickersRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            inlineSegmentedPicker(label: "Stereo", selection: inlineStereoModeBinding) {
+                Text("Stereo").tag(StereoModeSelection.stereo)
+                Text("Wide").tag(StereoModeSelection.wideMono)
+                Text("Mono").tag(StereoModeSelection.trueMono)
+            }
+            inlineSegmentedPicker(label: "Latency", selection: inlineLatencyModeBinding) {
+                Text("Music").tag(LatencyMode.music)
+                Text("Movie").tag(LatencyMode.movie)
+            }
+            inlineSegmentedPicker(label: "Dither", selection: inlineDitherModeBinding) {
+                Text("Off").tag(DitherMode.bypass)
+                Text("TPDF").tag(DitherMode.tpdf)
+                Text("Shape").tag(DitherMode.shaped)
+                Text("5th").tag(DitherMode.highOrder)
+            }
         }
     }
 
@@ -2032,226 +2036,6 @@ struct DynamicsInlineView: View {
         }
     }
 
-
-    // MARK: - Column 4: Pickers only (signal-chain order)
-
-    private var column4: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            inlineSegmentedPicker(label: "Stereo", selection: inlineStereoModeBinding) {
-                Text("Stereo").tag(StereoModeSelection.stereo)
-                Text("Wide").tag(StereoModeSelection.wideMono)
-                Text("Mono").tag(StereoModeSelection.trueMono)
-            }
-            inlineSegmentedPicker(label: "Latency", selection: inlineLatencyModeBinding) {
-                Text("Music").tag(LatencyMode.music)
-                Text("Movie").tag(LatencyMode.movie)
-            }
-            inlineSegmentedPicker(label: "Dither", selection: inlineDitherModeBinding) {
-                Text("Off").tag(DitherMode.bypass)
-                Text("TPDF").tag(DitherMode.tpdf)
-                Text("Shape").tag(DitherMode.shaped)
-                Text("5th").tag(DitherMode.highOrder)
-            }
-            Divider()
-            GainStructureMeterView()
-        }
-    }
-
-    // MARK: - Column 5: Meters only
-
-    private var column5: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            InlinePhaseCorrelationView()
-            InlineCrestFactorView(bridge: inlineMeterBridge)
-            InlineIspLatchView(bridge: inlineMeterBridge)
-            InlineDRFactorView(bridge: inlineMeterBridge)
-            InlineBitStreamView(bridge: inlineMeterBridge)
-            InlineBitRateView()
-            InlineTruePeakView(bridge: inlineMeterBridge)
-            InlineTruePeakMeterView()
-        }
-        .frame(minWidth: 110)
-    }
-
-    // MARK: - Column 6: Stereo Goniometer
-
-    private var column6: some View {
-        VStack(spacing: 8) {
-            StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-            LatencyReadoutView(
-                totalLatencyMs: store.totalLatencyMs,
-                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
-                sampleRate: store.streamSampleRate
-            )
-            metersMasterControl
-        }
-    }
-
-    private var metersMasterControl: some View {
-        HStack(spacing: 4) {
-            Text("Meters")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            Button {
-                showMetersHelp = true
-            } label: {
-                Image(systemName: "questionmark.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .popover(isPresented: $showMetersHelp, arrowEdge: .trailing) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TooltipDefinitionEntry(
-                            title: "Peak In / Peak Out",
-                            detail: "Instantaneous peak level (highest sample amplitude), captured before and after all EQ, dynamics, and gain processing. Fast-reacting; shows transients and clipping."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "RMS In / RMS Out",
-                            detail: "Time-averaged level (root-mean-square), captured before and after all processing. Slower-reacting; better reflects perceived loudness."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "RTA",
-                            detail: "31-band real-time spectrum analyzer plotting input and output frequency content simultaneously, shown below the meters."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "Gain Structure",
-                            detail: "Live gain reduction, in dB, for every active dynamics stage — De-Esser, Multiband Compressor (low/mid/high), Compressor, Expander, Clipper, and Limiter — shown in the Dynamics section."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "Phase",
-                            detail: "Left/right correlation, from +1 (in phase, mono-compatible) through 0 (decorrelated/wide) to −1 (out of phase — will cancel in mono)."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "Crest Factor",
-                            detail: "Input peak-to-RMS ratio in dB. Higher means a more dynamic, less dense signal arriving at the plugin."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "DR Factor",
-                            detail: "Output peak-to-RMS ratio in dB, after processing. Shows how much dynamic range the dynamics chain has removed."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "ISP Latch",
-                            detail: "Overload indicator that latches on and stays lit once the input or output peak exceeds about −0.1 dBFS. Tap it to reset."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "TP-In / TP-Out",
-                            detail: "Live, non-latching clip indicator for the input and output peak level."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "True Peak Meter",
-                            detail: "Continuous true-peak level in dBTP, with an indicator for when oversampled peak detection is active."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "Bit Stream",
-                            detail: "24-bit activity monitor — one LED per bit of the input signal, lit when that bit carries energy."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "Sample Rate",
-                            detail: "Live input sample rate and its equivalent nominal bit rate."
-                        )
-                        Divider()
-                        TooltipDefinitionEntry(
-                            title: "Goniometer",
-                            detail: "Circular Lissajous (X/Y) plot of the stereo image, showing left/right correlation and width visually."
-                        )
-                    }
-                    .padding(12)
-                }
-                .frame(width: 320, height: 420)
-            }
-
-            Toggle("", isOn: $metersMasterEnabledUI)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .help("Master switch for level meters and RTA graphs. Disabling reduces CPU overhead.")
-
-            DynamicsControlSettingsButton(fullName: "Meters", width: 180) {
-                HStack {
-                    Text("RTA")
-                    Spacer()
-                    Toggle("", isOn: $rtaEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .onChange(of: rtaEnabledUI) { newValue in
-                            store.meterStore.rtaEnabled = newValue
-                        }
-                }
-                HStack {
-                    Text("Goniometer")
-                    Spacer()
-                    Toggle("", isOn: $goniometerEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .onChange(of: goniometerEnabledUI) { newValue in
-                            store.meterStore.goniometerEnabled = newValue
-                        }
-                }
-                HStack {
-                    Text("Analytics Meters")
-                    Spacer()
-                    Toggle("", isOn: $analyticsEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .onChange(of: analyticsEnabledUI) { newValue in
-                            store.meterStore.analyticsMetersEnabled = newValue
-                        }
-                }
-                HStack {
-                    Text("Gain Structure")
-                    Spacer()
-                    Toggle("", isOn: $gainStructureEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .onChange(of: gainStructureEnabledUI) { newValue in
-                            store.meterStore.gainStructureEnabled = newValue
-                        }
-                }
-                HStack {
-                    Text("Level Meters")
-                    Spacer()
-                    Toggle("", isOn: $levelMetersEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .onChange(of: levelMetersEnabledUI) { newValue in
-                            store.meterStore.levelMetersEnabled = newValue
-                        }
-                }
-            }
-        }
-        .onAppear {
-            metersMasterEnabledUI = store.meterStore.metersEnabled
-            rtaEnabledUI = store.meterStore.rtaEnabled
-            goniometerEnabledUI = store.meterStore.goniometerEnabled
-            analyticsEnabledUI = store.meterStore.analyticsMetersEnabled
-            gainStructureEnabledUI = store.meterStore.gainStructureEnabled
-            levelMetersEnabledUI = store.meterStore.levelMetersEnabled
-        }
-        .onChange(of: metersMasterEnabledUI) { newValue in
-            store.meterStore.metersEnabled = newValue
-        }
-    }
-
-
     // MARK: - Inline Picker Helper
 
     @ViewBuilder
@@ -2662,39 +2446,39 @@ final class InlineMeterBridge: ObservableObject {
     func register(with store: MeterStore, equaliserStore: EqualiserStore?) {
         self.store = equaliserStore
         obsPeakL.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.peakL = v
             if v > 0.99 { self.snapshot.ispInputLatched = true }
         }
         obsPeakR.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.peakR = v
             if v > 0.99 { self.snapshot.ispInputLatched = true }
         }
         obsRmsL.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.rmsL = v
         }
         obsRmsR.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.rmsR = v
         }
         obsPeakOutL.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.peakOutL = v
             if v > 0.99 { self.snapshot.ispOutputLatched = true }
         }
         obsPeakOutR.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.peakOutR = v
             if v > 0.99 { self.snapshot.ispOutputLatched = true }
         }
         obsRmsOutL.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.rmsOutL = v
         }
         obsRmsOutR.onUpdate = { [weak self] v in
-            guard let self, self.store?.meterStore.analyticsMetersEnabled == true else { return }
+            guard let self, self.store?.meterStore.remainingMetersEnabled == true else { return }
             self.snapshot.rmsOutR = v
         }
 
@@ -2708,7 +2492,7 @@ final class InlineMeterBridge: ObservableObject {
         store.addObserver(obsRmsOutR,  for: .outputRMSRight)
 
         // Reset snapshot to idle state when analytics meters are disabled
-        store.$analyticsMetersEnabled
+        store.$remainingMetersEnabled
             .sink { [weak self] enabled in
                 if !enabled { self?.snapshot = InlineMeterSnapshot() }
             }
@@ -2762,7 +2546,7 @@ struct InlinePhaseCorrelationView: View {
     @EnvironmentObject private var store: EqualiserStore
 
     var body: some View {
-        if store.meterStore.metersEnabled && store.meterStore.analyticsMetersEnabled {
+        if store.meterStore.metersEnabled && store.meterStore.remainingMetersEnabled {
             TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
                 phaseContent(correlation: store.livePhaseCorrelation)
             }
@@ -2828,7 +2612,7 @@ struct InlineTruePeakMeterView: View {
     @EnvironmentObject private var store: EqualiserStore
 
     var body: some View {
-        if store.meterStore.metersEnabled && store.meterStore.analyticsMetersEnabled {
+        if store.meterStore.metersEnabled && store.meterStore.remainingMetersEnabled {
             TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
                 TruePeakMeterView(
                     truePeakDB: store.liveTruePeakDB,

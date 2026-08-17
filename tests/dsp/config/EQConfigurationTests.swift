@@ -449,10 +449,10 @@ final class EQConfigurationTests: XCTestCase {
             dynamicsConfig: .default,
             metersEnabled: true,
             rtaEnabled: true,
-            goniometerEnabled: true,
-            analyticsMetersEnabled: true,
-            gainStructureEnabled: true,
-            levelMetersEnabled: true
+            remainingMetersEnabled: true,
+            levelMetersEnabled: true,
+            vuMetersEnabled: true,
+            vuMeterSource: .output
         )
 
         // Create new config from snapshot
@@ -498,10 +498,10 @@ final class EQConfigurationTests: XCTestCase {
             dynamicsConfig: .default,
             metersEnabled: true,
             rtaEnabled: true,
-            goniometerEnabled: true,
-            analyticsMetersEnabled: true,
-            gainStructureEnabled: true,
-            levelMetersEnabled: true
+            remainingMetersEnabled: true,
+            levelMetersEnabled: true,
+            vuMetersEnabled: true,
+            vuMeterSource: .output
         )
 
         // Restore from snapshot

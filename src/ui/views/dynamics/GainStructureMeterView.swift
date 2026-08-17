@@ -13,7 +13,7 @@ struct GainStructureMeterView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
-            if store.meterStore.metersEnabled && store.meterStore.gainStructureEnabled {
+            if store.meterStore.metersEnabled && store.meterStore.remainingMetersEnabled {
                 TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
                     VStack(alignment: .leading, spacing: 2) {
                         gainRow("DE", store.deEsserGainReductionDB)

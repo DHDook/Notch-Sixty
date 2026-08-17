@@ -10,10 +10,16 @@ import SwiftUI
 
 // MARK: - Dashboard
 
+enum RTAPaneLayout {
+    case sideBySide
+    case stacked
+}
+
 struct RTADashboardView: View {
     @ObservedObject var analyzer: AdvancedDualSpectrumAnalyzer
     @EnvironmentObject private var store: EqualiserStore
     var metersEnabled: Bool = true
+    var paneLayout: RTAPaneLayout = .sideBySide
 
     @State private var hoveredBandIndex: Int  = -1
     @State private var hoverPane: Int         = -1   // 0 = input, 1 = output
@@ -24,23 +30,46 @@ struct RTADashboardView: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            HStack(alignment: .top, spacing: 6) {
-                pane(
-                    title: "Pre-EQ",
-                    bands: displayBands(from: analyzer.inputBands),
-                    showPeaks: analyzer.showInputPeaks,
-                    isBypassed: false,
-                    targetPoints: [],
-                    paneIndex: 0
-                )
-                pane(
-                    title: "Post-EQ",
-                    bands: displayBands(from: analyzer.outputBands),
-                    showPeaks: analyzer.showOutputPeaks,
-                    isBypassed: isBypassed,
-                    targetPoints: analyzer.targetLinePoints,
-                    paneIndex: 1
-                )
+            Group {
+                if paneLayout == .sideBySide {
+                    HStack(alignment: .top, spacing: 6) {
+                        pane(
+                            title: "Pre-EQ",
+                            bands: displayBands(from: analyzer.inputBands),
+                            showPeaks: analyzer.showInputPeaks,
+                            isBypassed: false,
+                            targetPoints: [],
+                            paneIndex: 0
+                        )
+                        pane(
+                            title: "Post-EQ",
+                            bands: displayBands(from: analyzer.outputBands),
+                            showPeaks: analyzer.showOutputPeaks,
+                            isBypassed: isBypassed,
+                            targetPoints: analyzer.targetLinePoints,
+                            paneIndex: 1
+                        )
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        pane(
+                            title: "Pre-EQ",
+                            bands: displayBands(from: analyzer.inputBands),
+                            showPeaks: analyzer.showInputPeaks,
+                            isBypassed: false,
+                            targetPoints: [],
+                            paneIndex: 0
+                        )
+                        pane(
+                            title: "Post-EQ",
+                            bands: displayBands(from: analyzer.outputBands),
+                            showPeaks: analyzer.showOutputPeaks,
+                            isBypassed: isBypassed,
+                            targetPoints: analyzer.targetLinePoints,
+                            paneIndex: 1
+                        )
+                    }
+                }
             }
             .padding(.horizontal, 8)
             if analyzer.showDiagnostics {

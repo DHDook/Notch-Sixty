@@ -35,10 +35,10 @@ final class MeterStore: ObservableObject {
 
     /// Per-visualization enable/disable flags
     @Published var rtaEnabled: Bool = true
-    @Published var goniometerEnabled: Bool = true
-    @Published var analyticsMetersEnabled: Bool = true
-    @Published var gainStructureEnabled: Bool = true
+    @Published var remainingMetersEnabled: Bool = true
     @Published var levelMetersEnabled: Bool = true
+    @Published var vuMetersEnabled: Bool = true
+    @Published var vuMeterSource: VUSource = .output
 
     // MARK: - Per-Output Channel Metering (Part 2 Task AG)
 
@@ -67,7 +67,7 @@ final class MeterStore: ObservableObject {
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "MeterStore")
     
     // MARK: - Value Storage
-    
+
     private struct MeterValues {
         var peak: Float = 0
         var peakHold: Float = 0
@@ -75,21 +75,28 @@ final class MeterStore: ObservableObject {
         var clipHold: TimeInterval = 0
         var rms: Float = 0
     }
+
+    private struct VUValues {
+        var vu: Float = 0
+        var clipHold: TimeInterval = 0
+    }
+
+    private var lastVUValues: [MeterType: VUValues] = [:]
     
     // MARK: - Initialization
 
     init(metersEnabled: Bool = true,
          rtaEnabled: Bool = true,
-         goniometerEnabled: Bool = true,
-         analyticsMetersEnabled: Bool = true,
-         gainStructureEnabled: Bool = true,
-         levelMetersEnabled: Bool = true) {
+         remainingMetersEnabled: Bool = true,
+         levelMetersEnabled: Bool = true,
+         vuMetersEnabled: Bool = true,
+         vuMeterSource: VUSource = .output) {
         self.metersEnabled = metersEnabled
         self.rtaEnabled = rtaEnabled
-        self.goniometerEnabled = goniometerEnabled
-        self.analyticsMetersEnabled = analyticsMetersEnabled
-        self.gainStructureEnabled = gainStructureEnabled
+        self.remainingMetersEnabled = remainingMetersEnabled
         self.levelMetersEnabled = levelMetersEnabled
+        self.vuMetersEnabled = vuMetersEnabled
+        self.vuMeterSource = vuMeterSource
     }
     
     // MARK: - Observer Registration
@@ -240,7 +247,7 @@ final class MeterStore: ObservableObject {
         CATransaction.setDisableActions(true)
 
         // Process each meter type (shared by Level Meters and Analytics)
-        if levelMetersEnabled || analyticsMetersEnabled {
+        if levelMetersEnabled || remainingMetersEnabled {
             let interval = MeterConstants.meterInterval
 
             // Input Peak - Left
@@ -296,6 +303,39 @@ final class MeterStore: ObservableObject {
             )
         }
 
+        // VU meters - both input and output computed continuously
+        if vuMetersEnabled {
+            let interval = MeterConstants.meterInterval
+
+            // Input VU - Left
+            updateVUMeter(
+                type: .inputVULeft,
+                dbValue: snapshot.inputDB.indices.contains(0) ? snapshot.inputDB[0] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Input VU - Right
+            updateVUMeter(
+                type: .inputVURight,
+                dbValue: snapshot.inputDB.indices.contains(1) ? snapshot.inputDB[1] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Output VU - Left
+            updateVUMeter(
+                type: .outputVULeft,
+                dbValue: snapshot.outputDB.indices.contains(0) ? snapshot.outputDB[0] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+
+            // Output VU - Right
+            updateVUMeter(
+                type: .outputVURight,
+                dbValue: snapshot.outputDB.indices.contains(1) ? snapshot.outputDB[1] : MeterConstants.meterRange.lowerBound,
+                interval: interval
+            )
+        }
+
         // MARK: - Per-Output Channel Metering (Part 2 Task AG)
         let outputChannelMeters = pipeline.currentOutputChannelMeters()
         outputChannelLevels = outputChannelMeters
@@ -309,17 +349,23 @@ final class MeterStore: ObservableObject {
         let inputRMSRight = lastMeterValues[.inputRMSRight]?.rms ?? Float(0)
         let outputRMSLeft = lastMeterValues[.outputRMSLeft]?.rms ?? Float(0)
         let outputRMSRight = lastMeterValues[.outputRMSRight]?.rms ?? Float(0)
-        
+
+        let inputVULeft = lastVUValues[.inputVULeft]?.vu ?? Float(0)
+        let inputVURight = lastVUValues[.inputVURight]?.vu ?? Float(0)
+        let outputVULeft = lastVUValues[.outputVULeft]?.vu ?? Float(0)
+        let outputVURight = lastVUValues[.outputVURight]?.vu ?? Float(0)
+
         let allValues: [Float] = [
             inputPeakLeft, inputPeakRight, outputPeakLeft, outputPeakRight,
-            inputRMSLeft, inputRMSRight, outputRMSLeft, outputRMSRight
+            inputRMSLeft, inputRMSRight, outputRMSLeft, outputRMSRight,
+            inputVULeft, inputVURight, outputVULeft, outputVURight
         ]
-        
+
         let inputHoldLeft = lastMeterValues[.inputPeakLeft]?.peakHold ?? Float(0)
         let inputHoldRight = lastMeterValues[.inputPeakRight]?.peakHold ?? Float(0)
         let outputHoldLeft = lastMeterValues[.outputPeakLeft]?.peakHold ?? Float(0)
         let outputHoldRight = lastMeterValues[.outputPeakRight]?.peakHold ?? Float(0)
-        
+
         let allHolds: [Float] = [inputHoldLeft, inputHoldRight, outputHoldLeft, outputHoldRight]
 
         let allValuesSilent = allValues.allSatisfy({ $0 < MeterConstants.atRestThreshold })
@@ -376,18 +422,30 @@ final class MeterStore: ObservableObject {
     
     private func updateRMSMeter(type: MeterType, dbValue: Float) {
         var values = lastMeterValues[type] ?? MeterValues()
-        
+
         let normalized = MeterConstants.normalizedPosition(for: dbValue)
         let delta = normalized - values.rms
         let rawRMS = values.rms + delta * MeterConstants.rmsSmoothing
         let rms = max(0, min(1, rawRMS))
-        
+
         values.rms = rms
-        
+
         // Notify observers BEFORE storing new values so comparison uses old values
         notifyObservers(type: type, value: rms, hold: 0, clipping: false)
-        
+
         lastMeterValues[type] = values
+    }
+
+    private func updateVUMeter(type: MeterType, dbValue: Float, interval: TimeInterval) {
+        var values = lastVUValues[type] ?? VUValues()
+        let target = MeterConstants.normalizedPosition(for: dbValue)
+        values.vu += (target - values.vu) * MeterConstants.vuSmoothing
+
+        let isClipping = dbValue >= 0
+        values.clipHold = isClipping ? MeterConstants.clipHoldDuration : max(0, values.clipHold - interval)
+
+        notifyObservers(type: type, value: max(0, min(1, values.vu)), hold: 0, clipping: values.clipHold > 0)
+        lastVUValues[type] = values
     }
     
     private func notifyObservers(type: MeterType, value: Float, hold: Float, clipping: Bool) {

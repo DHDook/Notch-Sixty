@@ -57,7 +57,16 @@ enum MeterConstants {
     /// Smoothing for RMS meter (slower, more averaged).
     /// RMS responds more slowly than peak for averaged levels.
     static let rmsSmoothing: Float = 0.12
-    
+
+    /// Time for a VU needle to settle to ~99% of a step input, per ANSI C16.5
+    /// standard analog VU ballistics (attack and release are symmetric).
+    static let vuBallisticsTimeMs: Double = 300
+
+    /// Per-tick smoothing coefficient derived from vuBallisticsTimeMs at the
+    /// 30 FPS meter update rate: alpha = 1 - exp(-ln(100) * dt / vuBallisticsTime)
+    /// dt = 1/30s -> alpha ≈ 0.63. Recompute if meterInterval ever changes.
+    static let vuSmoothing: Float = 0.63
+
     /// Peak hold decay per tick (at 30 FPS).
     /// Controls how fast the held peak drops after hold duration.
     static let peakHoldDecayPerTick: Float = 0.02

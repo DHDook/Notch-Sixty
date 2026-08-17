@@ -990,10 +990,10 @@ final class EqualiserStore: ObservableObject {
             dynamicsConfig: eqConfiguration.dynamicsConfig,
             metersEnabled: meterStore.metersEnabled,
             rtaEnabled: meterStore.rtaEnabled,
-            goniometerEnabled: meterStore.goniometerEnabled,
-            analyticsMetersEnabled: meterStore.analyticsMetersEnabled,
-            gainStructureEnabled: meterStore.gainStructureEnabled,
-            levelMetersEnabled: meterStore.levelMetersEnabled
+            remainingMetersEnabled: meterStore.remainingMetersEnabled,
+            levelMetersEnabled: meterStore.levelMetersEnabled,
+            vuMetersEnabled: meterStore.vuMetersEnabled,
+            vuMeterSource: meterStore.vuMeterSource
         )
     }
 
@@ -1319,10 +1319,10 @@ final class EqualiserStore: ObservableObject {
         self.meterStore = MeterStore(
             metersEnabled: snapshot.metersEnabled,
             rtaEnabled: snapshot.rtaEnabled,
-            goniometerEnabled: snapshot.goniometerEnabled,
-            analyticsMetersEnabled: snapshot.analyticsMetersEnabled,
-            gainStructureEnabled: snapshot.gainStructureEnabled,
-            levelMetersEnabled: snapshot.levelMetersEnabled
+            remainingMetersEnabled: snapshot.remainingMetersEnabled,
+            levelMetersEnabled: snapshot.levelMetersEnabled,
+            vuMetersEnabled: snapshot.vuMetersEnabled,
+            vuMeterSource: snapshot.vuMeterSource
         )
 
         // Set reset flag if state was reset
@@ -1536,12 +1536,12 @@ final class EqualiserStore: ObservableObject {
         rtaAnalyzer.setIndividuallyEnabled(meterStore.rtaEnabled)
 
         // Goniometer individual enable/disable toggle
-        meterStore.$goniometerEnabled
+        meterStore.$remainingMetersEnabled
             .sink { [weak self] enabled in
                 self?.goniometerEngine.setIndividuallyEnabled(enabled)
             }
             .store(in: &cancellables)
-        goniometerEngine.setIndividuallyEnabled(meterStore.goniometerEnabled)
+        goniometerEngine.setIndividuallyEnabled(meterStore.remainingMetersEnabled)
 
         // Listen for app termination
         NotificationCenter.default.addObserver(
