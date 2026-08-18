@@ -445,11 +445,28 @@ struct EQWindowView: View {
         }
         .background(
             WindowAccessor { window in
-                store.setEqualiserWindow(window)
+                guard let window = window else { return }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didMiniaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    store.meterStore.meterWindowBecameHidden(id: "equaliser")
+                    store.rtaAnalyzer.rtaWindowBecameHidden(id: "equaliser")
+                }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didDeminiaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    store.meterStore.meterWindowBecameVisible(id: "equaliser")
+                    store.rtaAnalyzer.rtaWindowBecameVisible(id: "equaliser")
+                }
             }
         )
         .onAppear {
-            store.meterStore.windowBecameVisible()
+            store.meterStore.meterWindowBecameVisible(id: "equaliser")
+            store.rtaAnalyzer.rtaWindowBecameVisible(id: "equaliser")
             metersEnabledUI = store.meterStore.metersEnabled
             showStateResetAlert = store.didResetStateOnLaunch
         }
@@ -460,7 +477,8 @@ struct EQWindowView: View {
             metersEnabledUI = newValue
         }
         .onDisappear {
-            store.meterStore.windowBecameHidden()
+            store.meterStore.meterWindowBecameHidden(id: "equaliser")
+            store.rtaAnalyzer.rtaWindowBecameHidden(id: "equaliser")
         }
         .sheet(isPresented: $showDriverSheet) {
             DriverInstallationView(

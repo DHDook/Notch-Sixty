@@ -32,6 +32,7 @@ final class VUMeterLayer: NSView, MeterObserver {
     // Flattened ~90° sweep, symmetric about vertical (was a full 180°)
     private let arcStartAngle: CGFloat = .pi * (135.0 / 180.0)  // 135° — up-left
     private let arcEndAngle: CGFloat   = .pi * (45.0 / 180.0)   // 45°  — up-right
+    private let arcClockwise: Bool = true  // Clockwise for proper arc direction
     private let needleLength: CGFloat = 0.85  // As fraction of radius
     private let pivotRadius: CGFloat = 4
 
@@ -123,8 +124,8 @@ final class VUMeterLayer: NSView, MeterObserver {
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
         let cardPath = CGPath(roundedRect: cardRect, cornerWidth: 10, cornerHeight: 10, transform: nil)
         
-        // Pivot moves from 0.85·height (near top) to low in the card
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.28)
+        // Pivot positioned in lower third of the card for proper VU meter appearance
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.72)
         let radius = min(cardRect.width, cardRect.height) * 0.62
 
         CATransaction.begin()
@@ -210,7 +211,7 @@ final class VUMeterLayer: NSView, MeterObserver {
         clipLayer.path = clipPath
 
         // Channel label position - inside the card, near the bottom
-        labelLayer.position = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.08)
+        labelLayer.position = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.92)
 
         CATransaction.commit()
     }
@@ -219,19 +220,11 @@ final class VUMeterLayer: NSView, MeterObserver {
 
     func meterUpdated(value: Float, hold: Float, clipping: Bool) {
         let newValue = max(0, min(1, value))
-        let oldValue = currentNeedleValue
         currentNeedleValue = newValue
         isCurrentlyClipping = clipping
 
         CATransaction.begin()
         CATransaction.setAnimationDuration(1.0 / 30.0) // Smooth animation
-
-        // Animate needle rotation
-        let rotationAnimation = CABasicAnimation(keyPath: "transform.rotation.z")
-        rotationAnimation.fromValue = oldValue
-        rotationAnimation.toValue = newValue
-        rotationAnimation.duration = 1.0 / 30.0
-        needleLayer.add(rotationAnimation, forKey: "needleRotation")
 
         updateNeedlePosition()
         updateClipIndicator()

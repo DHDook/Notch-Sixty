@@ -16,9 +16,11 @@ struct LevelMetersWindowView: View {
         }
         .onAppear {
             store.meterStore.levelMetersEnabled = true
+            store.meterStore.meterWindowBecameVisible(id: "levels-window")
         }
         .onDisappear {
             store.meterStore.levelMetersEnabled = false
+            store.meterStore.meterWindowBecameHidden(id: "levels-window")
         }
     }
 }

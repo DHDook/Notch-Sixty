@@ -20,9 +20,11 @@ struct RTAWindowView: View {
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
             store.meterStore.rtaEnabled = true
+            store.rtaAnalyzer.rtaWindowBecameVisible(id: "rta-window")
         }
         .onDisappear {
             store.meterStore.rtaEnabled = false
+            store.rtaAnalyzer.rtaWindowBecameHidden(id: "rta-window")
         }
     }
 }

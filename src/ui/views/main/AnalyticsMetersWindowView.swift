@@ -37,10 +37,12 @@ struct AnalyticsMetersWindowView: View {
         .frame(minWidth: 500, minHeight: 600)
         .onAppear {
             store.meterStore.remainingMetersEnabled = true
+            store.meterStore.meterWindowBecameVisible(id: "analytics-window")
             inlineMeterBridge.register(with: store.meterStore, equaliserStore: store)
         }
         .onDisappear {
             store.meterStore.remainingMetersEnabled = false
+            store.meterStore.meterWindowBecameHidden(id: "analytics-window")
         }
     }
 }

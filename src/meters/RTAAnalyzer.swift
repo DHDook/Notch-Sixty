@@ -261,10 +261,9 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     private var updateTimer: AnyCancellable?
 
     // MARK: Run state gating
-    private var isWindowVisible = true
+    private var visibleWindowIDs: Set<String> = []
     private var isMetersEnabled = true
     private var isIndividuallyEnabled = true
-    private weak var equaliserWindow: NSWindow?
 
     // MARK: - Init / deinit
 
@@ -302,7 +301,7 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
     // MARK: - Timer
 
     private func updateRunState() {
-        if isWindowVisible && isMetersEnabled && isIndividuallyEnabled {
+        if !visibleWindowIDs.isEmpty && isMetersEnabled && isIndividuallyEnabled {
             guard updateTimer == nil else { return }
             startTimer()
         } else {
@@ -329,41 +328,13 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
         updateRunState()
     }
 
-    /// Mirrors MeterStore.setEqualiserWindow's NSWindow visibility observation —
-    /// see MeterStore.swift for the exact notification pattern being replicated here.
-    func setEqualiserWindow(_ window: NSWindow?) {
-        if let oldWindow = equaliserWindow {
-            NotificationCenter.default.removeObserver(self, name: NSWindow.didMiniaturizeNotification, object: oldWindow)
-            NotificationCenter.default.removeObserver(self, name: NSWindow.didDeminiaturizeNotification, object: oldWindow)
-        }
-        equaliserWindow = window
-        if let window {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidMiniaturize),
-                name: NSWindow.didMiniaturizeNotification,
-                object: window
-            )
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidDeminiaturize),
-                name: NSWindow.didDeminiaturizeNotification,
-                object: window
-            )
-            isWindowVisible = window.isVisible
-        } else {
-            isWindowVisible = true  // no window reference yet — don't block on it
-        }
+    func rtaWindowBecameVisible(id: String) {
+        visibleWindowIDs.insert(id)
         updateRunState()
     }
 
-    @objc private func windowDidMiniaturize() {
-        isWindowVisible = false
-        updateRunState()
-    }
-
-    @objc private func windowDidDeminiaturize() {
-        isWindowVisible = true
+    func rtaWindowBecameHidden(id: String) {
+        visibleWindowIDs.remove(id)
         updateRunState()
     }
 

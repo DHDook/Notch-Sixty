@@ -53,7 +53,13 @@ final class MeterStore: ObservableObject {
     // MARK: - Dependencies
     
     private weak var renderPipeline: RenderPipeline?
-    private weak var equaliserWindow: NSWindow?
+    private var visibleMeterWindowIDs: Set<String> = []
+    
+    // MARK: - Test Support
+    
+    var visibleMeterWindowIDsForTesting: Set<String> {
+        visibleMeterWindowIDs
+    }
     
     // MARK: - Timing
     
@@ -139,38 +145,17 @@ final class MeterStore: ObservableObject {
         pipeline?.setMetersEnabled(metersEnabled)
     }
     
-    func setEqualiserWindow(_ window: NSWindow?) {
-        // Remove observers from old window
-        if let oldWindow = equaliserWindow {
-            NotificationCenter.default.removeObserver(self, name: NSWindow.didMiniaturizeNotification, object: oldWindow)
-            NotificationCenter.default.removeObserver(self, name: NSWindow.didDeminiaturizeNotification, object: oldWindow)
-        }
-        
-        self.equaliserWindow = window
-        
-        // Add observers to new window
-        if let window = window {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidMiniaturize),
-                name: NSWindow.didMiniaturizeNotification,
-                object: window
-            )
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidDeminiaturize),
-                name: NSWindow.didDeminiaturizeNotification,
-                object: window
-            )
-        }
+    func meterWindowBecameVisible(id: String) {
+        visibleMeterWindowIDs.insert(id)
+        guard metersEnabled else { return }
+        startMeterUpdates()
     }
-    
-    @objc private func windowDidMiniaturize() {
-        windowBecameHidden()
-    }
-    
-    @objc private func windowDidDeminiaturize() {
-        windowBecameVisible()
+
+    func meterWindowBecameHidden(id: String) {
+        visibleMeterWindowIDs.remove(id)
+        if visibleMeterWindowIDs.isEmpty {
+            stopMeterUpdates()
+        }
     }
     
     func startMeterUpdates() {
@@ -197,30 +182,12 @@ final class MeterStore: ObservableObject {
         renderPipeline?.setMetersEnabled(false)
     }
     
-    // MARK: - Window Lifecycle
-    
-    func windowBecameVisible() {
-        guard metersEnabled else { return }
-        startMeterUpdates()
-    }
-
-    func windowBecameHidden() {
-        stopMeterUpdates()
-    }
-    
     // MARK: - Update Cycle
 
     func refreshMeterSnapshot() {
         guard metersEnabled else {
             notifyAllObserversSilent()
             return
-        }
-
-        // Check window visibility
-        if let window = equaliserWindow {
-            guard window.isVisible else { return }
-        } else if let keyWindow = NSApp.keyWindow {
-            guard keyWindow.isVisible else { return }
         }
 
         guard let pipeline = renderPipeline else { return }
@@ -465,6 +432,16 @@ final class MeterStore: ObservableObject {
                 wrapper.observer?.meterUpdated(value: value, hold: hold, clipping: clipping)
             }
         }
+    }
+    
+    // MARK: - Test Support
+    
+    var visibleMeterWindowIDsForTesting: Set<String> {
+        visibleMeterWindowIDs
+    }
+    
+    internal func updateVUMeter(type: MeterType, dbValue: Float, interval: TimeInterval) {
+        updateVUMeter(type: type, dbValue: dbValue, interval: interval)
     }
     
     private func notifyAllObserversSilent() {

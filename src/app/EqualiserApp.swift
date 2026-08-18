@@ -113,9 +113,10 @@ struct EqualiserMain: App {
                 .environmentObject(store)
                 .environmentObject(windowActivation)
         }
-        .defaultPosition(.center)
+        .defaultPosition(.trailing)
         .defaultSize(width: 600, height: 500)
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
 
         // Peak & RMS Meters window
         Window("Peak & RMS Meters", id: "levels-window") {
@@ -123,9 +124,10 @@ struct EqualiserMain: App {
                 .environmentObject(store)
                 .environmentObject(windowActivation)
         }
-        .defaultPosition(.center)
+        .defaultPosition(.topLeading)
         .defaultSize(width: 400, height: 200)
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
 
         // Analytics meters window
         Window("Meters", id: "analytics-window") {
@@ -133,9 +135,10 @@ struct EqualiserMain: App {
                 .environmentObject(store)
                 .environmentObject(windowActivation)
         }
-        .defaultPosition(.center)
+        .defaultPosition(.bottomTrailing)
         .defaultSize(width: 500, height: 685)
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
     }
 
     private func bootstrapAppDelegate() {

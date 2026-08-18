@@ -2279,12 +2279,6 @@ final class EqualiserStore: ObservableObject {
         presetManager.markAsModified()
     }
     
-    /// Sets the window reference for visibility checking.
-    func setEqualiserWindow(_ window: NSWindow?) {
-        meterStore.setEqualiserWindow(window)
-        rtaAnalyzer.setEqualiserWindow(window)
-    }
-
     /// Starts noise profile capture on the denoiser.
     func startNoiseCapture() {
         routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.startNoiseCapture()
