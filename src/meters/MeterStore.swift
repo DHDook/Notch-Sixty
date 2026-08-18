@@ -403,7 +403,7 @@ final class MeterStore: ObservableObject {
         lastMeterValues[type] = values
     }
 
-    private func updateVUMeter(type: MeterType, dbValue: Float, interval: TimeInterval) {
+    func updateVUMeter(type: MeterType, dbValue: Float, interval: TimeInterval) {
         var values = lastVUValues[type] ?? VUValues()
         let target = MeterConstants.normalizedPosition(for: dbValue)
         values.vu += (target - values.vu) * MeterConstants.vuSmoothing
@@ -433,17 +433,7 @@ final class MeterStore: ObservableObject {
             }
         }
     }
-    
-    // MARK: - Test Support
-    
-    var visibleMeterWindowIDsForTesting: Set<String> {
-        visibleMeterWindowIDs
-    }
-    
-    internal func updateVUMeter(type: MeterType, dbValue: Float, interval: TimeInterval) {
-        updateVUMeter(type: type, dbValue: dbValue, interval: interval)
-    }
-    
+
     private func notifyAllObserversSilent() {
         observerQueue.sync {
             for type in MeterType.allCases {

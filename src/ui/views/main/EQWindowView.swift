@@ -451,16 +451,20 @@ struct EQWindowView: View {
                     object: window,
                     queue: .main
                 ) { _ in
-                    store.meterStore.meterWindowBecameHidden(id: "equaliser")
-                    store.rtaAnalyzer.rtaWindowBecameHidden(id: "equaliser")
+                    Task { @MainActor in
+                        store.meterStore.meterWindowBecameHidden(id: "equaliser")
+                        store.rtaAnalyzer.rtaWindowBecameHidden(id: "equaliser")
+                    }
                 }
                 NotificationCenter.default.addObserver(
                     forName: NSWindow.didDeminiaturizeNotification,
                     object: window,
                     queue: .main
                 ) { _ in
-                    store.meterStore.meterWindowBecameVisible(id: "equaliser")
-                    store.rtaAnalyzer.rtaWindowBecameVisible(id: "equaliser")
+                    Task { @MainActor in
+                        store.meterStore.meterWindowBecameVisible(id: "equaliser")
+                        store.rtaAnalyzer.rtaWindowBecameVisible(id: "equaliser")
+                    }
                 }
             }
         )
