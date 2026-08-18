@@ -57,7 +57,7 @@ struct EqualiserMain: App {
                 }
         }
         .defaultPosition(.center)
-        .defaultSize(width: 1060, height: 450)
+        .defaultSize(width: 1450, height: 480)
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {
@@ -124,7 +124,7 @@ struct EqualiserMain: App {
                 .environmentObject(windowActivation)
         }
         .defaultPosition(.center)
-        .defaultSize(width: 400, height: 350)
+        .defaultSize(width: 400, height: 200)
         .windowResizability(.contentSize)
 
         // Analytics meters window
@@ -134,7 +134,7 @@ struct EqualiserMain: App {
                 .environmentObject(windowActivation)
         }
         .defaultPosition(.center)
-        .defaultSize(width: 500, height: 650)
+        .defaultSize(width: 500, height: 685)
         .windowResizability(.contentSize)
     }
 

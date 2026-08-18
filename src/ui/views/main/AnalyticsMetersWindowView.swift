@@ -7,7 +7,12 @@ struct AnalyticsMetersWindowView: View {
     @StateObject private var inlineMeterBridge = InlineMeterBridge()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
+            WindowMetersToggleHeader(
+                title: "Meters",
+                isEnabled: store.meterStore.remainingMetersEnabled,
+                onToggle: { store.meterStore.remainingMetersEnabled = $0 }
+            )
             if store.meterStore.remainingMetersEnabled {
                 VStack(alignment: .leading, spacing: 8) {
                     GainStructureMeterView()
@@ -21,13 +26,12 @@ struct AnalyticsMetersWindowView: View {
                     InlineTruePeakMeterView()
                     StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
                 }
+                .padding(.horizontal, 12)
             } else {
-                VStack {
-                    Text("Meters Disabled")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Text("Meters Disabled")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(minWidth: 500, minHeight: 600)

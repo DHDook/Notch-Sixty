@@ -936,7 +936,7 @@ final class EqualiserStore: ObservableObject {
     let eqConfiguration: EQConfiguration
     let presetManager: PresetManager
     let roomCorrectionPresetManager = RoomCorrectionPresetManager()
-    let meterStore: MeterStore
+    var meterStore: MeterStore
     let updateService = UpdateCheckService()
     let rtaAnalyzer        = AdvancedDualSpectrumAnalyzer()
     let goniometerEngine   = GoniometerBufferEngine()

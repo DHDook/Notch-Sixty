@@ -7,7 +7,7 @@ struct VUMeterPairView: View {
     @State private var sourceKey: UUID = UUID()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             headerRow
             metersRow
         }

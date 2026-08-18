@@ -151,12 +151,6 @@ struct DynamicsInlineView: View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
             controlColumns
-            pickersRow
-            LatencyReadoutView(
-                totalLatencyMs: store.totalLatencyMs,
-                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
-                sampleRate: store.streamSampleRate
-            )
         }
     }
 
@@ -167,11 +161,13 @@ struct DynamicsInlineView: View {
             column2
             Divider()
             column3
+            Divider()
+            column4
         }
     }
 
-    private var pickersRow: some View {
-        HStack(alignment: .top, spacing: 12) {
+    private var column4: some View {
+        VStack(alignment: .leading, spacing: 12) {
             inlineSegmentedPicker(label: "Stereo", selection: inlineStereoModeBinding) {
                 Text("Stereo").tag(StereoModeSelection.stereo)
                 Text("Wide").tag(StereoModeSelection.wideMono)
@@ -187,6 +183,12 @@ struct DynamicsInlineView: View {
                 Text("Shape").tag(DitherMode.shaped)
                 Text("5th").tag(DitherMode.highOrder)
             }
+
+            LatencyReadoutView(
+                totalLatencyMs: store.totalLatencyMs,
+                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
+                sampleRate: store.streamSampleRate
+            )
         }
     }
 

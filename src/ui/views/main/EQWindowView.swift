@@ -93,14 +93,49 @@ struct EQWindowView: View {
     /// VU meters and EQ curve column.
     private var vuAndCurveColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VUMeterPairView(meterStore: store.meterStore)
-                .opacity(metersEnabledUI ? 1.0 : 0.35)
-                .saturation(metersEnabledUI ? 1.0 : 0.0)
-                .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+            HStack(alignment: .center, spacing: 12) {
+                VUMeterPairView(meterStore: store.meterStore)
+                    .opacity(metersEnabledUI ? 1.0 : 0.35)
+                    .saturation(metersEnabledUI ? 1.0 : 0.0)
+                    .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+
+                Divider()
+
+                windowLauncherStack
+            }
 
             EQCurveView(metersEnabled: metersEnabledUI)
-                .frame(width: 333, alignment: .leading)
+                .frame(width: 333 + 12 + 1 + 12 + windowLauncherWidth, alignment: .leading)
                 // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
+        }
+    }
+
+    private let windowLauncherWidth: CGFloat = 150
+
+    private var windowLauncherStack: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            windowLauncherRow(label: "RTA Analyser", systemImage: "waveform.path", windowId: "rta-window")
+            windowLauncherRow(label: "Peak & RMS Meters", systemImage: "chart.bar.fill", windowId: "levels-window")
+            windowLauncherRow(label: "Meters", systemImage: "gauge", windowId: "analytics-window")
+        }
+        .frame(width: windowLauncherWidth, alignment: .leading)
+    }
+
+    private func windowLauncherRow(label: String, systemImage: String, windowId: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button {
+                windowActivation.prepareToShowWindow()
+                openWindow(id: windowId)
+            } label: {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -360,7 +395,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 12)
-        .frame(minWidth: 1280, minHeight: 550)
+        .frame(minWidth: 1450, minHeight: 580)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
@@ -395,36 +430,6 @@ struct EQWindowView: View {
                 .frame(minWidth: 40, alignment: .center)
 
                 Button {
-                    windowActivation.prepareToShowWindow()
-                    openWindow(id: "rta-window")
-                } label: {
-                    Image(systemName: "waveform.path")
-                        .font(.system(size: 16))
-                }
-                .buttonStyle(.plain)
-                .help("RTA Analyser")
-
-                Button {
-                    windowActivation.prepareToShowWindow()
-                    openWindow(id: "levels-window")
-                } label: {
-                    Image(systemName: "chart.bar.fill")
-                        .font(.system(size: 16))
-                }
-                .buttonStyle(.plain)
-                .help("Peak & RMS Meters")
-
-                Button {
-                    windowActivation.prepareToShowWindow()
-                    openWindow(id: "analytics-window")
-                } label: {
-                    Image(systemName: "gauge")
-                        .font(.system(size: 16))
-                }
-                .buttonStyle(.plain)
-                .help("Analytics Meters")
-
-                Button {
                     openSettings()
                 } label: {
                     Image(systemName: "gearshape")
@@ -453,9 +458,6 @@ struct EQWindowView: View {
         }
         .onReceive(store.meterStore.$metersEnabled) { newValue in
             metersEnabledUI = newValue
-        }
-        .onReceive(store.meterStore.$metersEnabled.removeDuplicates()) { value in
-            if metersEnabledUI != value { metersEnabledUI = value }
         }
         .onDisappear {
             store.meterStore.windowBecameHidden()
