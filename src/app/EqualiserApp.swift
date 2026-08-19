@@ -130,7 +130,7 @@ struct EqualiserMain: App {
         .defaultLaunchBehavior(.suppressed)
 
         // Analytics meters window
-        Window("Meters", id: "analytics-window") {
+        Window("Analytics", id: "analytics-window") {
             AnalyticsMetersWindowView()
                 .environmentObject(store)
                 .environmentObject(windowActivation)

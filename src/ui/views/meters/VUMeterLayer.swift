@@ -16,16 +16,15 @@ final class VUMeterLayer: NSView, MeterObserver {
     private let clipLayer = CAShapeLayer()
     private let labelLayer = CATextLayer()
 
+    private var tickLabelValues: [Float] = [0, -3, -6, -12, -24, -48, -60]
+    private var tickLabelLayers: [CATextLayer] = []
+
     // MARK: - Colors
 
-    private let lightFaceColor = NSColor(hex: "#FAF6EE")
-    private let darkFaceColor = NSColor(hex: "#2B2014")
-    private let lightNeedleColor = NSColor(hex: "#412402")
-    private let darkNeedleColor = NSColor(hex: "#E8A84A")
-    private let lightTickColor = NSColor(hex: "#412402")
-    private let darkTickColor = NSColor(hex: "#E8A84A")
+    private let faceColor = NSColor(hex: "#161412")
+    private let needleColor = NSColor(hex: "#D9541F")
+    private let tickColor = NSColor(hex: "#EDEAE2")
     private let redTickColor = NSColor(hex: "#A32D2D")
-    private let darkRedTickColor = NSColor(hex: "#E24B4A")
 
     // MARK: - Constants
 
@@ -64,18 +63,18 @@ final class VUMeterLayer: NSView, MeterObserver {
         guard let layer = self.layer else { return }
 
         // Background layer (semicircular face)
-        backgroundLayer.fillColor = lightFaceColor.cgColor
+        backgroundLayer.fillColor = faceColor.cgColor
         layer.addSublayer(backgroundLayer)
 
         // Face layer (border)
         faceLayer.fillColor = nil
-        faceLayer.strokeColor = lightTickColor.cgColor
+        faceLayer.strokeColor = tickColor.cgColor
         faceLayer.lineWidth = 2
         layer.addSublayer(faceLayer)
 
         // Tick marks layer
         tickLayer.fillColor = nil
-        tickLayer.strokeColor = lightTickColor.cgColor
+        tickLayer.strokeColor = tickColor.cgColor
         tickLayer.lineWidth = 1
         layer.addSublayer(tickLayer)
 
@@ -87,13 +86,13 @@ final class VUMeterLayer: NSView, MeterObserver {
 
         // Needle layer
         needleLayer.fillColor = nil
-        needleLayer.strokeColor = lightNeedleColor.cgColor
+        needleLayer.strokeColor = needleColor.cgColor
         needleLayer.lineWidth = 2
         needleLayer.lineCap = .round
         layer.addSublayer(needleLayer)
 
         // Pivot layer (center dot)
-        pivotLayer.fillColor = lightNeedleColor.cgColor
+        pivotLayer.fillColor = needleColor.cgColor
         layer.addSublayer(pivotLayer)
 
         // Clip indicator (red dot at 0 dB)
@@ -105,12 +104,22 @@ final class VUMeterLayer: NSView, MeterObserver {
         labelLayer.string = channelLabel
         labelLayer.fontSize = 10
         labelLayer.alignmentMode = .center
-        labelLayer.foregroundColor = lightTickColor.cgColor
+        labelLayer.foregroundColor = tickColor.cgColor
         labelLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         layer.addSublayer(labelLayer)
 
+        // Tick label layers
+        tickLabelLayers = tickLabelValues.map { _ in
+            let layer = CATextLayer()
+            layer.fontSize = 6
+            layer.alignmentMode = .center
+            layer.foregroundColor = tickColor.cgColor
+            layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
+            self.layer?.addSublayer(layer)
+            return layer
+        }
+
         isSetupComplete = true
-        updateColors()
     }
 
     // MARK: - Layout
@@ -119,13 +128,13 @@ final class VUMeterLayer: NSView, MeterObserver {
         super.layout()
 
         let bounds = self.bounds
-        
+
         // Card face (replaces the semicircular dome)
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
-        let cardPath = CGPath(roundedRect: cardRect, cornerWidth: 10, cornerHeight: 10, transform: nil)
-        
-        // Pivot positioned in lower third of the card for proper VU meter appearance
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.72)
+        let cardPath = CGPath(roundedRect: cardRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
+
+        // Pivot positioned at bottom edge for vintage VU meter appearance
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.05)
         let radius = min(cardRect.width, cardRect.height) * 0.62
 
         CATransaction.begin()
@@ -140,7 +149,6 @@ final class VUMeterLayer: NSView, MeterObserver {
         // Tick marks
         let tickPath = CGMutablePath()
         let redTickPath = CGMutablePath()
-        let isDark = isDarkMode
         for dbValue in MeterConstants.standardTickValues {
             let normalized = MeterConstants.normalizedPosition(for: dbValue)
             let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(normalized)
@@ -168,10 +176,20 @@ final class VUMeterLayer: NSView, MeterObserver {
                 tickPath.addLine(to: endPoint)
             }
         }
-        tickLayer.strokeColor = isDark ? darkTickColor.cgColor : lightTickColor.cgColor
         tickLayer.path = tickPath
-        redTickLayer.strokeColor = isDark ? darkRedTickColor.cgColor : redTickColor.cgColor
         redTickLayer.path = redTickPath
+
+        // Tick labels
+        for (i, value) in tickLabelValues.enumerated() {
+            let normalized = MeterConstants.normalizedPosition(for: value)
+            let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(normalized)
+            let labelRadius = radius * 1.12
+            let point = CGPoint(x: center.x + labelRadius * cos(angle),
+                                 y: center.y + labelRadius * sin(angle))
+            let label = tickLabelLayers[i]
+            label.string = value == 0 ? "0" : "\(Int(value))"
+            label.frame = CGRect(x: point.x - 10, y: point.y - 4, width: 20, height: 8)
+        }
 
         // Needle
         let needlePath = CGMutablePath()
@@ -238,8 +256,9 @@ final class VUMeterLayer: NSView, MeterObserver {
         guard isSetupComplete else { return }
 
         let bounds = self.bounds
-        let center = CGPoint(x: bounds.midX, y: bounds.height * 0.85)
-        let radius = min(bounds.width, bounds.height) * 0.4
+        let cardRect = bounds.insetBy(dx: 2, dy: 2)
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.05)
+        let radius = min(cardRect.width, cardRect.height) * 0.62
 
         let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(currentNeedleValue)
         let needleEnd = CGPoint(
@@ -255,32 +274,6 @@ final class VUMeterLayer: NSView, MeterObserver {
 
     private func updateClipIndicator() {
         clipLayer.isHidden = !isCurrentlyClipping
-    }
-
-    // MARK: - Color Scheme
-
-    private var isDarkMode: Bool {
-        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-    }
-
-    private func updateColors() {
-        let isDark = isDarkMode
-
-        backgroundLayer.fillColor = isDark ? darkFaceColor.cgColor : lightFaceColor.cgColor
-        faceLayer.strokeColor = isDark ? darkTickColor.cgColor : lightTickColor.cgColor
-        needleLayer.strokeColor = isDark ? darkNeedleColor.cgColor : lightNeedleColor.cgColor
-        pivotLayer.fillColor = isDark ? darkNeedleColor.cgColor : lightNeedleColor.cgColor
-        labelLayer.foregroundColor = isDark ? darkTickColor.cgColor : lightTickColor.cgColor
-        tickLayer.strokeColor = isDark ? darkTickColor.cgColor : lightTickColor.cgColor
-        redTickLayer.strokeColor = isDark ? darkRedTickColor.cgColor : redTickColor.cgColor
-
-        // Redraw tick marks with updated colors
-        needsLayout = true
-    }
-
-    override func updateLayer() {
-        super.updateLayer()
-        updateColors()
     }
 }
 

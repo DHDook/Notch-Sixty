@@ -1,21 +1,71 @@
 import SwiftUI
 
-/// VU meter pair view with header controls.
-/// Displays left and right VU meters with input/output source selection and enable toggle.
+/// Left/right VU gauges only — no header controls (those live in
+/// VUControlsRow, composed alongside the window launchers in EQWindowView).
 struct VUMeterPairView: View {
     @ObservedObject var meterStore: MeterStore
     @State private var sourceKey: UUID = UUID()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            headerRow
-            metersRow
+        HStack(spacing: 12) {
+            leftMeter
+            rightMeter
         }
-        .frame(width: 333, alignment: .leading)
         .id(sourceKey)
+        .onChange(of: meterStore.vuMeterSource) { _, _ in
+            sourceKey = UUID()
+        }
     }
 
-    private var headerRow: some View {
+    private var leftMeter: some View {
+        VUMeterNSView(
+            meterStore: meterStore,
+            meterType: meterStore.vuMeterSource == .input ? .inputVULeft : .outputVULeft,
+            channelLabel: "L"
+        )
+        .frame(height: 78)
+        .background(Color.black)
+        .overlay(
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(
+                    LinearGradient(colors: [.white.opacity(0.55), .gray.opacity(0.45)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 3
+                )
+        )
+        .opacity(meterStore.vuMetersEnabled ? 1.0 : 0.35)
+        .saturation(meterStore.vuMetersEnabled ? 1.0 : 0.0)
+        .animation(.easeInOut(duration: 0.25), value: meterStore.vuMetersEnabled)
+    }
+
+    private var rightMeter: some View {
+        VUMeterNSView(
+            meterStore: meterStore,
+            meterType: meterStore.vuMeterSource == .input ? .inputVURight : .outputVURight,
+            channelLabel: "R"
+        )
+        .frame(height: 78)
+        .background(Color.black)
+        .overlay(
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(
+                    LinearGradient(colors: [.white.opacity(0.55), .gray.opacity(0.45)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 3
+                )
+        )
+        .opacity(meterStore.vuMetersEnabled ? 1.0 : 0.35)
+        .saturation(meterStore.vuMetersEnabled ? 1.0 : 0.0)
+        .animation(.easeInOut(duration: 0.25), value: meterStore.vuMetersEnabled)
+    }
+}
+
+/// VU header controls — In/Out source, enable toggle, help. Now lives in
+/// the combined controls/launcher stack rather than above the gauges.
+struct VUControlsRow: View {
+    @ObservedObject var meterStore: MeterStore
+
+    var body: some View {
         HStack(spacing: 8) {
             Text("VU")
                 .font(.system(size: 11, weight: .semibold))
@@ -28,10 +78,6 @@ struct VUMeterPairView: View {
             .pickerStyle(.segmented)
             .controlSize(.mini)
             .frame(width: 70)
-            .onChange(of: meterStore.vuMeterSource) { _, _ in
-                // Force view recreation to re-register observers
-                sourceKey = UUID()
-            }
 
             Toggle("", isOn: $meterStore.vuMetersEnabled)
                 .labelsHidden()
@@ -40,50 +86,15 @@ struct VUMeterPairView: View {
 
             Spacer()
 
-            helpButton
+            Button {
+                // Show help popover
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("VU meters with analog ballistics. Shows average level with slower response than peak meters.")
         }
-    }
-
-    private var metersRow: some View {
-        HStack(spacing: 12) {
-            leftMeter
-            rightMeter
-        }
-    }
-
-    private var leftMeter: some View {
-        VUMeterNSView(
-            meterStore: meterStore,
-            meterType: meterStore.vuMeterSource == .input ? .inputVULeft : .outputVULeft,
-            channelLabel: "L"
-        )
-        .frame(height: 120)
-        .opacity(meterStore.vuMetersEnabled ? 1.0 : 0.35)
-        .saturation(meterStore.vuMetersEnabled ? 1.0 : 0.0)
-        .animation(.easeInOut(duration: 0.25), value: meterStore.vuMetersEnabled)
-    }
-
-    private var rightMeter: some View {
-        VUMeterNSView(
-            meterStore: meterStore,
-            meterType: meterStore.vuMeterSource == .input ? .inputVURight : .outputVURight,
-            channelLabel: "R"
-        )
-        .frame(height: 120)
-        .opacity(meterStore.vuMetersEnabled ? 1.0 : 0.35)
-        .saturation(meterStore.vuMetersEnabled ? 1.0 : 0.0)
-        .animation(.easeInOut(duration: 0.25), value: meterStore.vuMetersEnabled)
-    }
-
-    private var helpButton: some View {
-        Button {
-            // Show help popover
-        } label: {
-            Image(systemName: "questionmark.circle")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .help("VU meters with analog ballistics. Shows average level with slower response than peak meters.")
     }
 }

@@ -101,27 +101,31 @@ struct EQWindowView: View {
 
                 Divider()
 
-                windowLauncherStack
+                controlsAndLaunchersStack
             }
 
             EQCurveView(metersEnabled: metersEnabledUI)
-                .frame(width: 333 + 12 + 1 + 12 + windowLauncherWidth, alignment: .leading)
+                .frame(width: 333 + 12 + 1 + 12 + controlsAndLaunchersWidth, alignment: .leading)
                 // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
         }
     }
 
-    private let windowLauncherWidth: CGFloat = 150
+    private let controlsAndLaunchersWidth: CGFloat = 150
 
-    private var windowLauncherStack: some View {
+    private var controlsAndLaunchersStack: some View {
         VStack(alignment: .leading, spacing: 14) {
-            windowLauncherRow(label: "RTA Analyser", systemImage: "waveform.path", windowId: "rta-window")
-            windowLauncherRow(label: "Peak & RMS Meters", systemImage: "chart.bar.fill", windowId: "levels-window")
-            windowLauncherRow(label: "Meters", systemImage: "gauge", windowId: "analytics-window")
+            VUControlsRow(meterStore: store.meterStore)
+
+            Divider()
+
+            windowLauncherRow(label: "RTA", tooltip: rtaTooltip, systemImage: "waveform.path", windowId: "rta-window")
+            windowLauncherRow(label: "Levels", tooltip: levelsTooltip, systemImage: "chart.bar.fill", windowId: "levels-window")
+            windowLauncherRow(label: "Analytics", tooltip: analyticsTooltip, systemImage: "gauge", windowId: "analytics-window")
         }
-        .frame(width: windowLauncherWidth, alignment: .leading)
+        .frame(width: controlsAndLaunchersWidth, alignment: .leading)
     }
 
-    private func windowLauncherRow(label: String, systemImage: String, windowId: String) -> some View {
+    private func windowLauncherRow(label: String, tooltip: String, systemImage: String, windowId: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.caption)
@@ -133,12 +137,34 @@ struct EQWindowView: View {
                 openWindow(id: windowId)
             } label: {
                 Image(systemName: systemImage)
-                    .font(.system(size: 13))
+                    .font(.system(size: 15))
             }
             .buttonStyle(.plain)
         }
+        .help(tooltip)
     }
 
+    private var rtaTooltip: String {
+        "Pre-EQ — real-time spectrum before processing\nPost-EQ — real-time spectrum after processing"
+    }
+
+    private var levelsTooltip: String {
+        "Peak In — instantaneous input level\nPeak Out — instantaneous output level\nRMS In — average input level\nRMS Out — average output level"
+    }
+
+    private var analyticsTooltip: String {
+        """
+        Gain Structure — headroom through the processing chain
+        Phase Correlation — mono compatibility between L/R
+        Crest Factor — peak-to-average ratio
+        ISP Latch — inter-sample peak overshoot detection
+        DR Factor — dynamic range rating
+        Bit Stream — real-time bit depth of the input
+        Bit Rate — data rate for compressed sources
+        True Peak — oversampled peak with ISP indicator
+        Stereo Goniometer — vectorscope of stereo image width
+        """
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -412,10 +438,6 @@ struct EQWindowView: View {
                     .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
                 }
                 .frame(minWidth: 40, alignment: .center)
-                .padding(.top, 10)
-                .padding(.bottom, 2)
-                .padding(.leading, 4)
-                .padding(.trailing, 8)
 
                 VStack(spacing: 2) {
                     Text("Meters")
