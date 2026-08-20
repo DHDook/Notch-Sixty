@@ -105,7 +105,7 @@ struct EQWindowView: View {
             }
 
             EQCurveView(metersEnabled: metersEnabledUI)
-                .frame(width: 333 + 12 + 1 + 12 + controlsAndLaunchersWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
         }
     }
@@ -113,7 +113,7 @@ struct EQWindowView: View {
     private let controlsAndLaunchersWidth: CGFloat = 150
 
     private var controlsAndLaunchersStack: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             VUControlsRow(meterStore: store.meterStore)
 
             Divider()
@@ -141,6 +141,7 @@ struct EQWindowView: View {
             }
             .buttonStyle(.plain)
         }
+        .contentShape(Rectangle())
         .help(tooltip)
     }
 
@@ -425,6 +426,20 @@ struct EQWindowView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
+                    Text("Meters")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    Toggle("", isOn: $metersEnabledUI)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .help("Master switch for all level meters, RTA, and analytics graphs. Disabling reduces CPU overhead.")
+                }
+                .frame(minWidth: 40, alignment: .center)
+                .padding(.leading, 8)
+                .padding(.trailing, 6)
+
+                VStack(spacing: 2) {
                     Text("Master")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
@@ -436,18 +451,6 @@ struct EQWindowView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .help("Enable or disable EQ processing. When disabled, audio passes through without EQ applied.")
-                }
-                .frame(minWidth: 40, alignment: .center)
-
-                VStack(spacing: 2) {
-                    Text("Meters")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                    Toggle("", isOn: $metersEnabledUI)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .help("Master switch for all level meters, RTA, and analytics graphs. Disabling reduces CPU overhead.")
                 }
                 .frame(minWidth: 40, alignment: .center)
 

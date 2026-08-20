@@ -23,7 +23,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVULeft : .outputVULeft,
             channelLabel: "L"
         )
-        .frame(height: 78)
+        .frame(width: 130, height: 74)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)
@@ -44,7 +44,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVURight : .outputVURight,
             channelLabel: "R"
         )
-        .frame(height: 78)
+        .frame(width: 130, height: 74)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)
@@ -68,8 +68,11 @@ struct VUControlsRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("VU")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
 
             Picker("", selection: $meterStore.vuMeterSource) {
                 Text("In").tag(VUSource.input)
@@ -84,8 +87,6 @@ struct VUControlsRow: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
 
-            Spacer()
-
             Button {
                 // Show help popover
             } label: {
@@ -96,5 +97,6 @@ struct VUControlsRow: View {
             .buttonStyle(.plain)
             .help("VU meters with analog ballistics. Shows average level with slower response than peak meters.")
         }
+        .contentShape(Rectangle())
     }
 }

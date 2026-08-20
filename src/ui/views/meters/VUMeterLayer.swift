@@ -21,16 +21,16 @@ final class VUMeterLayer: NSView, MeterObserver {
 
     // MARK: - Colors
 
-    private let faceColor = NSColor(hex: "#161412")
-    private let needleColor = NSColor(hex: "#D9541F")
-    private let tickColor = NSColor(hex: "#EDEAE2")
-    private let redTickColor = NSColor(hex: "#A32D2D")
+    private var faceColor = NSColor(hex: "#161412")
+    private var needleColor = NSColor(hex: "#D9541F")
+    private var tickColor = NSColor(hex: "#EDEAE2")
+    private var redTickColor = NSColor(hex: "#A32D2D")
 
     // MARK: - Constants
 
-    // Flattened ~90° sweep, symmetric about vertical (was a full 180°)
-    private let arcStartAngle: CGFloat = .pi * (135.0 / 180.0)  // 135° — up-left
-    private let arcEndAngle: CGFloat   = .pi * (45.0 / 180.0)   // 45°  — up-right
+    // Widened 140° sweep, flatter and wider (was 90° sweep at 135°/45°)
+    private let arcStartAngle: CGFloat = .pi * (160.0 / 180.0)  // 160° — up-left
+    private let arcEndAngle: CGFloat   = .pi * (20.0 / 180.0)   // 20°  — up-right
     private let arcClockwise: Bool = true  // Clockwise for proper arc direction
     private let needleLength: CGFloat = 0.85  // As fraction of radius
     private let pivotRadius: CGFloat = 4
@@ -120,6 +120,7 @@ final class VUMeterLayer: NSView, MeterObserver {
         }
 
         isSetupComplete = true
+        updateColorsForAppearance()
     }
 
     // MARK: - Layout
@@ -135,7 +136,7 @@ final class VUMeterLayer: NSView, MeterObserver {
 
         // Pivot positioned at bottom edge for vintage VU meter appearance
         let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.05)
-        let radius = min(cardRect.width, cardRect.height) * 0.62
+        let radius = cardRect.width * 0.46
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -258,7 +259,7 @@ final class VUMeterLayer: NSView, MeterObserver {
         let bounds = self.bounds
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
         let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.05)
-        let radius = min(cardRect.width, cardRect.height) * 0.62
+        let radius = cardRect.width * 0.46
 
         let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(currentNeedleValue)
         let needleEnd = CGPoint(
@@ -274,6 +275,35 @@ final class VUMeterLayer: NSView, MeterObserver {
 
     private func updateClipIndicator() {
         clipLayer.isHidden = !isCurrentlyClipping
+    }
+
+    // MARK: - Appearance
+
+    private func updateColorsForAppearance() {
+        let isDark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+
+        if isDark {
+            faceColor = NSColor(hex: "#161412")
+            tickColor = NSColor(hex: "#EDEAE2")
+        } else {
+            faceColor = NSColor(hex: "#FAF6EE")
+            tickColor = NSColor(hex: "#3A2E1F")
+        }
+        // needleColor and redTickColor stay the same in both modes
+
+        guard isSetupComplete else { return }
+        backgroundLayer.fillColor = faceColor.cgColor
+        faceLayer.strokeColor = tickColor.cgColor
+        tickLayer.strokeColor = tickColor.cgColor
+        needleLayer.strokeColor = needleColor.cgColor
+        pivotLayer.fillColor = needleColor.cgColor
+        labelLayer.foregroundColor = tickColor.cgColor
+        tickLabelLayers.forEach { $0.foregroundColor = tickColor.cgColor }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColorsForAppearance()
     }
 }
 
