@@ -18,6 +18,7 @@ struct EQWindowView: View {
     @State private var showDriverSheet = true
     @State private var showSaveSheet = false
     @State private var showStateResetAlert = false
+    @State private var infoPopoverWindowId: String? = nil
 
     /// Whether the driver installation overlay should be shown.
     private var needsDriverInstallation: Bool {
@@ -101,7 +102,9 @@ struct EQWindowView: View {
                         .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
 
                     VUControlsRow(meterStore: store.meterStore)
+                    Spacer(minLength: 0)
                 }
+                .frame(maxHeight: .infinity, alignment: .topLeading)
 
                 Divider()
 
@@ -119,29 +122,55 @@ struct EQWindowView: View {
             windowLauncherRow(label: "RTA", tooltip: rtaTooltip, systemImage: "waveform.path", windowId: "rta-window")
             windowLauncherRow(label: "Levels", tooltip: levelsTooltip, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", tooltip: analyticsTooltip, systemImage: "gauge", windowId: "analytics-window")
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func windowLauncherRow(label: String, tooltip: String, systemImage: String, windowId: String) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 4)
+        HStack(spacing: 6) {
             Button {
                 windowActivation.prepareToShowWindow()
                 openWindow(id: windowId)
             } label: {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15))
+                HStack(spacing: 6) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13))
+                    Text(label)
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.08))
+                )
             }
             .buttonStyle(.plain)
-            .help(tooltip)
+
+            Button {
+                infoPopoverWindowId = windowId
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: Binding(
+                get: { infoPopoverWindowId == windowId },
+                set: { if !$0 { infoPopoverWindowId = nil } }
+            )) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(tooltip.components(separatedBy: "\n"), id: \.self) { line in
+                        Text(line).font(.caption)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: 260, alignment: .leading)
+            }
         }
-        .contentShape(Rectangle())
-        .help(tooltip)
     }
 
     private var rtaTooltip: String {

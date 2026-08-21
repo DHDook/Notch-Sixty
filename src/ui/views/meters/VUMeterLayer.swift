@@ -9,7 +9,9 @@ final class VUMeterLayer: NSView, MeterObserver {
 
     private let backgroundLayer = CAShapeLayer()
     private let faceLayer = CAShapeLayer()
+    private let faceGradientLayer = CAGradientLayer()
     private let tickLayer = CAShapeLayer()
+    private let majorTickLayer = CAShapeLayer()
     private let redTickLayer = CAShapeLayer()
     private let needleLayer = CAShapeLayer()
     private let pivotLayer = CAShapeLayer()
@@ -28,9 +30,9 @@ final class VUMeterLayer: NSView, MeterObserver {
 
     // MARK: - Constants
 
-    // Widened 140° sweep, flatter and wider (was 90° sweep at 135°/45°)
-    private let arcStartAngle: CGFloat = .pi * (160.0 / 180.0)  // 160° — up-left
-    private let arcEndAngle: CGFloat   = .pi * (20.0 / 180.0)   // 20°  — up-right
+    // 60° sweep, flatter and wider (was 140° sweep at 160°/20°)
+    private let arcStartAngle: CGFloat = .pi * (120.0 / 180.0)  // 120° — up-left
+    private let arcEndAngle: CGFloat   = .pi * (60.0 / 180.0)   // 60°  — up-right
     private let arcClockwise: Bool = true  // Clockwise for proper arc direction
     private let needleLength: CGFloat = 0.85  // As fraction of radius
     private let pivotRadius: CGFloat = 4
@@ -66,6 +68,17 @@ final class VUMeterLayer: NSView, MeterObserver {
         backgroundLayer.fillColor = faceColor.cgColor
         layer.addSublayer(backgroundLayer)
 
+        // Face gradient layer (subtle vignette)
+        faceGradientLayer.colors = [
+            NSColor.black.withAlphaComponent(0.12).cgColor,
+            NSColor.clear.cgColor,
+            NSColor.black.withAlphaComponent(0.08).cgColor
+        ]
+        faceGradientLayer.locations = [0, 0.5, 1]
+        faceGradientLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        faceGradientLayer.endPoint = CGPoint(x: 0.5, y: 1)
+        layer.addSublayer(faceGradientLayer)
+
         // Face layer (border)
         faceLayer.fillColor = nil
         faceLayer.strokeColor = tickColor.cgColor
@@ -78,6 +91,12 @@ final class VUMeterLayer: NSView, MeterObserver {
         tickLayer.lineWidth = 1
         layer.addSublayer(tickLayer)
 
+        // Major tick marks layer (for labeled ticks)
+        majorTickLayer.fillColor = nil
+        majorTickLayer.strokeColor = tickColor.cgColor
+        majorTickLayer.lineWidth = 1.5
+        layer.addSublayer(majorTickLayer)
+
         // Red tick marks layer (for top 15-20%)
         redTickLayer.fillColor = nil
         redTickLayer.strokeColor = redTickColor.cgColor
@@ -89,6 +108,10 @@ final class VUMeterLayer: NSView, MeterObserver {
         needleLayer.strokeColor = needleColor.cgColor
         needleLayer.lineWidth = 2
         needleLayer.lineCap = .round
+        needleLayer.shadowColor = NSColor.black.cgColor
+        needleLayer.shadowOpacity = 0.35
+        needleLayer.shadowRadius = 1.5
+        needleLayer.shadowOffset = CGSize(width: 0, height: -1)
         layer.addSublayer(needleLayer)
 
         // Pivot layer (center dot)
@@ -136,8 +159,8 @@ final class VUMeterLayer: NSView, MeterObserver {
         let cardPath = CGPath(roundedRect: cardRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
 
         // Pivot positioned below frame for vintage VU meter appearance
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 6)
-        let radius = cardRect.width * 0.46 + 10
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 75)
+        let radius = cardRect.width * 0.92
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -148,8 +171,15 @@ final class VUMeterLayer: NSView, MeterObserver {
         // Card face border
         faceLayer.path = cardPath
 
+        // Face gradient layer
+        faceGradientLayer.frame = cardRect
+        let gradientMask = CAShapeLayer()
+        gradientMask.path = cardPath
+        faceGradientLayer.mask = gradientMask
+
         // Tick marks
         let tickPath = CGMutablePath()
+        let majorTickPath = CGMutablePath()
         let redTickPath = CGMutablePath()
         for dbValue in MeterConstants.standardTickValues {
             let normalized = MeterConstants.normalizedPosition(for: dbValue)
@@ -173,12 +203,16 @@ final class VUMeterLayer: NSView, MeterObserver {
             if isRedZone {
                 redTickPath.move(to: startPoint)
                 redTickPath.addLine(to: endPoint)
+            } else if tickLabelValues.contains(dbValue) {
+                majorTickPath.move(to: startPoint)
+                majorTickPath.addLine(to: endPoint)
             } else {
                 tickPath.move(to: startPoint)
                 tickPath.addLine(to: endPoint)
             }
         }
         tickLayer.path = tickPath
+        majorTickLayer.path = majorTickPath
         redTickLayer.path = redTickPath
 
         // Tick labels
@@ -259,8 +293,8 @@ final class VUMeterLayer: NSView, MeterObserver {
 
         let bounds = self.bounds
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 6)
-        let radius = cardRect.width * 0.46 + 10
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 75)
+        let radius = cardRect.width * 0.92
 
         let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(currentNeedleValue)
         let needleEnd = CGPoint(
@@ -296,10 +330,18 @@ final class VUMeterLayer: NSView, MeterObserver {
         backgroundLayer.fillColor = faceColor.cgColor
         faceLayer.strokeColor = tickColor.cgColor
         tickLayer.strokeColor = tickColor.cgColor
+        majorTickLayer.strokeColor = tickColor.cgColor
         needleLayer.strokeColor = needleColor.cgColor
         pivotLayer.fillColor = needleColor.cgColor
         labelLayer.foregroundColor = tickColor.cgColor
         tickLabelLayers.forEach { $0.foregroundColor = tickColor.cgColor }
+
+        // Update face gradient colors for appearance
+        faceGradientLayer.colors = [
+            NSColor.black.withAlphaComponent(0.12).cgColor,
+            NSColor.clear.cgColor,
+            NSColor.black.withAlphaComponent(0.08).cgColor
+        ]
     }
 
     override func viewDidChangeEffectiveAppearance() {
