@@ -72,8 +72,6 @@ struct VUControlsRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            Spacer(minLength: 4)
-
             Picker("", selection: $meterStore.vuMeterSource) {
                 Text("In").tag(VUSource.input)
                 Text("Out").tag(VUSource.output)
@@ -97,6 +95,6 @@ struct VUControlsRow: View {
             .buttonStyle(.plain)
             .help("VU meters with analog ballistics. Shows average level with slower response than peak meters.")
         }
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }

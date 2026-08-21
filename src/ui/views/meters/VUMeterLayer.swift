@@ -219,7 +219,7 @@ final class VUMeterLayer: NSView, MeterObserver {
         for (i, value) in tickLabelValues.enumerated() {
             let normalized = MeterConstants.normalizedPosition(for: value)
             let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(normalized)
-            let labelRadius = radius * 1.02
+            let labelRadius = radius * 0.97
             let point = CGPoint(x: center.x + labelRadius * cos(angle),
                                  y: center.y + labelRadius * sin(angle))
             let label = tickLabelLayers[i]

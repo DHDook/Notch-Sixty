@@ -102,9 +102,7 @@ struct EQWindowView: View {
                         .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
 
                     VUControlsRow(meterStore: store.meterStore)
-                    Spacer(minLength: 0)
                 }
-                .frame(maxHeight: .infinity, alignment: .topLeading)
 
                 Divider()
 
@@ -122,9 +120,8 @@ struct EQWindowView: View {
             windowLauncherRow(label: "RTA", tooltip: rtaTooltip, systemImage: "waveform.path", windowId: "rta-window")
             windowLauncherRow(label: "Levels", tooltip: levelsTooltip, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", tooltip: analyticsTooltip, systemImage: "gauge", windowId: "analytics-window")
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func windowLauncherRow(label: String, tooltip: String, systemImage: String, windowId: String) -> some View {
@@ -450,7 +447,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 12)
-        .frame(minWidth: 1450, minHeight: 580)
+        .frame(minWidth: 1250, minHeight: 580)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
