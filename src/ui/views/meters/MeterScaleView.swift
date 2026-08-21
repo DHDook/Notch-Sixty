@@ -60,13 +60,13 @@ struct MeterScaleView: View {
 struct MirroredMeterScaleView: View {
     let barLength: CGFloat
     let labelColumnWidth: CGFloat
-    private let canvasHeight: CGFloat = 12
+    private let canvasHeight: CGFloat = 16
     private let edgeInset: CGFloat = 6
-    private let minLabelSpacing: CGFloat = 5
-    private let tickH: CGFloat = 6        // tick height — matches text cap height at 6pt font
+    private let minLabelSpacing: CGFloat = 8
+    private let tickH: CGFloat = 9        // tick height — matches text cap height at 9pt font
     private let tickW: CGFloat = 1
-    private let labelFont = Font.system(size: 6, weight: .medium, design: .monospaced)
-    private let unitFont  = Font.system(size: 6, weight: .medium, design: .monospaced)
+    private let labelFont = Font.system(size: 9, weight: .medium, design: .monospaced)
+    private let unitFont  = Font.system(size: 9, weight: .medium, design: .monospaced)
 
     var body: some View {
         let totalWidth = barLength * 2 + labelColumnWidth

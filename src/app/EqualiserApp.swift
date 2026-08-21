@@ -109,7 +109,7 @@ struct EqualiserMain: App {
 
         // RTA Analyser window
         Window("RTA Analyser", id: "rta-window") {
-            RTAWindowView()
+            RTAWindowView(meterStore: store.meterStore)
                 .environmentObject(store)
                 .environmentObject(windowActivation)
         }
@@ -120,18 +120,18 @@ struct EqualiserMain: App {
 
         // Peak & RMS Meters window
         Window("Peak & RMS Meters", id: "levels-window") {
-            LevelMetersWindowView()
+            LevelMetersWindowView(meterStore: store.meterStore)
                 .environmentObject(store)
                 .environmentObject(windowActivation)
         }
         .defaultPosition(.topLeading)
-        .defaultSize(width: 400, height: 200)
+        .defaultSize(width: 460, height: 220)
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
 
         // Analytics meters window
         Window("Analytics", id: "analytics-window") {
-            AnalyticsMetersWindowView()
+            AnalyticsMetersWindowView(meterStore: store.meterStore)
                 .environmentObject(store)
                 .environmentObject(windowActivation)
         }

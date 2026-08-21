@@ -2,7 +2,7 @@ import SwiftUI
 
 struct LevelMetersView: View {
     let meterStore: MeterStore
-    private let barLength: CGFloat = MeterConstants.meterHeight   // 126pt — now a length, not a height
+    private let barLength: CGFloat = 170
     private let labelColumnWidth: CGFloat = 80
     private let barThickness: CGFloat = 14
 
