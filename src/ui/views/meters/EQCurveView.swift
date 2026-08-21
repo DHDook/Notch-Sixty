@@ -15,7 +15,7 @@ struct EQCurveView: View {
     @State private var showCurveHelp:  Bool = false
 
     // MARK: - Constants
-    private let plotHeight:  CGFloat = 130   // reduced from 156; height-matched to preampVolumeColumn
+    private let plotHeight:  CGFloat = 115   // reduced from 130; height-matched to preampVolumeColumn
     private let maxDB:       Double  =  15   // ±15 dB display range
     private let freqMin:     Double  =  20
     private let freqMax:     Double  = 20_000

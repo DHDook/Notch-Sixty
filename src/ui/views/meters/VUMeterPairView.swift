@@ -23,7 +23,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVULeft : .outputVULeft,
             channelLabel: "L"
         )
-        .frame(width: 130, height: 74)
+        .frame(width: 136, height: 74)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)
@@ -44,7 +44,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVURight : .outputVURight,
             channelLabel: "R"
         )
-        .frame(width: 130, height: 74)
+        .frame(width: 136, height: 74)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)

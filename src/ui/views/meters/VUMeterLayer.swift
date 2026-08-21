@@ -16,7 +16,7 @@ final class VUMeterLayer: NSView, MeterObserver {
     private let clipLayer = CAShapeLayer()
     private let labelLayer = CATextLayer()
 
-    private var tickLabelValues: [Float] = [0, -3, -6, -12, -24, -48, -60]
+    private var tickLabelValues: [Float] = [0, -12, -24, -36, -48, -60]
     private var tickLabelLayers: [CATextLayer] = []
 
     // MARK: - Colors
@@ -119,6 +119,7 @@ final class VUMeterLayer: NSView, MeterObserver {
             return layer
         }
 
+        self.layer?.masksToBounds = true
         isSetupComplete = true
         updateColorsForAppearance()
     }
@@ -134,9 +135,9 @@ final class VUMeterLayer: NSView, MeterObserver {
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
         let cardPath = CGPath(roundedRect: cardRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
 
-        // Pivot positioned at bottom edge for vintage VU meter appearance
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.05)
-        let radius = cardRect.width * 0.46
+        // Pivot positioned below frame for vintage VU meter appearance
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 6)
+        let radius = cardRect.width * 0.46 + 10
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -184,7 +185,7 @@ final class VUMeterLayer: NSView, MeterObserver {
         for (i, value) in tickLabelValues.enumerated() {
             let normalized = MeterConstants.normalizedPosition(for: value)
             let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(normalized)
-            let labelRadius = radius * 1.12
+            let labelRadius = radius * 1.02
             let point = CGPoint(x: center.x + labelRadius * cos(angle),
                                  y: center.y + labelRadius * sin(angle))
             let label = tickLabelLayers[i]
@@ -258,8 +259,8 @@ final class VUMeterLayer: NSView, MeterObserver {
 
         let bounds = self.bounds
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY + cardRect.height * 0.05)
-        let radius = cardRect.width * 0.46
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 6)
+        let radius = cardRect.width * 0.46 + 10
 
         let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(currentNeedleValue)
         let needleEnd = CGPoint(

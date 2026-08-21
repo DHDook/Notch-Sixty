@@ -93,15 +93,19 @@ struct EQWindowView: View {
     /// VU meters and EQ curve column.
     private var vuAndCurveColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 12) {
-                VUMeterPairView(meterStore: store.meterStore)
-                    .opacity(metersEnabledUI ? 1.0 : 0.35)
-                    .saturation(metersEnabledUI ? 1.0 : 0.0)
-                    .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    VUMeterPairView(meterStore: store.meterStore)
+                        .opacity(metersEnabledUI ? 1.0 : 0.35)
+                        .saturation(metersEnabledUI ? 1.0 : 0.0)
+                        .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
+
+                    VUControlsRow(meterStore: store.meterStore)
+                }
 
                 Divider()
 
-                controlsAndLaunchersStack
+                launcherStack
             }
 
             EQCurveView(metersEnabled: metersEnabledUI)
@@ -110,19 +114,13 @@ struct EQWindowView: View {
         }
     }
 
-    private let controlsAndLaunchersWidth: CGFloat = 150
-
-    private var controlsAndLaunchersStack: some View {
+    private var launcherStack: some View {
         VStack(alignment: .leading, spacing: 10) {
-            VUControlsRow(meterStore: store.meterStore)
-
-            Divider()
-
             windowLauncherRow(label: "RTA", tooltip: rtaTooltip, systemImage: "waveform.path", windowId: "rta-window")
             windowLauncherRow(label: "Levels", tooltip: levelsTooltip, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", tooltip: analyticsTooltip, systemImage: "gauge", windowId: "analytics-window")
         }
-        .frame(width: controlsAndLaunchersWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func windowLauncherRow(label: String, tooltip: String, systemImage: String, windowId: String) -> some View {
@@ -140,6 +138,7 @@ struct EQWindowView: View {
                     .font(.system(size: 15))
             }
             .buttonStyle(.plain)
+            .help(tooltip)
         }
         .contentShape(Rectangle())
         .help(tooltip)
