@@ -20,7 +20,6 @@ struct RTAWindowView: View {
         }
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
-            meterStore.rtaEnabled = true
             store.rtaAnalyzer.rtaWindowBecameVisible(id: "rta-window")
         }
         .onDisappear {
@@ -46,7 +45,6 @@ struct RTAWindowView: View {
                     queue: .main
                 ) { _ in
                     Task { @MainActor in
-                        meterStore.rtaEnabled = true
                         store.rtaAnalyzer.rtaWindowBecameVisible(id: "rta-window")
                     }
                 }

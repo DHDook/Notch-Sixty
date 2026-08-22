@@ -151,12 +151,6 @@ struct DynamicsInlineView: View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
             controlColumns
-            pickersRow
-            LatencyReadoutView(
-                totalLatencyMs: store.totalLatencyMs,
-                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
-                sampleRate: store.streamSampleRate
-            )
         }
     }
 
@@ -167,26 +161,8 @@ struct DynamicsInlineView: View {
             column2
             Divider()
             column3
-        }
-    }
-
-    private var pickersRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            inlineSegmentedPicker(label: "Stereo", selection: inlineStereoModeBinding) {
-                Text("Stereo").tag(StereoModeSelection.stereo)
-                Text("Wide").tag(StereoModeSelection.wideMono)
-                Text("Mono").tag(StereoModeSelection.trueMono)
-            }
-            inlineSegmentedPicker(label: "Latency", selection: inlineLatencyModeBinding) {
-                Text("Music").tag(LatencyMode.music)
-                Text("Movie").tag(LatencyMode.movie)
-            }
-            inlineSegmentedPicker(label: "Dither", selection: inlineDitherModeBinding) {
-                Text("Off").tag(DitherMode.bypass)
-                Text("TPDF").tag(DitherMode.tpdf)
-                Text("Shape").tag(DitherMode.shaped)
-                Text("5th").tag(DitherMode.highOrder)
-            }
+            Divider()
+            column4
         }
     }
 
@@ -2033,6 +2009,34 @@ struct DynamicsInlineView: View {
                         .foregroundStyle(.red)
                 }
             }
+        }
+    }
+
+    // MARK: - Column 4: Segmented pickers + readout
+
+    private var column4: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            inlineSegmentedPicker(label: "Stereo", selection: inlineStereoModeBinding) {
+                Text("Stereo").tag(StereoModeSelection.stereo)
+                Text("Wide").tag(StereoModeSelection.wideMono)
+                Text("Mono").tag(StereoModeSelection.trueMono)
+            }
+            inlineSegmentedPicker(label: "Latency Mode", selection: inlineLatencyModeBinding) {
+                Text("Music").tag(LatencyMode.music)
+                Text("Movie").tag(LatencyMode.movie)
+            }
+            inlineSegmentedPicker(label: "Dither", selection: inlineDitherModeBinding) {
+                Text("Off").tag(DitherMode.bypass)
+                Text("TPDF").tag(DitherMode.tpdf)
+                Text("Shape").tag(DitherMode.shaped)
+                Text("5th").tag(DitherMode.highOrder)
+            }
+
+            LatencyReadoutView(
+                totalLatencyMs: store.totalLatencyMs,
+                alignmentDelayMs: Double(store.dynamicsConfig.advanced.interChannelDelayMs),
+                sampleRate: store.streamSampleRate
+            )
         }
     }
 

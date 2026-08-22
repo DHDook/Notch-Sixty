@@ -16,8 +16,24 @@ struct AnalyticsMetersWindowView: View {
             )
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 20) {
+                    GainStructureMeterView()
+                        .frame(width: 220, alignment: .leading)
+
+                    Divider()
+
+                    StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
+                        .frame(width: 220, height: 240, alignment: .center)
+                }
+
+                Divider()
+
+                HStack(alignment: .top, spacing: 20) {
                     VStack(alignment: .leading, spacing: 12) {
-                        GainStructureMeterView()
+                        HStack(spacing: 16) {
+                            InlineIspLatchView(bridge: inlineMeterBridge)
+                            InlineTruePeakView(bridge: inlineMeterBridge)
+                        }
+                        InlineTruePeakMeterView()
                         InlineBitStreamView(bridge: inlineMeterBridge)
                     }
                     .frame(width: 220, alignment: .leading)
@@ -28,29 +44,19 @@ struct AnalyticsMetersWindowView: View {
                         InlinePhaseCorrelationView()
                         InlineCrestFactorView(bridge: inlineMeterBridge)
                         InlineDRFactorView(bridge: inlineMeterBridge)
-                        HStack(spacing: 16) {
-                            InlineIspLatchView(bridge: inlineMeterBridge)
-                            InlineTruePeakView(bridge: inlineMeterBridge)
-                        }
-                        InlineTruePeakMeterView()
                     }
                     .frame(width: 220, alignment: .leading)
                 }
-
-                Divider()
-
-                StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-                    .frame(maxWidth: .infinity, alignment: .center)
             }
             .padding(.horizontal, 12)
+            .padding(.bottom, 16)
             .opacity(meterStore.remainingMetersEnabled ? 1.0 : 0.35)
             .saturation(meterStore.remainingMetersEnabled ? 1.0 : 0.0)
             .animation(.easeInOut(duration: 0.25), value: meterStore.remainingMetersEnabled)
             .allowsHitTesting(meterStore.remainingMetersEnabled)
         }
-        .frame(minWidth: 500, minHeight: 500)
+        .frame(minWidth: 500, minHeight: 420)
         .onAppear {
-            meterStore.remainingMetersEnabled = true
             meterStore.meterWindowBecameVisible(id: "analytics-window")
             inlineMeterBridge.register(with: meterStore, equaliserStore: store)
         }
@@ -77,7 +83,6 @@ struct AnalyticsMetersWindowView: View {
                     queue: .main
                 ) { _ in
                     Task { @MainActor in
-                        meterStore.remainingMetersEnabled = true
                         meterStore.meterWindowBecameVisible(id: "analytics-window")
                     }
                 }

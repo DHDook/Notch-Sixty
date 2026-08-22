@@ -17,30 +17,31 @@ struct LatencyReadoutView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
                 Text("Latency")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Spacer()
                 Text("\(String(format: "%.1f", totalLatencyMs)) ms")
                     .font(.caption)
                     .foregroundStyle(.primary)
             }
-
-            VStack(alignment: .leading, spacing: 4) {
+            HStack {
                 Text("Sample Rate")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Spacer()
                 Text(sampleRateText)
                     .font(.caption)
                     .foregroundStyle(.primary)
             }
-
             if alignmentDelayMs > 0 {
-                VStack(alignment: .leading, spacing: 4) {
+                HStack {
                     Text("Alignment")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Spacer()
                     Text("\(String(format: "%.1f", alignmentDelayMs)) ms")
                         .font(.caption)
                         .foregroundStyle(.primary)
@@ -48,7 +49,7 @@ struct LatencyReadoutView: View {
             }
         }
         .padding()
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(Color.primary.opacity(0.05))
         .cornerRadius(8)
     }
 }

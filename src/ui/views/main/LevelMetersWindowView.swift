@@ -16,7 +16,6 @@ struct LevelMetersWindowView: View {
                 .padding(20)
         }
         .onAppear {
-            meterStore.levelMetersEnabled = true
             meterStore.meterWindowBecameVisible(id: "levels-window")
         }
         .onDisappear {
@@ -42,7 +41,6 @@ struct LevelMetersWindowView: View {
                     queue: .main
                 ) { _ in
                     Task { @MainActor in
-                        meterStore.levelMetersEnabled = true
                         meterStore.meterWindowBecameVisible(id: "levels-window")
                     }
                 }
