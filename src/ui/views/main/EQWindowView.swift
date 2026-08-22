@@ -19,6 +19,7 @@ struct EQWindowView: View {
     @State private var showSaveSheet = false
     @State private var showStateResetAlert = false
     @State private var infoPopoverWindowId: String? = nil
+    @State private var vuRowHeight: CGFloat = 0
 
     private struct MeterDefinition {
         let title: String
@@ -108,15 +109,19 @@ struct EQWindowView: View {
 
                     VUControlsRow(meterStore: store.meterStore)
                 }
+                .reportRowHeight()
 
                 Divider()
 
                 launcherStack
+                    .reportRowHeight()
             }
+            .equalRowHeight($vuRowHeight)
 
             EQCurveView()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
+                .padding(.bottom, 12)
         }
     }
 
@@ -145,13 +150,14 @@ struct EQWindowView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .center)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.secondary.opacity(0.08))
                 )
             }
             .buttonStyle(.plain)
+
+            Spacer(minLength: 4)
 
             Button {
                 infoPopoverWindowId = windowId

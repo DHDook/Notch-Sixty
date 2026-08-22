@@ -6,6 +6,7 @@ struct AnalyticsMetersWindowView: View {
     @EnvironmentObject var store: EqualiserStore
     @ObservedObject var meterStore: MeterStore
     @StateObject private var inlineMeterBridge = InlineMeterBridge()
+    @State private var analyticsTopRowHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -18,12 +19,16 @@ struct AnalyticsMetersWindowView: View {
                 HStack(alignment: .top, spacing: 20) {
                     GainStructureMeterView()
                         .frame(width: 220, alignment: .leading)
+                        .reportRowHeight()
 
                     Divider()
 
                     StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-                        .frame(width: 170, height: 150, alignment: .center)
+                        .aspectRatio(1, contentMode: .fit)
+                        .frame(width: 170)
+                        .reportRowHeight()
                 }
+                .equalRowHeight($analyticsTopRowHeight)
 
                 Divider()
 
