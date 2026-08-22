@@ -58,5 +58,30 @@ struct AnalyticsMetersWindowView: View {
             meterStore.remainingMetersEnabled = false
             meterStore.meterWindowBecameHidden(id: "analytics-window")
         }
+        .background(
+            WindowAccessor { window in
+                guard let window = window else { return }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didMiniaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        meterStore.remainingMetersEnabled = false
+                        meterStore.meterWindowBecameHidden(id: "analytics-window")
+                    }
+                }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didDeminiaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        meterStore.remainingMetersEnabled = true
+                        meterStore.meterWindowBecameVisible(id: "analytics-window")
+                    }
+                }
+            }
+        )
     }
 }

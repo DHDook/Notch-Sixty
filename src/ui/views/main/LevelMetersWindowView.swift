@@ -23,5 +23,30 @@ struct LevelMetersWindowView: View {
             meterStore.levelMetersEnabled = false
             meterStore.meterWindowBecameHidden(id: "levels-window")
         }
+        .background(
+            WindowAccessor { window in
+                guard let window = window else { return }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didMiniaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        meterStore.levelMetersEnabled = false
+                        meterStore.meterWindowBecameHidden(id: "levels-window")
+                    }
+                }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didDeminiaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        meterStore.levelMetersEnabled = true
+                        meterStore.meterWindowBecameVisible(id: "levels-window")
+                    }
+                }
+            }
+        )
     }
 }

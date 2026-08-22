@@ -32,9 +32,9 @@ enum MeterConstants {
     
     // MARK: - Timing
     
-    /// Meter update interval (30 FPS).
+    /// Meter update interval (60 FPS).
     /// Balances smooth animation with CPU efficiency.
-    static let meterInterval: TimeInterval = 1.0 / 30.0
+    static let meterInterval: TimeInterval = 1.0 / 60.0
     
     /// Duration to hold peak before decay.
     /// Peak hold keeps the highest level visible briefly for easier reading.
@@ -63,13 +63,13 @@ enum MeterConstants {
     static let vuBallisticsTimeMs: Double = 300
 
     /// Per-tick smoothing coefficient derived from vuBallisticsTimeMs at the
-    /// 30 FPS meter update rate: alpha = 1 - exp(-ln(100) * dt / vuBallisticsTime)
-    /// dt = 1/30s -> alpha ≈ 0.63. Recompute if meterInterval ever changes.
-    static let vuSmoothing: Float = 0.63
+    /// 60 FPS meter update rate: alpha = 1 - exp(-ln(100) * dt / vuBallisticsTime)
+    /// dt = 1/60s -> alpha ≈ 0.226. Recompute if meterInterval ever changes.
+    static let vuSmoothing: Float = 0.226
 
-    /// Peak hold decay per tick (at 30 FPS).
+    /// Peak hold decay per tick (at 60 FPS).
     /// Controls how fast the held peak drops after hold duration.
-    static let peakHoldDecayPerTick: Float = 0.02
+    static let peakHoldDecayPerTick: Float = 0.01
     
     
     // MARK: - Channel Limits

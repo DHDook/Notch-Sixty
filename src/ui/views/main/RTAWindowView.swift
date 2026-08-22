@@ -27,5 +27,30 @@ struct RTAWindowView: View {
             meterStore.rtaEnabled = false
             store.rtaAnalyzer.rtaWindowBecameHidden(id: "rta-window")
         }
+        .background(
+            WindowAccessor { window in
+                guard let window = window else { return }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didMiniaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        meterStore.rtaEnabled = false
+                        store.rtaAnalyzer.rtaWindowBecameHidden(id: "rta-window")
+                    }
+                }
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didDeminiaturizeNotification,
+                    object: window,
+                    queue: .main
+                ) { _ in
+                    Task { @MainActor in
+                        meterStore.rtaEnabled = true
+                        store.rtaAnalyzer.rtaWindowBecameVisible(id: "rta-window")
+                    }
+                }
+            }
+        )
     }
 }

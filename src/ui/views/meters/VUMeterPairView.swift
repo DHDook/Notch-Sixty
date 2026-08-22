@@ -84,16 +84,6 @@ struct VUControlsRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-
-            Button {
-                // Show help popover
-            } label: {
-                Image(systemName: "questionmark.circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("VU meters with analog ballistics. Shows average level with slower response than peak meters.")
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }

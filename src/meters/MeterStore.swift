@@ -64,7 +64,7 @@ final class MeterStore: ObservableObject {
     // MARK: - Timing
     
     private var meterTimer: AnyCancellable?
-    private static let meterInterval: TimeInterval = 1.0 / 30.0  // 30 FPS
+    private static let meterInterval: TimeInterval = MeterConstants.meterInterval
     
     // MARK: - State
     
