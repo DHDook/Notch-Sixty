@@ -14,17 +14,33 @@ struct AnalyticsMetersWindowView: View {
                 isEnabled: meterStore.remainingMetersEnabled,
                 onToggle: { meterStore.remainingMetersEnabled = $0 }
             )
-            VStack(alignment: .leading, spacing: 8) {
-                GainStructureMeterView()
-                InlinePhaseCorrelationView()
-                InlineCrestFactorView(bridge: inlineMeterBridge)
-                InlineIspLatchView(bridge: inlineMeterBridge)
-                InlineDRFactorView(bridge: inlineMeterBridge)
-                InlineBitStreamView(bridge: inlineMeterBridge)
-                InlineBitRateView()
-                InlineTruePeakView(bridge: inlineMeterBridge)
-                InlineTruePeakMeterView()
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        GainStructureMeterView()
+                        InlineBitStreamView(bridge: inlineMeterBridge)
+                    }
+                    .frame(width: 220, alignment: .leading)
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        InlinePhaseCorrelationView()
+                        InlineCrestFactorView(bridge: inlineMeterBridge)
+                        InlineDRFactorView(bridge: inlineMeterBridge)
+                        HStack(spacing: 16) {
+                            InlineIspLatchView(bridge: inlineMeterBridge)
+                            InlineTruePeakView(bridge: inlineMeterBridge)
+                        }
+                        InlineTruePeakMeterView()
+                    }
+                    .frame(width: 220, alignment: .leading)
+                }
+
+                Divider()
+
                 StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
             .padding(.horizontal, 12)
             .opacity(meterStore.remainingMetersEnabled ? 1.0 : 0.35)
@@ -32,7 +48,7 @@ struct AnalyticsMetersWindowView: View {
             .animation(.easeInOut(duration: 0.25), value: meterStore.remainingMetersEnabled)
             .allowsHitTesting(meterStore.remainingMetersEnabled)
         }
-        .frame(minWidth: 500, minHeight: 600)
+        .frame(minWidth: 500, minHeight: 500)
         .onAppear {
             meterStore.remainingMetersEnabled = true
             meterStore.meterWindowBecameVisible(id: "analytics-window")

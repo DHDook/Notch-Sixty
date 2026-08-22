@@ -10,16 +10,16 @@ struct LatencyReadoutView: View {
     let alignmentDelayMs: Double
     let sampleRate: Double
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Pipeline Latency")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+    private var sampleRateText: String {
+        sampleRate >= 1000
+            ? String(format: "%.0f kHz", sampleRate / 1000)
+            : String(format: "%.0f Hz", sampleRate)
+    }
 
-            HStack {
-                Text("Algorithmic:")
+    var body: some View {
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Latency")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("\(String(format: "%.1f", totalLatencyMs)) ms")
@@ -27,9 +27,18 @@ struct LatencyReadoutView: View {
                     .foregroundStyle(.primary)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sample Rate")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(sampleRateText)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+            }
+
             if alignmentDelayMs > 0 {
-                HStack {
-                    Text("Alignment Delay:")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Alignment")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("\(String(format: "%.1f", alignmentDelayMs)) ms")

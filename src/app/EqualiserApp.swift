@@ -136,7 +136,7 @@ struct EqualiserMain: App {
                 .environmentObject(windowActivation)
         }
         .defaultPosition(.bottomTrailing)
-        .defaultSize(width: 500, height: 685)
+        .defaultSize(width: 500, height: 550)
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
     }

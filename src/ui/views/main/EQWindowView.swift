@@ -20,6 +20,11 @@ struct EQWindowView: View {
     @State private var showStateResetAlert = false
     @State private var infoPopoverWindowId: String? = nil
 
+    private struct MeterDefinition {
+        let title: String
+        let body: String
+    }
+
     /// Whether the driver installation overlay should be shown.
     private var needsDriverInstallation: Bool {
         !driverManager.isReady && !store.routingCoordinator.manualModeEnabled
@@ -117,14 +122,14 @@ struct EQWindowView: View {
 
     private var launcherStack: some View {
         VStack(alignment: .leading, spacing: 10) {
-            windowLauncherRow(label: "RTA", tooltip: rtaTooltip, systemImage: "waveform.path", windowId: "rta-window")
-            windowLauncherRow(label: "Levels", tooltip: levelsTooltip, systemImage: "chart.bar.fill", windowId: "levels-window")
-            windowLauncherRow(label: "Analytics", tooltip: analyticsTooltip, systemImage: "gauge", windowId: "analytics-window")
+            windowLauncherRow(label: "RTA", definitions: rtaDefinitions, systemImage: "waveform.path", windowId: "rta-window")
+            windowLauncherRow(label: "Levels", definitions: levelsDefinitions, systemImage: "chart.bar.fill", windowId: "levels-window")
+            windowLauncherRow(label: "Analytics", definitions: analyticsDefinitions, systemImage: "gauge", windowId: "analytics-window")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func windowLauncherRow(label: String, tooltip: String, systemImage: String, windowId: String) -> some View {
+    private func windowLauncherRow(label: String, definitions: [MeterDefinition], systemImage: String, windowId: String) -> some View {
         HStack(spacing: 6) {
             Button {
                 windowActivation.prepareToShowWindow()
@@ -159,37 +164,53 @@ struct EQWindowView: View {
                 get: { infoPopoverWindowId == windowId },
                 set: { if !$0 { infoPopoverWindowId = nil } }
             )) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(tooltip.components(separatedBy: "\n"), id: \.self) { line in
-                        Text(line).font(.caption)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(definitions.enumerated()), id: \.offset) { index, def in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(def.title).font(.caption.bold())
+                                Text(def.body).font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if index < definitions.count - 1 {
+                                Divider()
+                            }
+                        }
                     }
+                    .padding(12)
                 }
-                .padding(12)
-                .frame(maxWidth: 260, alignment: .leading)
+                .frame(maxWidth: 280, maxHeight: 320)
             }
         }
     }
 
-    private var rtaTooltip: String {
-        "Pre-EQ — real-time spectrum before processing\nPost-EQ — real-time spectrum after processing"
+    private var rtaDefinitions: [MeterDefinition] {
+        [
+            MeterDefinition(title: "Pre-EQ", body: "Real-time spectrum before processing."),
+            MeterDefinition(title: "Post-EQ", body: "Real-time spectrum after processing.")
+        ]
     }
 
-    private var levelsTooltip: String {
-        "Peak In — instantaneous input level\nPeak Out — instantaneous output level\nRMS In — average input level\nRMS Out — average output level"
+    private var levelsDefinitions: [MeterDefinition] {
+        [
+            MeterDefinition(title: "Peak In", body: "Instantaneous input level."),
+            MeterDefinition(title: "Peak Out", body: "Instantaneous output level."),
+            MeterDefinition(title: "RMS In", body: "Average input level."),
+            MeterDefinition(title: "RMS Out", body: "Average output level.")
+        ]
     }
 
-    private var analyticsTooltip: String {
-        """
-        Gain Structure — headroom through the processing chain
-        Phase Correlation — mono compatibility between L/R
-        Crest Factor — peak-to-average ratio
-        ISP Latch — inter-sample peak overshoot detection
-        DR Factor — dynamic range rating
-        Bit Stream — real-time bit depth of the input
-        Bit Rate — data rate for compressed sources
-        True Peak — oversampled peak with ISP indicator
-        Stereo Goniometer — vectorscope of stereo image width
-        """
+    private var analyticsDefinitions: [MeterDefinition] {
+        [
+            MeterDefinition(title: "Gain Structure", body: "Headroom through the processing chain."),
+            MeterDefinition(title: "Phase Correlation", body: "Mono compatibility between left and right channels."),
+            MeterDefinition(title: "Crest Factor", body: "Peak-to-average ratio."),
+            MeterDefinition(title: "ISP Latch", body: "Inter-sample peak overshoot detection."),
+            MeterDefinition(title: "DR Factor", body: "Dynamic range rating."),
+            MeterDefinition(title: "Bit Stream", body: "Real-time bit depth of the input signal."),
+            MeterDefinition(title: "True Peak", body: "Oversampled peak reading with inter-sample peak indicator."),
+            MeterDefinition(title: "Stereo Goniometer", body: "Vectorscope showing stereo image width.")
+        ]
     }
 
     var body: some View {
