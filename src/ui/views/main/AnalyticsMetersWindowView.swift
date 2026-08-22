@@ -22,7 +22,7 @@ struct AnalyticsMetersWindowView: View {
                     Divider()
 
                     StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-                        .frame(width: 220, height: 240, alignment: .center)
+                        .frame(width: 170, height: 150, alignment: .center)
                 }
 
                 Divider()

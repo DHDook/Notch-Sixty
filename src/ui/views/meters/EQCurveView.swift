@@ -9,7 +9,6 @@ import SwiftUI
 
 struct EQCurveView: View {
     @EnvironmentObject var store: EqualiserStore
-    var metersEnabled: Bool   // dims the view when meters are globally off
     @State private var showPhase:      Bool = false
     @State private var showGroupDelay: Bool = false
     @State private var showCurveHelp:  Bool = false
@@ -45,7 +44,6 @@ struct EQCurveView: View {
             .frame(height: plotHeight)
             .background(EQGraphBackground())
             .cornerRadius(4)
-            .opacity(metersEnabled ? 1.0 : 0.4)
             .id(snapshot.changeToken &+ (showPhase ? 1 : 0) &+ (showGroupDelay ? 2 : 0))
 
             HStack(spacing: 4) {

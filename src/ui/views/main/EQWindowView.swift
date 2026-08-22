@@ -114,7 +114,7 @@ struct EQWindowView: View {
                 launcherStack
             }
 
-            EQCurveView(metersEnabled: metersEnabledUI)
+            EQCurveView()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
         }
@@ -140,6 +140,7 @@ struct EQWindowView: View {
                         .font(.system(size: 13))
                     Text(label)
                         .font(.caption)
+                        .lineLimit(1)
                 }
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
