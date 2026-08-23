@@ -12,6 +12,7 @@ struct LevelMetersWindowView: View {
                 isEnabled: meterStore.levelMetersEnabled,
                 onToggle: { meterStore.levelMetersEnabled = $0 }
             )
+            .disabled(!meterStore.metersEnabled)
             LevelMetersView(meterStore: meterStore)
                 .padding(20)
         }

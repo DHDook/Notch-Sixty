@@ -20,6 +20,7 @@ struct EQWindowView: View {
     @State private var showStateResetAlert = false
     @State private var infoPopoverWindowId: String? = nil
     @State private var vuRowHeight: CGFloat = 0
+    @State private var chipWidth: CGFloat = 0
 
     private struct MeterDefinition {
         let title: String
@@ -118,6 +119,8 @@ struct EQWindowView: View {
             }
             .equalRowHeight($vuRowHeight)
 
+            Divider()
+
             EQCurveView()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
@@ -132,6 +135,7 @@ struct EQWindowView: View {
             windowLauncherRow(label: "Analytics", definitions: analyticsDefinitions, systemImage: "gauge", windowId: "analytics-window")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .equalRowWidth($chipWidth)
     }
 
     private func windowLauncherRow(label: String, definitions: [MeterDefinition], systemImage: String, windowId: String) -> some View {
@@ -150,10 +154,12 @@ struct EQWindowView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
+                .frame(width: chipWidth > 0 ? chipWidth : nil)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.secondary.opacity(0.08))
                 )
+                .reportRowWidth()
             }
             .buttonStyle(.plain)
 
@@ -320,8 +326,6 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
-                Spacer()
-                    .frame(width: 192)
 
                 VStack(spacing: 4) {
                     Text("Bands")
@@ -331,7 +335,7 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
-                    .frame(width: 128)
+                    .frame(width: 24)
 
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {

@@ -12,6 +12,7 @@ struct RTAWindowView: View {
                 isEnabled: meterStore.rtaEnabled,
                 onToggle: { meterStore.rtaEnabled = $0 }
             )
+            .disabled(!meterStore.metersEnabled)
             RTADashboardView(
                 analyzer: store.rtaAnalyzer,
                 metersEnabled: meterStore.rtaEnabled,

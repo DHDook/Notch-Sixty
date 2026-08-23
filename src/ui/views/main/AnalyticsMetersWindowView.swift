@@ -15,6 +15,7 @@ struct AnalyticsMetersWindowView: View {
                 isEnabled: meterStore.remainingMetersEnabled,
                 onToggle: { meterStore.remainingMetersEnabled = $0 }
             )
+            .disabled(!meterStore.metersEnabled)
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 20) {
                     GainStructureMeterView()
@@ -24,8 +25,7 @@ struct AnalyticsMetersWindowView: View {
                     Divider()
 
                     StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-                        .aspectRatio(1, contentMode: .fit)
-                        .frame(width: 170)
+                        .frame(width: 220, height: 240)
                         .reportRowHeight()
                 }
                 .equalRowHeight($analyticsTopRowHeight)
@@ -60,7 +60,7 @@ struct AnalyticsMetersWindowView: View {
             .animation(.easeInOut(duration: 0.25), value: meterStore.remainingMetersEnabled)
             .allowsHitTesting(meterStore.remainingMetersEnabled)
         }
-        .frame(minWidth: 500, minHeight: 420)
+        .frame(minWidth: 500, minHeight: 440)
         .onAppear {
             meterStore.meterWindowBecameVisible(id: "analytics-window")
             inlineMeterBridge.register(with: meterStore, equaliserStore: store)

@@ -7,6 +7,13 @@ private struct RowHeightKey: PreferenceKey {
     }
 }
 
+private struct RowWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 extension View {
     /// Reports this view's rendered height up the tree, for use with
     /// .equalRowHeight(_:) on the containing HStack.
@@ -25,5 +32,17 @@ extension View {
         self
             .onPreferenceChange(RowHeightKey.self) { height.wrappedValue = $0 }
             .frame(height: height.wrappedValue > 0 ? height.wrappedValue : nil)
+    }
+
+    func reportRowWidth() -> some View {
+        background(
+            GeometryReader { geo in
+                Color.clear.preference(key: RowWidthKey.self, value: geo.size.width)
+            }
+        )
+    }
+
+    func equalRowWidth(_ width: Binding<CGFloat>) -> some View {
+        self.onPreferenceChange(RowWidthKey.self) { width.wrappedValue = $0 }
     }
 }
