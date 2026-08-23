@@ -117,9 +117,11 @@ struct EQWindowView: View {
                 launcherStack
                     .reportRowHeight()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .equalRowHeight($vuRowHeight)
 
             Divider()
+                .padding(.vertical, 8)
 
             EQCurveView()
                 .frame(maxWidth: .infinity, alignment: .leading)
