@@ -25,7 +25,7 @@ struct AnalyticsMetersWindowView: View {
                     Divider()
 
                     StereoGoniometerView(engine: store.goniometerEngine, isBypassed: store.isBypassed)
-                        .frame(width: 220, height: 240, alignment: .top)
+                        .frame(width: 220, alignment: .top)
                         .reportRowHeight()
                 }
                 .equalRowHeight($analyticsTopRowHeight)

@@ -256,7 +256,7 @@ struct StereoGoniometerView: View {
                 GoniometerLabels()
                     .opacity(0.4)
             }
-            .frame(width: 110, height: 110)
+            .frame(width: 200, height: 200)
         }
         .onAppear    { engine.setViewVisible(true) }
         .onDisappear { engine.setViewVisible(false) }

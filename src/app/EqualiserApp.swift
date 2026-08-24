@@ -58,7 +58,7 @@ struct EqualiserMain: App {
         }
         .defaultPosition(.center)
         .defaultSize(width: 1450, height: 480)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentSize)
         .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {
             // Cmd+B: Toggle bypass
