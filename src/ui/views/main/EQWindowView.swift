@@ -20,7 +20,6 @@ struct EQWindowView: View {
     @State private var showStateResetAlert = false
     @State private var infoPopoverWindowId: String? = nil
     @State private var vuRowHeight: CGFloat = 0
-    @State private var chipWidth: CGFloat = 0
 
     private struct MeterDefinition {
         let title: String
@@ -110,12 +109,10 @@ struct EQWindowView: View {
 
                     VUControlsRow(meterStore: store.meterStore)
                 }
-                .reportRowHeight()
 
                 Divider()
 
                 launcherStack
-                    .reportRowHeight()
             }
             .equalRowHeight($vuRowHeight)
 
@@ -135,7 +132,7 @@ struct EQWindowView: View {
             windowLauncherRow(label: "Levels", definitions: levelsDefinitions, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", definitions: analyticsDefinitions, systemImage: "gauge", windowId: "analytics-window")
         }
-        .equalRowWidth($chipWidth)
+        .frame(width: 136, alignment: .leading)
     }
 
     private func windowLauncherRow(label: String, definitions: [MeterDefinition], systemImage: String, windowId: String) -> some View {
@@ -154,16 +151,13 @@ struct EQWindowView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .frame(width: chipWidth > 0 ? chipWidth : nil)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.secondary.opacity(0.08))
                 )
-                .reportRowWidth()
             }
             .buttonStyle(.plain)
-
-            Spacer(minLength: 4)
 
             Button {
                 infoPopoverWindowId = windowId
