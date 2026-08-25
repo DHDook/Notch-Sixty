@@ -53,7 +53,7 @@ struct EQBandGridView: View {
                         .frame(width: 72)
                     }
                 }
-                .frame(minWidth: max(0, proxy.size.width - 64), maxWidth: .infinity, alignment: .center)
+                .frame(minWidth: max(0, proxy.size.width - 24), maxWidth: .infinity, alignment: .center)
             }
         }
     }
