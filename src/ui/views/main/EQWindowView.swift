@@ -117,7 +117,6 @@ struct EQWindowView: View {
                 launcherStack
                     .reportRowHeight()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .equalRowHeight($vuRowHeight)
 
             Divider()
@@ -136,7 +135,6 @@ struct EQWindowView: View {
             windowLauncherRow(label: "Levels", definitions: levelsDefinitions, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", definitions: analyticsDefinitions, systemImage: "gauge", windowId: "analytics-window")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .equalRowWidth($chipWidth)
     }
 
@@ -328,6 +326,7 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
+                    .frame(width: 128)
 
                 VStack(spacing: 4) {
                     Text("Bands")
@@ -337,7 +336,7 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
-                    .frame(width: 64)
+                    .frame(width: 128)
 
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {
@@ -481,7 +480,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 12)
-        .frame(width: 1320, height: 580)
+        .frame(width: 1240, height: 580)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
