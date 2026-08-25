@@ -135,7 +135,6 @@ struct EQWindowView: View {
             windowLauncherRow(label: "Levels", definitions: levelsDefinitions, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", definitions: analyticsDefinitions, systemImage: "gauge", windowId: "analytics-window")
         }
-        .equalRowWidth($chipWidth)
     }
 
     private func windowLauncherRow(label: String, definitions: [MeterDefinition], systemImage: String, windowId: String) -> some View {
@@ -154,12 +153,10 @@ struct EQWindowView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .frame(width: chipWidth > 0 ? chipWidth : nil)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.secondary.opacity(0.08))
                 )
-                .reportRowWidth()
             }
             .buttonStyle(.plain)
 
