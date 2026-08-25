@@ -159,7 +159,7 @@ final class VUMeterLayer: NSView, MeterObserver {
         let cardPath = CGPath(roundedRect: cardRect, cornerWidth: 2, cornerHeight: 2, transform: nil)
 
         // Pivot positioned below frame for vintage VU meter appearance
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 75)
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - cardRect.width * 0.5515)
         let radius = cardRect.width * 0.92
 
         CATransaction.begin()
@@ -293,7 +293,7 @@ final class VUMeterLayer: NSView, MeterObserver {
 
         let bounds = self.bounds
         let cardRect = bounds.insetBy(dx: 2, dy: 2)
-        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - 75)
+        let center = CGPoint(x: cardRect.midX, y: cardRect.minY - cardRect.width * 0.5515)
         let radius = cardRect.width * 0.92
 
         let angle = arcStartAngle + (arcEndAngle - arcStartAngle) * CGFloat(currentNeedleValue)
