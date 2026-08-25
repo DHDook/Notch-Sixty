@@ -12,7 +12,7 @@ struct VUMeterNSView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> VUMeterLayer {
         let view = VUMeterLayer(channelLabel: channelLabel)
-        view.frame = CGRect(x: 0, y: 0, width: 170, height: 70)
+        view.frame = CGRect(x: 0, y: 0, width: 150, height: 62)
         meterStore.addObserver(view, for: meterType)
         context.coordinator.meterStore = meterStore
         context.coordinator.meterType = meterType

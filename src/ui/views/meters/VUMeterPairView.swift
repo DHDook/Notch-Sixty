@@ -7,7 +7,7 @@ struct VUMeterPairView: View {
     @State private var sourceKey: UUID = UUID()
 
     var body: some View {
-        HStack(spacing: 15) {
+        HStack(spacing: 12) {
             leftMeter
             rightMeter
         }
@@ -23,7 +23,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVULeft : .outputVULeft,
             channelLabel: "L"
         )
-        .frame(width: 170, height: 70)
+        .frame(width: 150, height: 62)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)
@@ -44,7 +44,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVURight : .outputVURight,
             channelLabel: "R"
         )
-        .frame(width: 170, height: 70)
+        .frame(width: 150, height: 62)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)

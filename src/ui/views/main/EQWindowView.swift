@@ -132,7 +132,7 @@ struct EQWindowView: View {
             windowLauncherRow(label: "Levels", definitions: levelsDefinitions, systemImage: "chart.bar.fill", windowId: "levels-window")
             windowLauncherRow(label: "Analytics", definitions: analyticsDefinitions, systemImage: "gauge", windowId: "analytics-window")
         }
-        .frame(width: 170, alignment: .leading)
+        .frame(width: 150, alignment: .leading)
     }
 
     private func windowLauncherRow(label: String, definitions: [MeterDefinition], systemImage: String, windowId: String) -> some View {
