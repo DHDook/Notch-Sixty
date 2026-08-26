@@ -553,7 +553,7 @@ struct CrossoverAnalysisView: View {
             .disabled(true)
 
             // After measurement results
-            if let result = store.combinedMeasurementResult {
+            if store.combinedMeasurementResult != nil {
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Measurement Results")

@@ -29,8 +29,6 @@ final class FFTEngine {
     /// Imaginary output buffer.
     private var imagOutput: [Float]
 
-    /// Split complex buffer for Accelerate.
-    private var splitComplex: DSPSplitComplex
 
     // MARK: - Initialization
 
@@ -56,11 +54,6 @@ final class FFTEngine {
         self.realOutput = Array(repeating: 0.0, count: fftSize)
         self.imagOutput = Array(repeating: 0.0, count: fftSize)
 
-        // Setup split complex
-        self.splitComplex = DSPSplitComplex(
-            realp: &realOutput,
-            imagp: &imagOutput
-        )
     }
 
     deinit {
@@ -88,12 +81,6 @@ final class FFTEngine {
             vDSP_vclr(imagPtr.baseAddress!, 1, vDSP_Length(fftSize))
         }
 
-        // Perform FFT
-        var splitComplex = DSPSplitComplex(
-            realp: &realInput,
-            imagp: &imagInput
-        )
-
         var log2n = vDSP_Length(0)
         var n = 1
         while n < fftSize {
@@ -101,7 +88,15 @@ final class FFTEngine {
             log2n += 1
         }
 
-        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
+        // Perform FFT. realInput/imagInput must stay valid for the whole vDSP call, so
+        // the split complex is built and used inside their buffer-pointer scope rather
+        // than via a bare `&array` (only guaranteed valid for the initializer call itself).
+        realInput.withUnsafeMutableBufferPointer { realPtr in
+            imagInput.withUnsafeMutableBufferPointer { imagPtr in
+                var splitComplex = DSPSplitComplex(realp: realPtr.baseAddress!, imagp: imagPtr.baseAddress!)
+                vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
+            }
+        }
 
         return (realInput, imagInput)
     }
@@ -130,25 +125,27 @@ final class FFTEngine {
             }
         }
 
-        // Create split complex from updated buffers
-        var splitComplex = DSPSplitComplex(
-            realp: &realOutput,
-            imagp: &imagOutput
-        )
-
         var log2n = vDSP_Length(0)
         var n = 1
         while n < fftSize {
             n *= 2
             log2n += 1
         }
-
-        // Perform inverse FFT
-        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Inverse))
-
-        // Normalize: vDSP_fft_zrip inverse scales by N; divide to recover original amplitude.
         var scale: Float = 1.0 / Float(fftSize)
-        vDSP_vsmul(splitComplex.realp, 1, &scale, splitComplex.realp, 1, vDSP_Length(fftSize))
+
+        // Create split complex from updated buffers and run the inverse FFT plus
+        // normalization inside their buffer-pointer scope (see the note in forwardFFT).
+        realOutput.withUnsafeMutableBufferPointer { realPtr in
+            imagOutput.withUnsafeMutableBufferPointer { imagPtr in
+                var splitComplex = DSPSplitComplex(realp: realPtr.baseAddress!, imagp: imagPtr.baseAddress!)
+
+                // Perform inverse FFT
+                vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Inverse))
+
+                // Normalize: vDSP_fft_zrip inverse scales by N; divide to recover original amplitude.
+                vDSP_vsmul(splitComplex.realp, 1, &scale, splitComplex.realp, 1, vDSP_Length(fftSize))
+            }
+        }
 
         // Return real part
         return Array(realOutput.prefix(fftSize))

@@ -28,7 +28,7 @@ enum EQHeadroomCompensator {
         let frequencies = generateFrequencyBins()
         var worstCaseBoostDB: Float = 0.0
 
-        for (i, freq) in frequencies.enumerated() {
+        for (_, freq) in frequencies.enumerated() {
             // Accumulate as linear gain (multiply, not add dB) for accuracy.
             var linearGain: Double = 1.0
             linearGain *= pow(10.0, Double(computeLayerGain(at: Float(freq), bands: eqLayer)) / 20.0)

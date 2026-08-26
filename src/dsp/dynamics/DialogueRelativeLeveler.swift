@@ -494,7 +494,6 @@ final class DialogueRelativeLeveler: @unchecked Sendable {
         let modCenterHz = bitsToFloatL(_modCenterHzBits.load(ordering: .relaxed))
         let modBandwidthHz = bitsToFloatL(_modBandwidthHzBits.load(ordering: .relaxed))
         let envelopeWindowMs = bitsToFloatL(_envelopeWindowMsBits.load(ordering: .relaxed))
-        let measurementWindowMs = bitsToFloatL(_measurementWindowMsBits.load(ordering: .relaxed))
 
         // Compute decimation factor for ~1 kHz control rate
         let controlRateHz: Double = 1000.0
