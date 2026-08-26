@@ -173,19 +173,13 @@ final class DeviceManager: ObservableObject, DeviceProviding {
         var channelInfos: [AudioDeviceChannelInfo] = []
 
         for channelIndex in 0..<channelCount {
-            // Query kAudioObjectPropertyElementName for channel label
-            var propertyAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyElementName,
-                mScope: kAudioDevicePropertyScopeOutput,
-                mElement: AudioObjectPropertyElement(channelIndex + 1) // 1-based for CoreAudio
-            )
-
-            var cfName: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.size)
-            let status = AudioObjectGetPropertyData(deviceID, &propertyAddress, 0, nil, &nameSize, &cfName)
-
             let channelLabel: String
-            if status == noErr, let nameStr = cfName as String?, !nameStr.isEmpty {
+            if let nameStr = fetchStringProperty(
+                id: deviceID,
+                selector: kAudioObjectPropertyElementName,
+                scope: kAudioDevicePropertyScopeOutput,
+                element: AudioObjectPropertyElement(channelIndex + 1) // 1-based for CoreAudio
+            ), !nameStr.isEmpty {
                 channelLabel = nameStr
             } else {
                 channelLabel = "Channel \(channelIndex + 1)"

@@ -34,12 +34,20 @@ let kAudioDeviceTransportTypeAggregate: UInt32 = 0x61676720  // 'agg '
 /// - Parameters:
 ///   - id: The device ID
 ///   - selector: The property selector
+///   - scope: The property scope. Defaults to global.
+///   - element: The property element. Defaults to main (use a 1-based channel
+///     number here for per-channel properties like `kAudioObjectPropertyElementName`).
 /// - Returns: The string value, or nil if not found
-func fetchStringProperty(id: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+func fetchStringProperty(
+    id: AudioDeviceID,
+    selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+    element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain
+) -> String? {
     var address = AudioObjectPropertyAddress(
         mSelector: selector,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain
+        mScope: scope,
+        mElement: element
     )
     var dataSize: UInt32 = 0
     guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &dataSize) == noErr else {

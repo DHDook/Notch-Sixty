@@ -1239,27 +1239,18 @@ struct RoomCalibrationTab: View {
         }
 
         for deviceID in deviceIDs {
-            var nameAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyName,
-                mScope: kAudioObjectPropertyScopeGlobal,
+            guard let nameStr = fetchStringProperty(id: deviceID, selector: kAudioObjectPropertyName),
+                  !nameStr.isEmpty else { continue }
+
+            // Check if this is an input device
+            var streamConfigAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioDevicePropertyScopeInput,
                 mElement: kAudioObjectPropertyElementMain
             )
-            var name: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.stride)
-            if AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name) == noErr {
-                let nameStr = name as String
-                guard !nameStr.isEmpty else { continue }
-
-                // Check if this is an input device
-                var streamConfigAddress = AudioObjectPropertyAddress(
-                    mSelector: kAudioDevicePropertyStreamConfiguration,
-                    mScope: kAudioDevicePropertyScopeInput,
-                    mElement: kAudioObjectPropertyElementMain
-                )
-                var bufferSize: UInt32 = 0
-                if AudioObjectGetPropertyDataSize(deviceID, &streamConfigAddress, 0, nil, &bufferSize) == noErr, bufferSize > 0 {
-                    devices.append((id: deviceID, name: nameStr))
-                }
+            var bufferSize: UInt32 = 0
+            if AudioObjectGetPropertyDataSize(deviceID, &streamConfigAddress, 0, nil, &bufferSize) == noErr, bufferSize > 0 {
+                devices.append((id: deviceID, name: nameStr))
             }
         }
 
