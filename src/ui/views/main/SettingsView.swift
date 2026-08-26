@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Tab identifier for Settings window.
 enum SettingsTab: String {
-    case display = "display"
+    case app = "app"
     case driver = "driver"
     case userGuide = "userGuide"
     case roomCalibration = "roomCalibration"
@@ -21,23 +21,23 @@ enum MicCalibrationMode: String, CaseIterable {
 struct SettingsView: View {
     @EnvironmentObject var store: EqualiserStore
     @EnvironmentObject var windowActivation: WindowActivationController
-    @State private var selectedTab: SettingsTab = .display
+    @State private var selectedTab: SettingsTab = .app
     
     /// Allows programmatic selection of tab (e.g., to show Driver tab when update required).
     var initialTab: SettingsTab? {
         if store.showDriverUpdateRequired {
             return .driver
         }
-        return nil
+        return .app
     }
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            DisplaySettingsTab()
+            AppSettingsTab()
                 .tabItem {
-                    Label("Display", systemImage: "paintbrush")
+                    Label("App", systemImage: "gearshape")
                 }
-                .tag(SettingsTab.display)
+                .tag(SettingsTab.app)
 
             DriverSettingsTab()
                 .tabItem {
@@ -75,13 +75,37 @@ struct SettingsView: View {
     }
 }
 
-struct DisplaySettingsTab: View {
+struct AppSettingsTab: View {
     @EnvironmentObject var store: EqualiserStore
     @State private var showDriverRequiredAlert = false
     @State private var showPermissionDeniedAlert = false
 
     private var routingViewModel: RoutingViewModel {
         RoutingViewModel(store: store)
+    }
+
+    /// Falls back to the bundle name, then a literal, so this never renders blank.
+    private var appDisplayName: String {
+        Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String
+            ?? Bundle.main.infoDictionary?["CFBundleName"] as? String
+            ?? "Notch Sixty"
+    }
+
+    private var appBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+    }
+
+    /// CI-stamped dev builds embed the same git-SHA build number as a trailing
+    /// suffix on the marketing version (e.g. "0.7.0-20260825.4d626b5" with
+    /// CFBundleVersion "4d626b5"). Strip that suffix here so Version and Build
+    /// aren't shown twice. Tagged release builds (plain "X.Y.Z") have no such
+    /// suffix, so this is a no-op for them.
+    private var appVersion: String {
+        let raw = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        if appBuild != "—", raw.hasSuffix(".\(appBuild)") {
+            return String(raw.dropLast(appBuild.count + 1))
+        }
+        return raw
     }
 
     private enum Mode {
@@ -91,6 +115,15 @@ struct DisplaySettingsTab: View {
 
     var body: some View {
         Form {
+            Section {
+                LabeledContent("App", value: appDisplayName)
+                LabeledContent("Version", value: appVersion)
+                LabeledContent("Build", value: appBuild)
+            } header: {
+                Text("Version")
+            }
+            .textSelection(.enabled)
+
             Section {
                 HStack {
                     Spacer()
@@ -1385,7 +1418,7 @@ final class UserGuideSettingsViewController: NSViewController {
         h2("2.3 Q, Bandwidth, and Filter Slope")
         body("Q and bandwidth-in-octaves are two views of the same underlying selectivity and convert exactly:")
         code("Q → bandwidth (octaves):  BW = 2·asinh(1 / (2Q)) / ln(2)\nbandwidth → Q:            Q  = 1 / (2·sinh(ln(2)·BW / 2))")
-        body("Toggle the display convention in Settings → Display → Bandwidth Display without changing the underlying filter. Valid ranges: Q 0.1 – 100, bandwidth 0.05 – 5.0 octaves.")
+        body("Toggle the display convention in Settings → App → Bandwidth Display without changing the underlying filter. Valid ranges: Q 0.1 – 100, bandwidth 0.05 – 5.0 octaves.")
         body("For Low Pass, High Pass, Low Shelf, and High Shelf bands, an independent slope control selects the filter order, from 6 dB/octave up to 96 dB/octave in 6 dB/octave increments.")
 
         h2("2.4 Linked vs. Independent Stereo Bands")
