@@ -109,14 +109,20 @@ final class DriverCapture: @unchecked Sendable {
         var address = DRIVER_ADDRESS_SHARED_MEM_PATH
         var cfPath = path as CFString
 
-        let status = AudioObjectSetPropertyData(
-            deviceID,
-            &address,
-            0,
-            nil,
-            UInt32(MemoryLayout<CFString>.size),
-            &cfPath
-        )
+        // AudioObjectSetPropertyData only reads from this pointer (unlike a "Get" call,
+        // which would write a new owned CFString reference back into it), so this is
+        // safe either way — withUnsafePointer(to:) just gives the compiler an explicitly
+        // scoped pointer instead of the bare `&cfPath` conversion, avoiding the warning.
+        let status = withUnsafePointer(to: &cfPath) { ptr in
+            AudioObjectSetPropertyData(
+                deviceID,
+                &address,
+                0,
+                nil,
+                UInt32(MemoryLayout<CFString>.size),
+                ptr
+            )
+        }
 
         if status != noErr {
             Self.logger.error("Failed to set shared memory path: \(status)")

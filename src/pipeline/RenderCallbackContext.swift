@@ -1052,7 +1052,7 @@ final class RenderCallbackContext: @unchecked Sendable {
         staticPreampGainLinear = targetGain
 
         let count = Int(frameCount)
-        var gain = staticPreampGainLinear
+        let gain = staticPreampGainLinear
 
         for ch in 0 ..< Int(channelCount) {
             let buf = processingBuffers[ch]
@@ -1237,7 +1237,7 @@ final class RenderCallbackContext: @unchecked Sendable {
         var pathLatencies: [Int: PathLatencyInfo] = [:]
 
         for chIdx in 0..<activeOutputChannelCount {
-            guard let processor = outputChannelProcessors[chIdx] else { continue }
+            guard outputChannelProcessors[chIdx] != nil else { continue }
 
             let source = outputChannelSources[chIdx]
 

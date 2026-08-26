@@ -1178,7 +1178,7 @@ final class RenderPipeline {
         leftSections:  [[BiquadCoefficients]],
         rightSections: [[BiquadCoefficients]]
     ) {
-        callbackContext?.updateMixedPhaseSections(
+        _ = callbackContext?.updateMixedPhaseSections(
             leftSections:  leftSections,
             rightSections: rightSections
         )

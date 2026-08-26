@@ -37,19 +37,23 @@ public final class DriverPropertyService: ObservableObject, DriverPropertyAccess
         }
 
         var address = DRIVER_ADDRESS_NAME
-        // Note: Compiler warns about CFString pointer, but this is correct for SET operations.
-        // For GET operations we use Unmanaged<CFString>? to handle ownership, but for SET
-        // operations we must provide a pointer to the existing CFString reference.
+        // This is a SET operation: AudioObjectSetPropertyData only reads from nameRef,
+        // it never writes back an owned reference (unlike a GET, which is why GET calls
+        // elsewhere use Unmanaged<CFString>? instead). withUnsafePointer(to:) gives the
+        // compiler an explicitly scoped pointer so it doesn't need to flag this bare
+        // conversion, without changing the underlying (already-correct) behavior.
         var nameRef: CFString = name as CFString
 
-        let status = AudioObjectSetPropertyData(
-            deviceID,
-            &address,
-            0,
-            nil,
-            UInt32(MemoryLayout<CFString>.stride),
-            &nameRef
-        )
+        let status = withUnsafePointer(to: &nameRef) { ptr in
+            AudioObjectSetPropertyData(
+                deviceID,
+                &address,
+                0,
+                nil,
+                UInt32(MemoryLayout<CFString>.stride),
+                ptr
+            )
+        }
 
         if status != noErr {
             logger.error("Failed to set device name: \(status)")

@@ -97,7 +97,7 @@ final class AggregateDeviceManager {
     // MARK: - Destroy
 
     /// Destroys the aggregate device. Called on pipeline stop or device change.
-    nonisolated(unsafe) func destroyAggregate() {
+    nonisolated func destroyAggregate() {
         guard aggregateDeviceID != kAudioObjectUnknown else { return }
         let status = AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
         if status != noErr {

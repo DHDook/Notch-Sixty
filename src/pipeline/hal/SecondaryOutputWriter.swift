@@ -54,6 +54,12 @@ final class SecondaryOutputWriter: @unchecked Sendable {
     // Scratch buffer for per-frame gain scaling (avoids heap alloc in write())
     private let gainScratch: UnsafeMutablePointer<Float>
 
+    // Per-channel overflow counters (real-time safe: atomic increment only, no I/O).
+    // Mirrors AudioRingBuffer's own internal overflow tracking so it's actually
+    // observable from this writer, the way RenderCallbackContext.getDiagnostics()
+    // exposes it for the primary output path.
+    private let overflowCounts: [ManagedAtomic<UInt64>]
+
     private static let ringCapacity = 16384  // ≈ 341 ms @ 48 kHz — absorbs scheduler jitter
     private let logger = Logger(subsystem: "net.knage.equaliser", category: "SecondaryOutputWriter")
 
@@ -65,6 +71,7 @@ final class SecondaryOutputWriter: @unchecked Sendable {
         self.ringBuffers = (0..<self.channelCount).map { _ in
             AudioRingBuffer(capacity: Self.ringCapacity)
         }
+        self.overflowCounts = (0..<self.channelCount).map { _ in ManagedAtomic<UInt64>(0) }
         self.gainScratch = UnsafeMutablePointer<Float>.allocate(capacity: config.maxFrameCount)
         self.gainScratch.initialize(repeating: 0.0, count: config.maxFrameCount)
     }
@@ -219,13 +226,17 @@ final class SecondaryOutputWriter: @unchecked Sendable {
 
         for (buf, chIdx) in channels {
             guard chIdx < ringBuffers.count else { continue }
+            let written: Int
             if gain == 1.0 {
-                ringBuffers[chIdx].write(buf, count: frameCount)
+                written = ringBuffers[chIdx].write(buf, count: frameCount)
             } else {
                 // Scale into scratch and write
                 var g = gain
                 vDSP_vsmul(buf, 1, &g, gainScratch, 1, vDSP_Length(frameCount))
-                ringBuffers[chIdx].write(gainScratch, count: frameCount)
+                written = ringBuffers[chIdx].write(gainScratch, count: frameCount)
+            }
+            if written < frameCount {
+                overflowCounts[chIdx].wrappingIncrement(ordering: .relaxed)
             }
         }
     }
@@ -252,5 +263,10 @@ final class SecondaryOutputWriter: @unchecked Sendable {
 
     func setGain(_ gainLinear: Float) {
         _gainBits.store(Int32(bitPattern: gainLinear.bitPattern), ordering: .releasing)
+    }
+
+    /// Returns per-channel overflow counts for this writer's ring buffers, for diagnostics.
+    func getOverflowCounts() -> [UInt64] {
+        overflowCounts.map { $0.load(ordering: .relaxed) }
     }
 }
