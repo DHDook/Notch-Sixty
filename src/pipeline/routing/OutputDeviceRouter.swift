@@ -58,17 +58,28 @@ final class OutputDeviceRouter {
     ///   - matrix: The validated output channel matrix config.
     ///   - syncMode: User's preferred multi-device sync mode.
     ///   - deviceProvider: For resolving UIDs → AudioDeviceIDs.
+    ///   - explicitPrimaryDeviceUID: User-chosen primary/clock-master device, if any
+    ///     (aggregateClockMasterUID for Aggregate mode, pllPrimaryDeviceUID for
+    ///     Software PLL — caller picks whichever matches `syncMode`). nil, or a UID
+    ///     that no longer matches any enabled channel's target, falls back to
+    ///     matrix.channels[0]'s device.
     /// - Returns: The resolved routing mode, or throws on unresolvable config.
     static func resolve(
         matrix: OutputChannelMatrixConfig,
         syncMode: MultiDeviceSyncMode,
         deviceProvider: any DeviceProviding,
-        aggregateManager: AggregateDeviceManager
+        aggregateManager: AggregateDeviceManager,
+        currentSampleRate: Double,
+        explicitPrimaryDeviceUID: String? = nil
     ) async throws -> RoutingMode {
 
-        // Collect all unique device UIDs referenced by enabled channels
-        let enabledChannels = matrix.channels.filter(\.isEnabled)
-        let uniqueUIDs = Set(enabledChannels.compactMap(\.target?.deviceUID))
+        // Collect all unique device UIDs referenced by enabled channels, keeping each
+        // channel's GLOBAL index (position in the full matrix) alongside it — needed
+        // so buildChannelMap's output values match RenderCallbackContext's chIdx
+        // convention rather than a per-device-local renumbering.
+        let indexedChannels = matrix.channels.enumerated().map { (globalIndex: $0, channel: $1) }
+        let enabledIndexedChannels = indexedChannels.filter { $0.channel.isEnabled }
+        let uniqueUIDs = Set(enabledIndexedChannels.compactMap { $0.channel.target?.deviceUID })
 
         // Single device: all channels target the same UID
         if uniqueUIDs.count <= 1 {
@@ -76,50 +87,70 @@ final class OutputDeviceRouter {
                   let deviceID = deviceProvider.deviceID(forUID: uid) else {
                 throw OutputRoutingError.primaryDeviceNotFound
             }
-            let map = buildChannelMap(channels: enabledChannels,
+            let map = buildChannelMap(channels: enabledIndexedChannels,
                                       deviceID: deviceID,
                                       deviceProvider: deviceProvider)
             return .singleDevice(deviceID: deviceID, channelMap: map)
         }
 
+        // Resolve the primary/clock-master device. Honors an explicit user choice
+        // (aggregateClockMasterUID or pllPrimaryDeviceUID — whichever matches
+        // syncMode, decided by the caller) when it's set and still valid, i.e. still
+        // targeted by one of the enabled channels. Otherwise falls back to
+        // matrix.channels[0]'s device — anchored explicitly rather than inferred from
+        // array-filtering order, which could silently diverge during a transient
+        // per-channel solo (see EqualiserStore.soloOutputChannel). Fails loudly if
+        // channel 0 is disabled at this point rather than silently falling back to
+        // some other channel — that should never happen in practice (solo
+        // measurements deliberately don't trigger routing reconfiguration), so if this
+        // guard ever fires, something upstream is behaving unexpectedly and deserves
+        // investigation rather than a silent fallback.
+        let primaryUID: String
+        if let explicitPrimaryDeviceUID, uniqueUIDs.contains(explicitPrimaryDeviceUID) {
+            primaryUID = explicitPrimaryDeviceUID
+        } else {
+            guard let primaryChannel = matrix.channels.first, primaryChannel.isEnabled,
+                  let fallbackUID = primaryChannel.target?.deviceUID else {
+                throw OutputRoutingError.primaryChannelDisabled
+            }
+            primaryUID = fallbackUID
+        }
+
         // Multiple devices: check sync mode preference
         switch syncMode {
         case .aggregateDevice:
-            // Create or reuse aggregate device
             let aggID = try await aggregateManager.createOrUpdate(
-                channels: enabledChannels,
-                deviceProvider: deviceProvider
+                channels: enabledIndexedChannels.map { $0.channel },
+                deviceProvider: deviceProvider,
+                clockMasterUID: primaryUID
             )
-            let map = buildChannelMap(channels: enabledChannels,
+            let map = buildChannelMap(channels: enabledIndexedChannels,
                                       deviceID: aggID,
                                       deviceProvider: deviceProvider)
             return .aggregateDevice(aggregateID: aggID, channelMap: map)
 
         case .softwarePLL:
-            // Primary device: first channel's device, drives render clock
-            guard let primaryUID = enabledChannels.first?.target?.deviceUID,
-                  let primaryID  = deviceProvider.deviceID(forUID: primaryUID) else {
+            guard let primaryID = deviceProvider.deviceID(forUID: primaryUID) else {
                 throw OutputRoutingError.primaryDeviceNotFound
             }
             let primaryMap = buildChannelMap(
-                channels: enabledChannels.filter { $0.target?.deviceUID == primaryUID },
+                channels: enabledIndexedChannels.filter { $0.channel.target?.deviceUID == primaryUID },
                 deviceID: primaryID,
                 deviceProvider: deviceProvider
             )
-            // Secondary devices: one PLLSRCWriter per unique non-primary device
             let secondaryUIDs = uniqueUIDs.subtracting([primaryUID])
             let writers: [PLLSRCWriter] = try secondaryUIDs.sorted().map { uid in
                 guard let deviceID = deviceProvider.deviceID(forUID: uid) else {
                     throw OutputRoutingError.secondaryDeviceNotFound(uid: uid)
                 }
-                let channels = enabledChannels.filter { $0.target?.deviceUID == uid }
+                let channels = enabledIndexedChannels.filter { $0.channel.target?.deviceUID == uid }
                 let map = buildChannelMap(channels: channels, deviceID: deviceID,
                                          deviceProvider: deviceProvider)
                 let config = PLLSRCWriter.Config(
                     deviceID: deviceID,
                     deviceUID: uid,
                     channelMap: map,
-                    nominalSampleRate: 48000.0  // TODO: Get actual sample rate from device
+                    nominalSampleRate: currentSampleRate
                 )
                 return PLLSRCWriter(config: config)
             }
@@ -133,17 +164,17 @@ final class OutputDeviceRouter {
     /// Result array length = total output channel count on the device.
     /// Entry at index i = processing channel that writes to device channel i, or –1 for silence.
     private static func buildChannelMap(
-        channels: [OutputChannelConfig],
+        channels: [(globalIndex: Int, channel: OutputChannelConfig)],
         deviceID: AudioDeviceID,
         deviceProvider: any DeviceProviding
     ) -> [Int32] {
         let totalDeviceChannels = deviceProvider.outputChannelCount(deviceID: deviceID)
         var map = [Int32](repeating: -1, count: totalDeviceChannels)
-        for (processingIndex, channel) in channels.enumerated() {
+        for (globalIndex, channel) in channels {
             guard let indices = channel.target?.channelIndices else { continue }
             for deviceChannelIndex in indices {
                 guard deviceChannelIndex < totalDeviceChannels else { continue }
-                map[deviceChannelIndex] = Int32(processingIndex)
+                map[deviceChannelIndex] = Int32(globalIndex)
             }
         }
         return map
@@ -152,6 +183,10 @@ final class OutputDeviceRouter {
 
 enum OutputRoutingError: LocalizedError {
     case primaryDeviceNotFound
+    /// matrix.channels[0] is disabled. Shouldn't happen outside a transient per-channel
+    /// solo (EqualiserStore.soloOutputChannel), which doesn't trigger routing
+    /// resolution — if this fires, something upstream changed that assumption.
+    case primaryChannelDisabled
     case secondaryDeviceNotFound(uid: String)
     case aggregateDeviceCreationFailed(OSStatus)
     case incompatibleSampleRates([String: Double])
@@ -160,6 +195,8 @@ enum OutputRoutingError: LocalizedError {
         switch self {
         case .primaryDeviceNotFound:
             return "Primary output device not found"
+        case .primaryChannelDisabled:
+            return "Primary channel (channel 0) is disabled"
         case .secondaryDeviceNotFound(let uid):
             return "Secondary output device not found: \(uid)"
         case .aggregateDeviceCreationFailed(let status):

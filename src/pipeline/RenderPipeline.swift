@@ -83,8 +83,7 @@ final class RenderPipeline {
 
     // MARK: - Multi-Device Routing
 
-    /// Aggregate device manager for Mode 2 (aggregate device sync)
-    private var aggregateManager = AggregateDeviceManager()
+    /// Aggregate device manager is now owned by AudioRoutingCoordinator
 
     /// PLL writers for Mode 3 (software PLL sync)
     private var pllWriters: [PLLSRCWriter] = []
@@ -346,13 +345,14 @@ final class RenderPipeline {
         self.captureMode = captureMode
         self.driverRegistry = driverRegistry
 
-        // Clean up any existing managers
+        // Clean up any existing managers. Note: activeRoutingMode is intentionally
+        // NOT reset here — configure(routingMode:) already set it before calling
+        // this function, and resetting it here would immediately undo that.
         inputHALManager = nil
         outputHALManager = nil
         driverCapture = nil
         pllWriters = []
         fallbackWriters = []
-        activeRoutingMode = nil
 
         // Create and configure the input HAL manager (standard mode only)
         if captureMode == .halInput {
@@ -404,23 +404,55 @@ final class RenderPipeline {
         driverRegistry: DriverDeviceRegistry?
     ) -> Result<Void, HALIOError> {
         logger.info("Configuring aggregate device mode: aggID=\(aggregateDeviceID), channelMap=\(channelMap)")
-        // TODO: Implement aggregate device configuration
-        // Similar to single device but with aggregate device ID
-        return .failure(.unitNotAvailable)
+        // An aggregate device behaves like any other multi-channel output device to
+        // the HAL once created — createOrUpdate() already ran during resolve(),
+        // before this function was called. This mirrors configureSingleDevice exactly,
+        // just targeting the aggregate's device ID.
+        return configureSingleDevice(
+            outputDeviceID: aggregateDeviceID,
+            channelMap: channelMap,
+            inputDeviceID: inputDeviceID,
+            captureMode: captureMode,
+            driverRegistry: driverRegistry
+        )
     }
 
     private func configureSoftwarePLL(
         primaryDeviceID: AudioDeviceID,
         primaryChannelMap: [Int32],
-        pllWriters: [PLLSRCWriter],
+        pllWriters writers: [PLLSRCWriter],
         inputDeviceID: AudioDeviceID,
         captureMode: CaptureMode,
         driverRegistry: DriverDeviceRegistry?
     ) -> Result<Void, HALIOError> {
-        logger.info("Configuring software PLL mode: primaryID=\(primaryDeviceID), writers=\(pllWriters.count)")
-        // TODO: Implement software PLL configuration
-        // Configure primary device and start PLLSRCWriter instances
-        return .failure(.unitNotAvailable)
+        logger.info("Configuring software PLL mode: primaryID=\(primaryDeviceID), writers=\(writers.count)")
+
+        // Configure the primary device exactly like configureSingleDevice — the
+        // primary is a normal HAL output, PLL correction only applies to secondaries.
+        let result = configureSingleDevice(
+            outputDeviceID: primaryDeviceID,
+            channelMap: primaryChannelMap,
+            inputDeviceID: inputDeviceID,
+            captureMode: captureMode,
+            driverRegistry: driverRegistry
+        )
+        guard case .success = result else { return result }
+
+        // Start each secondary writer's own AUHAL. If any fails to start, stop the
+        // ones that did and fail configuration rather than running partially-connected.
+        var started: [PLLSRCWriter] = []
+        for writer in writers {
+            if writer.start() {
+                started.append(writer)
+            } else {
+                logger.error("configureSoftwarePLL: a secondary writer failed to start; aborting")
+                for w in started { w.stop() }
+                return .failure(.unitNotAvailable)
+            }
+        }
+        self.pllWriters = writers
+        callbackContext?.pllWriters = writers
+        return .success(())
     }
 
     // MARK: - Lifecycle
@@ -711,6 +743,10 @@ final class RenderPipeline {
         driverCapture?.stop()
         driverCapture = nil
 
+        // Stop PLL writers before the primary HAL unit
+        for writer in pllWriters { writer.stop() }
+        pllWriters = []
+
         // Stop secondary output writers before the primary HAL unit
         if let ctx = callbackContext {
             for i in 0..<OutputChannelMatrixConfig.maxChannels {
@@ -801,9 +837,6 @@ final class RenderPipeline {
             return
         }
 
-        // Primary device UID — channels targeting this device don't need a writer
-        let primaryUID = outputDeviceUID()
-
         var count = 0
         for (i, channel) in config.channels.prefix(OutputChannelMatrixConfig.maxChannels).enumerated() {
             guard channel.isEnabled else {
@@ -822,29 +855,6 @@ final class RenderPipeline {
             }
             ctx.outputChannelSources[i] = channel.source
             count = i + 1
-
-            // Build a SecondaryOutputWriter for channels i ≥ 1 whose target device
-            // differs from the primary output device.
-            if i > 0, let target = channel.target, !target.deviceUID.isEmpty {
-                let targetUID = target.deviceUID
-                let isPrimary = primaryUID.map { $0 == targetUID } ?? false
-                if !isPrimary, let deviceID = audioDeviceID(forUID: targetUID) {
-                    let writerConfig = SecondaryOutputWriter.Config(
-                        deviceID:          deviceID,
-                        deviceUID:         targetUID,
-                        channelCount:      max(1, min(2, target.channelIndices.count)),
-                        nominalSampleRate: sr,
-                        maxFrameCount:     Int(ctx.maxFrameCount)
-                    )
-                    let writer = SecondaryOutputWriter(config: writerConfig)
-                    if writer.start() {
-                        ctx.outputChannelWriters[i] = writer
-                        logger.info("applyOutputChannelMatrix: writer started for ch\(i) → device \(targetUID)")
-                    } else {
-                        logger.error("applyOutputChannelMatrix: writer failed to start for ch\(i) → device \(targetUID)")
-                    }
-                }
-            }
         }
         ctx.activeOutputChannelCount = count
 
@@ -1475,6 +1485,26 @@ final class RenderPipeline {
                 dynamicsProcessor: context.dynamicsProcessor,
                 frameCount: Int(outputFrames)
             )
+        }
+
+        // 4.7. Dispatch to PLL writers for software PLL mode
+        // This runs after all processing is complete, so PLL writers get the fully-processed audio
+        let pllWriters = context.pllWriters
+        if !pllWriters.isEmpty {
+            let scratchBuffers = context.getOutputScratchBuffers()
+            for writer in pllWriters {
+                var channels: [(buffer: UnsafePointer<Float>, channelIndex: Int)] = []
+                for (physIdx, globalChIdx) in writer.channelMap.enumerated() where globalChIdx >= 0 {
+                    let chIdx = Int(globalChIdx)
+                    if chIdx < scratchBuffers.count {
+                        let buf = scratchBuffers[chIdx]
+                        channels.append((buffer: buf, channelIndex: physIdx))
+                    }
+                }
+                if !channels.isEmpty {
+                    writer.writePrimary(channels: channels, frameCount: Int(outputFrames), primaryHostTime: inTimeStamp.pointee.mHostTime)
+                }
+            }
         }
 
         // 5. Update output meters with rendered audio

@@ -352,6 +352,19 @@ struct OutputChannelMatrixView: View {
             }
             if store.multiDeviceSyncMode == .softwarePLL {
                 VStack(alignment: .leading, spacing: 4) {
+                    Text("Primary Device")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: $store.pllPrimaryDeviceUID) {
+                        Text("Auto").tag(nil as String?)
+                        ForEach(store.outputDevices, id: \.uid) { device in
+                            Text(device.name).tag(device.uid as String?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                }
+                VStack(alignment: .leading, spacing: 4) {
                     Text("PLL Parameters")
                         .font(.caption)
                         .foregroundStyle(.secondary)

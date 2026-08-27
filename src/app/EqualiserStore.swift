@@ -856,6 +856,11 @@ final class EqualiserStore: ObservableObject {
         set { routingCoordinator.aggregateClockMasterUID = newValue }
     }
 
+    var pllPrimaryDeviceUID: String? {
+        get { routingCoordinator.pllPrimaryDeviceUID }
+        set { routingCoordinator.pllPrimaryDeviceUID = newValue }
+    }
+
     var hasMultipleDevices: Bool {
         routingCoordinator.hasMultipleDevices
     }

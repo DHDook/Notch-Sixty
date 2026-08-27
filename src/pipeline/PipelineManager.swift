@@ -60,8 +60,8 @@ final class PipelineManager {
     /// Creates, configures, and starts the render pipeline.
     /// Returns the result indicating success or failure with details.
     func startPipeline(
+        routingMode: OutputDeviceRouter.RoutingMode,
         inputDeviceID: AudioDeviceID,
-        outputDeviceID: AudioDeviceID,
         captureMode: CaptureMode,
         driverRegistry: DriverDeviceRegistry?,
         isAutomaticMode: Bool,
@@ -77,8 +77,8 @@ final class PipelineManager {
         let pipeline = RenderPipeline(eqConfiguration: eqConfiguration)
 
         switch pipeline.configure(
+            routingMode: routingMode,
             inputDeviceID: inputDeviceID,
-            outputDeviceID: outputDeviceID,
             captureMode: captureMode,
             driverRegistry: driverRegistry
         ) {

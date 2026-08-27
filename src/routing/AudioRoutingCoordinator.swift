@@ -44,7 +44,18 @@ final class AudioRoutingCoordinator: ObservableObject {
     /// Clock master device UID for aggregate device mode
     @Published var aggregateClockMasterUID: String? = nil {
         didSet {
+            saveAggregateClockMasterUID()
             if multiDeviceSyncMode == .aggregateDevice && hasMultipleDevices {
+                reconfigureRouting()
+            }
+        }
+    }
+
+    /// Primary device UID for software PLL mode.
+    @Published var pllPrimaryDeviceUID: String? = nil {
+        didSet {
+            savePLLPrimaryDeviceUID()
+            if multiDeviceSyncMode == .softwarePLL && hasMultipleDevices {
                 reconfigureRouting()
             }
         }
@@ -91,6 +102,7 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     let deviceProvider: DeviceProviding
     let deviceChangeCoordinator: DeviceChangeCoordinator
+    private let aggregateManager = AggregateDeviceManager()
     private let eqConfiguration: EQConfiguration
     private let meterStore: MeterStore
     private let volumeService: VolumeControlling
@@ -193,6 +205,7 @@ final class AudioRoutingCoordinator: ObservableObject {
         static let outputChannelMatrix = "net.knage.equaliser.outputChannelMatrix"
         static let multiDeviceSyncMode = "net.knage.equaliser.multiDeviceSyncMode"
         static let aggregateClockMasterUID = "net.knage.equaliser.aggregateClockMasterUID"
+        static let pllPrimaryDeviceUID = "net.knage.equaliser.pllPrimaryDeviceUID"
     }
     
     // MARK: - Initialization
@@ -402,7 +415,22 @@ final class AudioRoutingCoordinator: ObservableObject {
             // Delay to allow CoreAudio to propagate sample rate change
             logger.debug("Waiting for driver sample rate propagation before HAL input configuration")
             DispatchQueue.main.asyncAfter(deadline: .now() + Constants.sampleRatePropagationDelay) { [weak self] in
-                self?.continueRoutingConfiguration(
+                guard let self = self else { return }
+                Task { @MainActor in
+                    await self.continueRoutingConfiguration(
+                        inputDeviceID: devices.inputDeviceID,
+                        outputDeviceID: devices.outputDeviceID,
+                        outputDevice: devices.outputDevice,
+                        inputUID: devices.inputUID,
+                        outputUID: devices.outputUID,
+                        resolvedCaptureMode: resolvedCaptureMode,
+                        captureDecision: captureDecision
+                    )
+                }
+            }
+        } else {
+            Task { @MainActor in
+                await self.continueRoutingConfiguration(
                     inputDeviceID: devices.inputDeviceID,
                     outputDeviceID: devices.outputDeviceID,
                     outputDevice: devices.outputDevice,
@@ -412,16 +440,6 @@ final class AudioRoutingCoordinator: ObservableObject {
                     captureDecision: captureDecision
                 )
             }
-        } else {
-            continueRoutingConfiguration(
-                inputDeviceID: devices.inputDeviceID,
-                outputDeviceID: devices.outputDeviceID,
-                outputDevice: devices.outputDevice,
-                inputUID: devices.inputUID,
-                outputUID: devices.outputUID,
-                resolvedCaptureMode: resolvedCaptureMode,
-                captureDecision: captureDecision
-            )
         }
     }
 
@@ -550,7 +568,7 @@ final class AudioRoutingCoordinator: ObservableObject {
         outputUID: String,
         resolvedCaptureMode: CaptureMode,
         captureDecision: CaptureModeDecision
-    ) {
+    ) async {
         defer { isReconfiguring = false }
 
         // Set up jack connection listener on built-in device (Intel Macs: headphone jack detection)
@@ -621,12 +639,42 @@ final class AudioRoutingCoordinator: ObservableObject {
 
         let registry: DriverDeviceRegistry? = resolvedCaptureMode == .sharedMemory ? driverAccess.deviceRegistry : nil
 
+        // Resolve the routing mode for multi-device output
+        let routingMode: OutputDeviceRouter.RoutingMode
+        if outputChannelMatrix.isEnabled {
+            // Get the current sample rate for the output device
+            let currentSampleRate = sampleRateService.getActualSampleRate(deviceID: outputDeviceID)
+                ?? sampleRateService.getNominalSampleRate(deviceID: outputDeviceID)
+                ?? 48_000.0
+
+            do {
+                routingMode = try await OutputDeviceRouter.resolve(
+                    matrix: outputChannelMatrix,
+                    syncMode: multiDeviceSyncMode,
+                    deviceProvider: deviceProvider,
+                    aggregateManager: aggregateManager,
+                    currentSampleRate: currentSampleRate,
+                    explicitPrimaryDeviceUID: multiDeviceSyncMode == .aggregateDevice
+                        ? aggregateClockMasterUID
+                        : pllPrimaryDeviceUID
+                )
+            } catch {
+                routingStatus = .error("Routing resolution failed: \(error.localizedDescription)")
+                logger.error("OutputDeviceRouter.resolve failed: \(error.localizedDescription)")
+                return
+            }
+        } else {
+            // Matrix disabled: synthesize the plain single-device case so
+            // startPipeline has one code path regardless of matrix state.
+            routingMode = .singleDevice(deviceID: outputDeviceID, channelMap: [])
+        }
+
         let result = pipelineManager.startPipeline(
+            routingMode: routingMode,
             inputDeviceID: inputDeviceID,
-            outputDeviceID: outputDeviceID,
             captureMode: resolvedCaptureMode,
             driverRegistry: registry,
-            isAutomaticMode: !routingMode.isManual,
+            isAutomaticMode: !self.routingMode.isManual,
             driverID: driverAccess.deviceID,
             driverOutputDeviceID: outputDeviceID
         )
@@ -926,6 +974,17 @@ final class AudioRoutingCoordinator: ObservableObject {
 
         // Load aggregate clock master UID
         aggregateClockMasterUID = UserDefaults.standard.string(forKey: PersistenceKeys.aggregateClockMasterUID)
+
+        // Load software PLL primary device UID
+        pllPrimaryDeviceUID = UserDefaults.standard.string(forKey: PersistenceKeys.pllPrimaryDeviceUID)
+    }
+
+    private func saveAggregateClockMasterUID() {
+        UserDefaults.standard.set(aggregateClockMasterUID, forKey: PersistenceKeys.aggregateClockMasterUID)
+    }
+
+    private func savePLLPrimaryDeviceUID() {
+        UserDefaults.standard.set(pllPrimaryDeviceUID, forKey: PersistenceKeys.pllPrimaryDeviceUID)
     }
 
     private func saveOutputChannelMatrix() {
@@ -964,6 +1023,9 @@ final class AudioRoutingCoordinator: ObservableObject {
 
     private func stopPipeline() {
         pipelineManager.stopPipeline()
+
+        // Clean up aggregate device when stopping routing
+        aggregateManager.destroyAggregate()
 
         // Clean up jack connection listener (Intel Macs)
         deviceChangeCoordinator.cleanupJackConnectionListener()

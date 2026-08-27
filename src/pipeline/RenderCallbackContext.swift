@@ -645,6 +645,9 @@ final class RenderCallbackContext: @unchecked Sendable {
     private let outputScratchLeft:  [UnsafeMutablePointer<Float>]   // [maxChannels]
     private let outputScratchRight: [UnsafeMutablePointer<Float>?]  // [maxChannels]; nil for mono sources
 
+    /// PLL writers for software PLL mode - stored here for render callback access
+    nonisolated(unsafe) var pllWriters: [PLLSRCWriter] = []
+
     /// Sub mono output buffer: written by processBassManagement, read by .subMono output channels.
     nonisolated(unsafe) var monoLowOutputBuffer: UnsafeMutablePointer<Float>
 
@@ -1142,6 +1145,13 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// - Returns: Pre-computed array of immutable pointers to the active processing buffers.
     var outputBufferPointers: [UnsafePointer<Float>] {
         processingBufferPointers
+    }
+
+    /// Returns the output scratch buffers for PLL writer dispatch.
+    /// These contain the fully-processed audio for each output channel.
+    /// - Returns: Array of scratch buffer pointers (left channel only, right is optional per channel).
+    func getOutputScratchBuffers() -> [UnsafePointer<Float>] {
+        return outputScratchLeft.map { UnsafePointer($0) }
     }
 
     // MARK: - Output Channel Matrix Processing

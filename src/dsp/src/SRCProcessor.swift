@@ -20,9 +20,10 @@ final class SRCProcessor {
     private let coeffs: [[Float]]   // coeffs[phase][tap], built at init
 
     // MARK: - Runtime state (reset by configure())
-    private var inputRate:  Double = 48_000
-    private var outputRate: Double = 48_000
-    private var phaseAccum: Double = 0
+    private var inputRate:      Double = 48_000
+    private var outputRate:     Double = 48_000
+    private var baseOutputRate: Double = 48_000  // outputRate before any setRateCorrection nudge
+    private var phaseAccum:     Double = 0
 
     // Amplitude compensation for decimation.
     // = outputRate / inputRate  when downsampling (≤ 1.0)
@@ -96,14 +97,21 @@ final class SRCProcessor {
     // MARK: - Configuration (main thread or before audio starts)
 
     func configure(inputRate: Double, outputRate: Double) {
-        self.inputRate  = inputRate
-        self.outputRate = outputRate
+        self.inputRate      = inputRate
+        self.outputRate     = outputRate
+        self.baseOutputRate = outputRate
         phaseAccum      = 0
         delayPos        = 0
-        // Decimation gain: compensate for the polyphase filter's implicit upsampling gain.
-        // Without this, e.g. 96 kHz → 48 kHz output amplitude would be 2× correct.
         downGain = outputRate < inputRate ? Float(outputRate / inputRate) : 1.0
         for i in 0..<delayL.count { delayL[i] = 0; delayR[i] = 0 }
+    }
+
+    /// Applies a small multiplicative correction to the output rate for continuous
+    /// PLL-style drift tracking. Unlike `configure`, this does NOT reset the phase
+    /// accumulator or delay-line state — safe to call every render callback.
+    func setRateCorrection(_ ratio: Double) {
+        outputRate = baseOutputRate * ratio
+        downGain = outputRate < inputRate ? Float(outputRate / inputRate) : 1.0
     }
 
     var needsSRC: Bool { abs(inputRate - outputRate) > 0.5 }
