@@ -451,7 +451,6 @@ final class RenderPipeline {
             }
         }
         self.pllWriters = writers
-        callbackContext?.pllWriters = writers
         return .success(())
     }
 
@@ -541,6 +540,12 @@ final class RenderPipeline {
         // the first callback cycle (~10ms at 48kHz/512 frames).
         context.inputGainLinear = 0
         context.outputGainLinear = 0
+
+        // pllWriters was populated during configure(routingMode:) — copy it into the
+        // context now that one exists. The earlier assignment in configureSoftwarePLL
+        // (callbackContext?.pllWriters = writers) runs before callbackContext exists
+        // and is a no-op; self.pllWriters is the durable copy configure() left behind.
+        context.pllWriters = self.pllWriters
 
         callbackContext = context
         latestMeters = .silent
