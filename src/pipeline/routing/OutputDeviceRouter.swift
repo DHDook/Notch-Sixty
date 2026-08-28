@@ -34,10 +34,10 @@ enum MultiDeviceSyncMode: Int, Codable, Equatable, Sendable, CaseIterable {
 final class OutputDeviceRouter {
 
     enum RoutingMode: CustomStringConvertible {
-        case singleDevice(deviceID: AudioDeviceID, channelMap: [Int32])
-        case aggregateDevice(aggregateID: AudioDeviceID, channelMap: [Int32])
+        case singleDevice(deviceID: AudioDeviceID, channelMap: [ChannelMapSlot])
+        case aggregateDevice(aggregateID: AudioDeviceID, channelMap: [ChannelMapSlot])
         case softwarePLL(primaryDeviceID: AudioDeviceID,
-                         primaryChannelMap: [Int32],
+                         primaryChannelMap: [ChannelMapSlot],
                          secondaryWriters: [PLLSRCWriter])
 
         var description: String {
@@ -162,19 +162,24 @@ final class OutputDeviceRouter {
 
     /// Builds a CoreAudio channel map for writing to specific device channels.
     /// Result array length = total output channel count on the device.
-    /// Entry at index i = processing channel that writes to device channel i, or –1 for silence.
+    /// Entry at index i = processing channel that writes to device channel i, or .silence.
     private static func buildChannelMap(
         channels: [(globalIndex: Int, channel: OutputChannelConfig)],
         deviceID: AudioDeviceID,
         deviceProvider: any DeviceProviding
-    ) -> [Int32] {
+    ) -> [ChannelMapSlot] {
         let totalDeviceChannels = deviceProvider.outputChannelCount(deviceID: deviceID)
-        var map = [Int32](repeating: -1, count: totalDeviceChannels)
+        var map = [ChannelMapSlot](repeating: .silence, count: totalDeviceChannels)
         for (globalIndex, channel) in channels {
             guard let indices = channel.target?.channelIndices else { continue }
-            for deviceChannelIndex in indices {
-                guard deviceChannelIndex < totalDeviceChannels else { continue }
-                map[deviceChannelIndex] = Int32(globalIndex)
+            // Position determines side: channelIndices[0] is left/mono, [1] is right.
+            // (OutputTarget.channelIndices is documented as "1 or 2 channel indices" —
+            // anything beyond position 1 is ignored rather than guessed at.)
+            for (position, deviceChannelIndex) in indices.enumerated() {
+                guard deviceChannelIndex < totalDeviceChannels, position < 2 else { continue }
+                map[deviceChannelIndex] = position == 0
+                    ? .left(Int32(globalIndex))
+                    : .right(Int32(globalIndex))
             }
         }
         return map

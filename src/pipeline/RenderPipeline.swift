@@ -334,7 +334,7 @@ final class RenderPipeline {
 
     private func configureSingleDevice(
         outputDeviceID: AudioDeviceID,
-        channelMap: [Int32],
+        channelMap: [ChannelMapSlot],
         inputDeviceID: AudioDeviceID,
         captureMode: CaptureMode,
         driverRegistry: DriverDeviceRegistry?
@@ -398,7 +398,7 @@ final class RenderPipeline {
 
     private func configureAggregateDevice(
         aggregateDeviceID: AudioDeviceID,
-        channelMap: [Int32],
+        channelMap: [ChannelMapSlot],
         inputDeviceID: AudioDeviceID,
         captureMode: CaptureMode,
         driverRegistry: DriverDeviceRegistry?
@@ -419,7 +419,7 @@ final class RenderPipeline {
 
     private func configureSoftwarePLL(
         primaryDeviceID: AudioDeviceID,
-        primaryChannelMap: [Int32],
+        primaryChannelMap: [ChannelMapSlot],
         pllWriters writers: [PLLSRCWriter],
         inputDeviceID: AudioDeviceID,
         captureMode: CaptureMode,
@@ -546,6 +546,16 @@ final class RenderPipeline {
         // (callbackContext?.pllWriters = writers) runs before callbackContext exists
         // and is a no-op; self.pllWriters is the durable copy configure() left behind.
         context.pllWriters = self.pllWriters
+
+        // Same reasoning for the primary/aggregate device's channel map: extract it
+        // from activeRoutingMode (already set by configure(routingMode:)) now that a
+        // context exists to hold it.
+        switch activeRoutingMode {
+        case .singleDevice(_, let map):    context.primaryChannelMap = map
+        case .aggregateDevice(_, let map): context.primaryChannelMap = map
+        case .softwarePLL(_, let map, _):  context.primaryChannelMap = map
+        case nil:                          context.primaryChannelMap = []
+        }
 
         callbackContext = context
         latestMeters = .silent
@@ -1492,17 +1502,81 @@ final class RenderPipeline {
             )
         }
 
+        // 4.65. Dispatch to primary/aggregate device using channel map
+        // This runs after the output channel matrix so the scratch buffers contain
+        // the fully-processed per-channel audio.
+        if !context.primaryChannelMap.isEmpty {
+            let scratch = context.getOutputScratchBuffers()
+
+            // Resolve each physical slot's buffer first (mono/stereo + fallback),
+            // deduplicating by pointer identity so a channel duplicated across
+            // multiple slots (e.g. mono sub → 2 physical outputs) doesn't get gain
+            // applied to it twice.
+            var resolvedBuffers: [Int: UnsafeMutablePointer<Float>] = [:]  // physIdx -> buffer
+            var uniqueBuffersForGain: [UnsafeMutablePointer<Float>] = []
+            var seenPointers = Set<UnsafeMutablePointer<Float>>()
+
+            for (physIdx, slot) in context.primaryChannelMap.enumerated() {
+                let buf: UnsafeMutablePointer<Float>?
+                switch slot {
+                case .silence:
+                    buf = nil
+                case .left(let globalChIdx):
+                    let chIdx = Int(globalChIdx)
+                    buf = chIdx < scratch.left.count ? UnsafeMutablePointer(mutating: scratch.left[chIdx]) : nil
+                case .right(let globalChIdx):
+                    let chIdx = Int(globalChIdx)
+                    guard chIdx < scratch.left.count else { buf = nil; break }
+                    // Fall back to left/mono if this channel didn't produce genuine
+                    // right-channel content this callback.
+                    let rightBuf = chIdx < scratch.right.count ? scratch.right[chIdx] : nil
+                    buf = UnsafeMutablePointer(mutating: rightBuf ?? scratch.left[chIdx])
+                }
+                guard let buf else { continue }
+                resolvedBuffers[physIdx] = buf
+                if seenPointers.insert(buf).inserted {
+                    uniqueBuffersForGain.append(buf)
+                }
+            }
+
+            if !uniqueBuffersForGain.isEmpty {
+                // Local copy: context.outputGainLinear was already ramped to target
+                // by stage 4 earlier this callback, so this is a flat (zero-delta)
+                // multiply by the current gain — correct, not a second ramp.
+                var gain = context.outputGainLinear
+                let targetGain = context.getTargetOutputGain()
+                context.applyGain(to: uniqueBuffersForGain, frameCount: UInt32(workFrames),
+                                  currentGain: &gain, targetGain: targetGain)
+            }
+
+            for (physIdx, buf) in resolvedBuffers {
+                guard physIdx < abl.count else { continue }
+                guard let dest = abl[physIdx].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                memcpy(dest, buf, workFrames * MemoryLayout<Float>.size)
+            }
+        }
+
         // 4.7. Dispatch to PLL writers for software PLL mode
         // This runs after all processing is complete, so PLL writers get the fully-processed audio
         let pllWriters = context.pllWriters
         if !pllWriters.isEmpty {
-            let scratchBuffers = context.getOutputScratchBuffers()
+            let scratch = context.getOutputScratchBuffers()
             for writer in pllWriters {
                 var channels: [(buffer: UnsafePointer<Float>, channelIndex: Int)] = []
-                for (physIdx, globalChIdx) in writer.channelMap.enumerated() where globalChIdx >= 0 {
-                    let chIdx = Int(globalChIdx)
-                    if chIdx < scratchBuffers.count {
-                        let buf = scratchBuffers[chIdx]
+                for (physIdx, slot) in writer.channelMap.enumerated() {
+                    switch slot {
+                    case .silence:
+                        continue
+                    case .left(let globalChIdx):
+                        let chIdx = Int(globalChIdx)
+                        guard chIdx < scratch.left.count else { continue }
+                        channels.append((buffer: scratch.left[chIdx], channelIndex: physIdx))
+                    case .right(let globalChIdx):
+                        let chIdx = Int(globalChIdx)
+                        guard chIdx < scratch.left.count else { continue }
+                        // Fall back to left/mono if this channel didn't produce genuine
+                        // right-channel content this callback.
+                        let buf = (chIdx < scratch.right.count ? scratch.right[chIdx] : nil) ?? scratch.left[chIdx]
                         channels.append((buffer: buf, channelIndex: physIdx))
                     }
                 }

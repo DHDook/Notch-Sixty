@@ -24,10 +24,8 @@ final class PLLSRCWriter: @unchecked Sendable {
     struct Config {
         var deviceID: AudioDeviceID
         var deviceUID: String
-        /// One entry per device output channel; -1 = silence, otherwise the GLOBAL
-        /// processing-channel index (matching RenderCallbackContext.outputChannelProcessors)
-        /// that feeds this physical channel.
-        var channelMap: [Int32]
+        /// One entry per device output channel — see ChannelMapSlot.
+        var channelMap: [ChannelMapSlot]
         var nominalSampleRate: Double
         var pllConfig: DeviceClockPLL.Config = .init()
         var maxFrameCount: Int = Int(AudioConstants.maxFrameCount)
@@ -47,10 +45,8 @@ final class PLLSRCWriter: @unchecked Sendable {
 
     /// Total physical output channels on this device (= channelMap.count).
     let channelCount: Int
-    /// Exposes the global processing-channel index that feeds a given physical slot,
-    /// so the primary render callback can build writePrimary()'s `channels` argument
-    /// without re-deriving the map. -1 = silence.
-    var channelMap: [Int32] { config.channelMap }
+    /// Exposes the channel map for this device — see ChannelMapSlot.
+    var channelMap: [ChannelMapSlot] { config.channelMap }
 
     private let _gainBits = ManagedAtomic<Int32>(Int32(bitPattern: Float(1.0).bitPattern))
     private let overflowCounts: [ManagedAtomic<UInt64>]

@@ -71,6 +71,25 @@ struct OutputTarget: Codable, Equatable, Sendable {
     }
 }
 
+/// Describes what a single physical device output channel should receive. Replaces
+/// the earlier plain `[Int32]` convention (-1 = silence, N = channel N), which had no
+/// way to express which side of a channel's audio a physical slot wants.
+///
+/// Position in `OutputTarget.channelIndices` determines side: index 0 is a channel's
+/// left/mono destination, index 1 (if present) is its right destination.
+enum ChannelMapSlot: Equatable, Sendable {
+    case silence
+    /// This physical slot gets the named global processing channel's left (or mono)
+    /// buffer.
+    case left(Int32)
+    /// This physical slot gets the named global processing channel's right buffer.
+    /// If that channel doesn't produce genuine right-channel content on a given
+    /// callback (true for every source today), dispatch code falls back to the
+    /// left/mono buffer rather than writing silence, so a mono source duplicated
+    /// across two physical slots works correctly.
+    case right(Int32)
+}
+
 struct OutputChannelLimiterConfig: Codable, Equatable, Sendable {
     var isEnabled: Bool  = true
     var ceilingDB: Float = -0.2

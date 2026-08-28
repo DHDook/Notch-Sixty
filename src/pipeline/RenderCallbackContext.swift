@@ -645,8 +645,19 @@ final class RenderCallbackContext: @unchecked Sendable {
     private let outputScratchLeft:  [UnsafeMutablePointer<Float>]   // [maxChannels]
     private let outputScratchRight: [UnsafeMutablePointer<Float>?]  // [maxChannels]; nil for mono sources
 
+    /// True for chIdx values where resolveSource produced genuine right-channel
+    /// content THIS callback (i.e. outputScratchRight[chIdx] holds fresh data this
+    /// frame, not stale/never-written memory from allocation). Updated every callback
+    /// in processOutputChannelMatrix's per-channel loop; read by getOutputScratchBuffers.
+    private var outputChannelHasRight: [Bool] = Array(repeating: false, count: OutputChannelMatrixConfig.maxChannels)
+
     /// PLL writers for software PLL mode - stored here for render callback access
     nonisolated(unsafe) var pllWriters: [PLLSRCWriter] = []
+
+    /// Channel map for the primary (or aggregate) output device — see ChannelMapSlot.
+    /// Populated in RenderPipeline.start() after this context is created (Phase E1
+    /// below) — configure() runs before this context exists, so it can't be set there.
+    nonisolated(unsafe) var primaryChannelMap: [ChannelMapSlot] = []
 
     /// Sub mono output buffer: written by processBassManagement, read by .subMono output channels.
     nonisolated(unsafe) var monoLowOutputBuffer: UnsafeMutablePointer<Float>
@@ -1147,11 +1158,21 @@ final class RenderCallbackContext: @unchecked Sendable {
         processingBufferPointers
     }
 
-    /// Returns the output scratch buffers for PLL writer dispatch.
-    /// These contain the fully-processed audio for each output channel.
-    /// - Returns: Array of scratch buffer pointers (left channel only, right is optional per channel).
-    func getOutputScratchBuffers() -> [UnsafePointer<Float>] {
-        return outputScratchLeft.map { UnsafePointer($0) }
+    /// Returns per-channel scratch buffers for channel-map dispatch (primary/aggregate
+    /// device writes and PLL writer dispatch). `right[chIdx]` is nil whenever that
+    /// channel didn't produce genuine stereo content this callback — dispatch code
+    /// should fall back to `left[chIdx]` when a physical slot wants `.right` but this
+    /// is nil, rather than writing silence. (Every SignalSource is mono today, so
+    /// `right` is nil for every chIdx in practice right now — this is here so a future
+    /// stereo source, or a channel deliberately duplicated across two physical slots,
+    /// both work correctly without further changes to this function.)
+    func getOutputScratchBuffers() -> (left: [UnsafePointer<Float>], right: [UnsafePointer<Float>?]) {
+        let leftBufs = outputScratchLeft.map { UnsafePointer($0) }
+        let rightBufs = outputScratchRight.enumerated().map { (chIdx, ptr) -> UnsafePointer<Float>? in
+            guard chIdx < outputChannelHasRight.count, outputChannelHasRight[chIdx], let ptr else { return nil }
+            return UnsafePointer(ptr)
+        }
+        return (left: leftBufs, right: rightBufs)
     }
 
     // MARK: - Output Channel Matrix Processing
@@ -1181,6 +1202,7 @@ final class RenderCallbackContext: @unchecked Sendable {
                 memcpy(sR, sr, frameCount * MemoryLayout<Float>.size)
                 scratchR = sR
             }
+            outputChannelHasRight[chIdx] = (scratchR != nil)
 
             // Apply crossover path alignment if active
             if crossoverPathAlignment.alignmentActive {
@@ -1205,28 +1227,11 @@ final class RenderCallbackContext: @unchecked Sendable {
                               rightBuf: scratchR,
                               frameCount: frameCount)
 
-            // Write to output
-            if chIdx == 0 {
-                // Channel 0 writes to primary HAL output buffer
-                writePrimaryChannel(leftBuf: outputScratchLeft[chIdx],
-                                    rightBuf: scratchR,
-                                    frameCount: frameCount)
-            } else if let writer = outputChannelWriters[chIdx] {
-                // Channels 1–7: push to the secondary device's ring buffer.
-                // The SecondaryOutputWriter's AUHAL render callback drains the ring
-                // buffer on the secondary device's own audio thread.
-                var channels: [(buffer: UnsafePointer<Float>, channelIndex: Int)] = [
-                    (UnsafePointer(outputScratchLeft[chIdx]), 0)
-                ]
-                if let sR = scratchR {
-                    channels.append((UnsafePointer(sR), 1))
-                }
-                writer.write(channels: channels, frameCount: frameCount)
-            }
-            // If outputChannelWriters[chIdx] is nil for chIdx > 0, the channel targets
-            // a different channel index on the *same* device — writePrimaryChannel already
-            // handled the interleaved write for channel 0; same-device channel routing is
-            // managed by the OutputChannelProcessor's channel-map configuration.
+            // Output writing no longer happens per-channel here — RenderPipeline
+            // handles it in one pass after this whole loop completes, using
+            // primaryChannelMap (same-device routing, any physical channel including
+            // what channel 0 maps to) and pllWriters (cross-device routing). See the
+            // "4.65"/"4.7" stages in RenderPipeline's output render callback.
         }
     }
 
@@ -1344,22 +1349,6 @@ final class RenderCallbackContext: @unchecked Sendable {
                   engine.activeBandCount >= 2 else { return (nil, nil) }
             return (engine.rightLowPtr, nil)
         case .subMono:        return (monoLowOutputBuffer, nil)
-        }
-    }
-
-    /// Writes processed audio to the primary HAL output buffer (channel 0).
-    /// - Parameters:
-    ///   - leftBuf: Left channel buffer to write.
-    ///   - rightBuf: Right channel buffer to write (nil for mono).
-    ///   - frameCount: Number of frames to write.
-    @inline(__always)
-    private func writePrimaryChannel(leftBuf: UnsafeMutablePointer<Float>,
-                                      rightBuf: UnsafeMutablePointer<Float>?,
-                                      frameCount: Int) {
-        // Copy to processing buffers (which will be copied to ioData by the output callback)
-        memcpy(processingBuffers[0], leftBuf, frameCount * MemoryLayout<Float>.size)
-        if let rBuf = rightBuf, channelCount >= 2 {
-            memcpy(processingBuffers[1], rBuf, frameCount * MemoryLayout<Float>.size)
         }
     }
 
