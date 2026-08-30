@@ -337,6 +337,7 @@ struct DynamicsInlineView: View {
                     adv.denoiserAttackMs = d.denoiserAttackMs
                     adv.denoiserReleaseMs = d.denoiserReleaseMs
                     store.updateAdvancedProcessing(adv)
+                    store.resetNoiseProfile()
                 }
             ) {
                 DynamicsSliderRow(
@@ -347,7 +348,8 @@ struct DynamicsInlineView: View {
                             var adv = store.dynamicsConfig.advanced
                             adv.linearDenoisingThresholdDB = Float(v)
                             if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
-                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor {
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor ||
+                               adv.linearDenoisingPreset.parameters?.reductionAmount != adv.denoiserReductionAmount {
                                 adv.linearDenoisingPreset = .custom
                             }
                             store.updateAdvancedProcessing(adv)
@@ -370,6 +372,8 @@ struct DynamicsInlineView: View {
                             if let bundle = v.parameters {
                                 adv.linearDenoisingThresholdDB = bundle.noiseFloorDB
                                 adv.denoiserWienerFloor        = bundle.wienerFloor
+                                adv.denoiserReductionAmount    = bundle.reductionAmount
+                                adv.denoiserMode               = bundle.mode
                             }
                             store.updateAdvancedProcessing(adv)
                         }
@@ -405,7 +409,8 @@ struct DynamicsInlineView: View {
                             var adv = store.dynamicsConfig.advanced
                             adv.denoiserWienerFloor = Float(v)
                             if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
-                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor {
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor ||
+                               adv.linearDenoisingPreset.parameters?.reductionAmount != adv.denoiserReductionAmount {
                                 adv.linearDenoisingPreset = .custom
                             }
                             store.updateAdvancedProcessing(adv)
@@ -419,7 +424,16 @@ struct DynamicsInlineView: View {
                     label: "Reduction",
                     value: Binding(
                         get: { Double(store.dynamicsConfig.advanced.denoiserReductionAmount) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.denoiserReductionAmount = Float(v); store.updateAdvancedProcessing(adv) }
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.denoiserReductionAmount = Float(v)
+                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
+                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor ||
+                               adv.linearDenoisingPreset.parameters?.reductionAmount != adv.denoiserReductionAmount {
+                                adv.linearDenoisingPreset = .custom
+                            }
+                            store.updateAdvancedProcessing(adv)
+                        }
                     ),
                     range: 0.0...1.0,
                     step: 0.01,
@@ -448,22 +462,22 @@ struct DynamicsInlineView: View {
                 )
                 .help("Slower release smooths sustained material; faster release responds to changing noise floor.")
                 Divider()
-                HStack(spacing: 8) {
-                    Text("Profile")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 80, alignment: .leading)
-                    Button(store.denoiserIsCapturing ? "Capturing…" : "Capture") {
-                        store.startNoiseCapture()
-                    }
-                    .disabled(store.denoiserIsCapturing)
-                    Button("Reset") {
-                        store.resetNoiseProfile()
-                    }
-                    .disabled(!store.denoiserProfileIsCaptured && !store.denoiserIsCapturing)
-                }
                 TimelineView(.periodic(from: .now, by: 1.0 / 10.0)) { _ in
-                    Group {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text("Profile")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 80, alignment: .leading)
+                            Button(store.denoiserIsCapturing ? "Capturing…" : "Capture") {
+                                store.startNoiseCapture()
+                            }
+                            .disabled(store.denoiserIsCapturing)
+                            Button("Reset") {
+                                store.resetNoiseProfile()
+                            }
+                            .disabled(!store.denoiserProfileIsCaptured && !store.denoiserIsCapturing)
+                        }
                         if store.denoiserIsCapturing {
                             ProgressView(value: store.denoiserCaptureProgress)
                         } else if store.denoiserIsProfileLocked {

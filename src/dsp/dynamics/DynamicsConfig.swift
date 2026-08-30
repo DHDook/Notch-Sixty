@@ -1529,16 +1529,25 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
     /// All controls set manually; preset picker shows Custom when values diverge.
     case custom     = "Custom"
 
-    /// Returns the `(noiseFloorDB, wienerFloor)` pair for this preset.
+    /// Returns the `(noiseFloorDB, wienerFloor, reductionAmount, mode)` tuple for this preset.
     /// `noiseFloorDB` feeds `setNoiseFloorDB(_:)` on the denoiser.
     /// `wienerFloor` feeds `setWienerFloor(_:)` on the denoiser.
+    /// `reductionAmount` feeds `setReductionAmount(_:)` on the denoiser.
+    /// `mode` feeds the quality mode picker.
     /// Returns `nil` for `.custom` — callers must read individual config fields instead.
-    var parameters: (noiseFloorDB: Float, wienerFloor: Float)? {
+    var parameters: (noiseFloorDB: Float, wienerFloor: Float, reductionAmount: Float, mode: DenoiserMode)? {
         switch self {
-        case .natural:    return (noiseFloorDB: -72.0, wienerFloor: 0.05)
-        case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01)
-        case .aggressive: return (noiseFloorDB: -48.0, wienerFloor: 0.002)
-        case .dehiss:     return (noiseFloorDB: -58.0, wienerFloor: 0.004)
+        // Natural/Standard/Aggressive keep reductionAmount/mode at the
+        // current global defaults (0.5 / .high) — selecting them changes
+        // nothing about existing behavior beyond what threshold/wienerFloor
+        // already did.
+        case .natural:    return (noiseFloorDB: -72.0, wienerFloor: 0.05,  reductionAmount: 0.5, mode: .high)
+        case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01,  reductionAmount: 0.5, mode: .high)
+        case .aggressive: return (noiseFloorDB: -48.0, wienerFloor: 0.002, reductionAmount: 0.5, mode: .high)
+        // reductionAmount 0.4 is a starting point based on listening
+        // feedback that the shared 0.5 default was too deep for clean
+        // results on Dehiss; verify by ear and adjust if needed.
+        case .dehiss:     return (noiseFloorDB: -58.0, wienerFloor: 0.004, reductionAmount: 0.4, mode: .high)
         case .custom:     return nil
         }
     }

@@ -99,6 +99,13 @@ final class SpectralDenoiser: @unchecked Sendable {
     //                                 comparable directly to magSq without the halfN factor).
     nonisolated(unsafe) private var noisePowerHistory: [[Float]]  // [historyLength][halfN+1]
     nonisolated(unsafe) private var noiseFloorEst:     [Float]    // length halfN+1
+    // noiseFloorEst, smoothed across neighboring frequency bins (3-tap,
+    // edge-replicated). True broadband noise has a smooth spectral
+    // envelope, so smoothing the estimate itself — not just the resulting
+    // gain — removes bin-independent step noise the rolling-minimum
+    // estimator produces as frames enter/leave its history window. Pass 1
+    // reads this, not noiseFloorEst directly.
+    nonisolated(unsafe) private var smoothedNoiseFloor: [Float]  // length halfN+1
     nonisolated(unsafe) private var historyWriteIdx:   Int = 0
 
     // Raw (unweighted) per-bin magnitude² from the previous frame, used by the
@@ -245,6 +252,7 @@ final class SpectralDenoiser: @unchecked Sendable {
             count: historyLength
         )
         noiseFloorEst = [Float](repeating: initNoisePower, count: halfN + 1)
+        smoothedNoiseFloor = [Float](repeating: initNoisePower, count: halfN + 1)
         historyWriteIdx = 0
 
         // Initialize read pointer to lag one hop behind write pointer
@@ -445,6 +453,7 @@ final class SpectralDenoiser: @unchecked Sendable {
             count: historyLength
         )
         noiseFloorEst = [Float](repeating: initNoisePower, count: halfN + 1)
+        smoothedNoiseFloor = [Float](repeating: initNoisePower, count: halfN + 1)
         captureAccum  = [Double](repeating: 0.0, count: halfN + 1)
 
         // Clear capture flags — a captured profile is meaningless after resolution change.
@@ -456,6 +465,21 @@ final class SpectralDenoiser: @unchecked Sendable {
     }
 
     // MARK: - Audio Thread
+
+    /// Smooths noiseFloorEst across neighboring frequency bins (3-tap,
+    /// edge-replicated) into smoothedNoiseFloor. Call whenever
+    /// noiseFloorEst changes: once per frame during adaptive tracking, and
+    /// once when a capture completes.
+    @inline(__always)
+    private func smoothNoiseFloorAcrossFrequency() {
+        smoothedNoiseFloor[0] = 0.75 * noiseFloorEst[0] + 0.25 * noiseFloorEst[1]
+        for k in 1..<halfN {
+            smoothedNoiseFloor[k] = 0.25 * noiseFloorEst[k - 1]
+                                   + 0.50 * noiseFloorEst[k]
+                                   + 0.25 * noiseFloorEst[k + 1]
+        }
+        smoothedNoiseFloor[halfN] = 0.25 * noiseFloorEst[halfN - 1] + 0.75 * noiseFloorEst[halfN]
+    }
 
     func reset() {
         let N   = fftSize
@@ -479,6 +503,7 @@ final class SpectralDenoiser: @unchecked Sendable {
             for k in 0...halfN { noisePowerHistory[f][k] = initNoisePower }
         }
         for k in 0...halfN { noiseFloorEst[k] = initNoisePower }
+        for k in 0...halfN { smoothedNoiseFloor[k] = initNoisePower }
         historyWriteIdx = 0
     }
 
@@ -574,6 +599,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                                 }
                                 noiseFloorEst[k] = minPow * bias
                             }
+                            smoothNoiseFloorAcrossFrequency()
 
                             // Advance circular write pointer.
                             historyWriteIdx = (historyWriteIdx + 1) % historyLength
@@ -601,6 +627,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                                         noisePowerHistory[f][k] = avgPow
                                     }
                                 }
+                                smoothNoiseFloorAcrossFrequency()
                                 // Mark that a profile has been captured
                                 _hasCapturedProfile.store(1, ordering: .relaxed)
                                 // Lock the profile — disable adaptive updates
@@ -634,7 +661,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // DC bin
                         do {
                             let magSq    = rp[0] * rp[0]
-                            let floorPow = max(noiseFloorEst[0], userFloorPow)
+                            let floorPow = max(smoothedNoiseFloor[0], userFloorPow)
                             let binFloor = pow(wienerFloor, maskingBias[0])
                             targetGain[0] = decisionDirectedTarget(magSq: magSq, floorPow: floorPow,
                                                                     prevG: prevGain[0], prevMag: prevMagSq[0],
@@ -644,7 +671,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // Nyquist bin
                         do {
                             let magSq    = ip[0] * ip[0]
-                            let floorPow = max(noiseFloorEst[halfN], userFloorPow)
+                            let floorPow = max(smoothedNoiseFloor[halfN], userFloorPow)
                             let binFloor = pow(wienerFloor, maskingBias[halfN])
                             targetGain[halfN] = decisionDirectedTarget(magSq: magSq, floorPow: floorPow,
                                                                         prevG: prevGain[halfN], prevMag: prevMagSq[halfN],
@@ -654,7 +681,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // Complex bins 1..<halfN
                         for k in 1..<halfN {
                             let magSq    = rp[k] * rp[k] + ip[k] * ip[k]
-                            let floorPow = max(noiseFloorEst[k], userFloorPow)
+                            let floorPow = max(smoothedNoiseFloor[k], userFloorPow)
                             let binFloor = pow(wienerFloor, maskingBias[k])
                             targetGain[k] = decisionDirectedTarget(magSq: magSq, floorPow: floorPow,
                                                                     prevG: prevGain[k], prevMag: prevMagSq[k],
