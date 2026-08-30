@@ -48,13 +48,24 @@ final class SpectralDenoiser: @unchecked Sendable {
     private var gainAttackAlpha:  Float = 0.15
     private var gainReleaseAlpha: Float = 0.30
 
-    // Minimum statistics noise estimator.
-    // historyLength: number of frames of power history to retain.
-    //   64 frames × (hop/sampleRate) ≈ 1.4s at N=1024/hop=512/48kHz.
-    //   Increase for slower-varying noise; decrease for faster tracking.
-    private static let historyLength:      Int   = 64
+    // Minimum-statistics history window target duration, in real time. The
+    // number of frames retained (historyLength) is computed per-mode from
+    // this duration and the active mode's hop size in init()/setMode(), so
+    // Quality/High/Ultra all get roughly the same real-time averaging
+    // window rather than whatever falls out of hop size incidentally.
+    // (Previously a fixed 64 frames meant Quality/High only averaged over
+    // ~0.68s while Ultra averaged over ~1.4s — the shorter window let the
+    // rolling-minimum noise estimate drift upward faster during sustained
+    // loud material, producing audible gain flicker right around transient
+    // decay.)
+    private static let targetHistoryWindowSeconds: Float = 1.2
+    // Number of frames of power history retained. Computed in init() and
+    // setMode() from targetHistoryWindowSeconds and the active hop size —
+    // do not treat as a compile-time constant elsewhere.
+    private var historyLength: Int = 64
     // Bias correction (Martin 2001): the rolling minimum underestimates
-    // the true noise power by this factor. 1.66 is standard for L≈64.
+    // the true noise power by this factor. 1.66 is standard across the
+    // ~50–115 frame range this now produces for the three modes.
     private static let minStatsBias:       Float = 1.66
 
     // Decision-directed a priori SNR smoothing constant (Ephraim & Malah, 1984).
@@ -179,6 +190,7 @@ final class SpectralDenoiser: @unchecked Sendable {
 
         let N   = self.fftSize
         let hop = self.hopSize
+        historyLength = max(16, Int((Self.targetHistoryWindowSeconds * Float(sampleRate)) / Float(hop)))
         log2n    = vDSP_Length(log2(Double(N)).rounded())
         guard let initialSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
             fatalError("SpectralDenoiser: vDSP_create_fftsetup failed for log2n=\(log2n)")
@@ -230,7 +242,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         let initNoisePower: Float = 1e-12
         noisePowerHistory = [[Float]](
             repeating: [Float](repeating: initNoisePower, count: halfN + 1),
-            count: Self.historyLength
+            count: historyLength
         )
         noiseFloorEst = [Float](repeating: initNoisePower, count: halfN + 1)
         historyWriteIdx = 0
@@ -394,6 +406,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         hopSize = hop
         halfN   = N / 2
         self.sampleRate = sampleRate
+        historyLength = max(16, Int((Self.targetHistoryWindowSeconds * Float(sampleRate)) / Float(hop)))
 
         // Destroy old FFT setup before replacing it to avoid a resource leak.
         vDSP_destroy_fftsetup(fftSetup)
@@ -429,7 +442,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         let initNoisePower: Float = 1e-12
         noisePowerHistory = [[Float]](
             repeating: [Float](repeating: initNoisePower, count: halfN + 1),
-            count: Self.historyLength
+            count: historyLength
         )
         noiseFloorEst = [Float](repeating: initNoisePower, count: halfN + 1)
         captureAccum  = [Double](repeating: 0.0, count: halfN + 1)
@@ -462,7 +475,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         for i in 0..<prevMagSq.count { prevMagSq[i] = 1e-12 }
         // Reset noise estimator history.
         let initNoisePower: Float = 1e-12
-        for f in 0..<Self.historyLength {
+        for f in 0..<historyLength {
             for k in 0...halfN { noisePowerHistory[f][k] = initNoisePower }
         }
         for k in 0...halfN { noiseFloorEst[k] = initNoisePower }
@@ -555,7 +568,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                             let bias = Self.minStatsBias
                             for k in 0...halfN {
                                 var minPow = noisePowerHistory[0][k]
-                                for f in 1..<Self.historyLength {
+                                for f in 1..<historyLength {
                                     let p = noisePowerHistory[f][k]
                                     if p < minPow { minPow = p }
                                 }
@@ -563,7 +576,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                             }
 
                             // Advance circular write pointer.
-                            historyWriteIdx = (historyWriteIdx + 1) % Self.historyLength
+                            historyWriteIdx = (historyWriteIdx + 1) % historyLength
                         }
 
                         // Profile capture: if active, accumulate per-bin power.
@@ -584,7 +597,7 @@ final class SpectralDenoiser: @unchecked Sendable {
                                 for k in 0...halfN {
                                     let avgPow = Float(captureAccum[k] / frameCount)
                                     noiseFloorEst[k] = avgPow
-                                    for f in 0..<Self.historyLength {
+                                    for f in 0..<historyLength {
                                         noisePowerHistory[f][k] = avgPow
                                     }
                                 }
