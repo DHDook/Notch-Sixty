@@ -334,6 +334,9 @@ struct DynamicsInlineView: View {
                     adv.denoiserMode = d.denoiserMode
                     adv.denoiserWienerFloor = d.denoiserWienerFloor
                     adv.denoiserReductionAmount = d.denoiserReductionAmount
+                    adv.denoiserFreqRangeEnabled = d.denoiserFreqRangeEnabled
+                    adv.denoiserProtectLowHz = d.denoiserProtectLowHz
+                    adv.denoiserProtectHighHz = d.denoiserProtectHighHz
                     adv.denoiserAttackMs = d.denoiserAttackMs
                     adv.denoiserReleaseMs = d.denoiserReleaseMs
                     store.updateAdvancedProcessing(adv)
@@ -347,11 +350,7 @@ struct DynamicsInlineView: View {
                         set: { v in
                             var adv = store.dynamicsConfig.advanced
                             adv.linearDenoisingThresholdDB = Float(v)
-                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
-                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor ||
-                               adv.linearDenoisingPreset.parameters?.reductionAmount != adv.denoiserReductionAmount {
-                                adv.linearDenoisingPreset = .custom
-                            }
+                            if !adv.denoiserMatchesActivePreset { adv.linearDenoisingPreset = .custom }
                             store.updateAdvancedProcessing(adv)
                         }
                     ),
@@ -374,6 +373,9 @@ struct DynamicsInlineView: View {
                                 adv.denoiserWienerFloor        = bundle.wienerFloor
                                 adv.denoiserReductionAmount    = bundle.reductionAmount
                                 adv.denoiserMode               = bundle.mode
+                                adv.denoiserFreqRangeEnabled   = bundle.freqRangeEnabled
+                                adv.denoiserProtectLowHz       = bundle.protectLowHz
+                                adv.denoiserProtectHighHz      = bundle.protectHighHz
                             }
                             store.updateAdvancedProcessing(adv)
                         }
@@ -408,11 +410,7 @@ struct DynamicsInlineView: View {
                         set: { v in
                             var adv = store.dynamicsConfig.advanced
                             adv.denoiserWienerFloor = Float(v)
-                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
-                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor ||
-                               adv.linearDenoisingPreset.parameters?.reductionAmount != adv.denoiserReductionAmount {
-                                adv.linearDenoisingPreset = .custom
-                            }
+                            if !adv.denoiserMatchesActivePreset { adv.linearDenoisingPreset = .custom }
                             store.updateAdvancedProcessing(adv)
                         }
                     ),
@@ -427,11 +425,7 @@ struct DynamicsInlineView: View {
                         set: { v in
                             var adv = store.dynamicsConfig.advanced
                             adv.denoiserReductionAmount = Float(v)
-                            if adv.linearDenoisingPreset.parameters?.noiseFloorDB != adv.linearDenoisingThresholdDB ||
-                               adv.linearDenoisingPreset.parameters?.wienerFloor != adv.denoiserWienerFloor ||
-                               adv.linearDenoisingPreset.parameters?.reductionAmount != adv.denoiserReductionAmount {
-                                adv.linearDenoisingPreset = .custom
-                            }
+                            if !adv.denoiserMatchesActivePreset { adv.linearDenoisingPreset = .custom }
                             store.updateAdvancedProcessing(adv)
                         }
                     ),
@@ -461,6 +455,61 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.0f ms", $0) }
                 )
                 .help("Slower release smooths sustained material; faster release responds to changing noise floor.")
+                Divider()
+                HStack(spacing: 8) {
+                    Text("Freq. Range")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Toggle("", isOn: Binding(
+                        get: { store.dynamicsConfig.advanced.denoiserFreqRangeEnabled },
+                        set: { v in
+                            var adv = store.dynamicsConfig.advanced
+                            adv.denoiserFreqRangeEnabled = v
+                            if !adv.denoiserMatchesActivePreset { adv.linearDenoisingPreset = .custom }
+                            store.updateAdvancedProcessing(adv)
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    Text(store.dynamicsConfig.advanced.denoiserFreqRangeEnabled
+                         ? "Protecting \(Int(store.dynamicsConfig.advanced.denoiserProtectLowHz))–\(Int(store.dynamicsConfig.advanced.denoiserProtectHighHz)) Hz"
+                         : "Full spectrum")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if store.dynamicsConfig.advanced.denoiserFreqRangeEnabled {
+                    DynamicsSliderRow(
+                        label: "Protect Below",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.denoiserProtectLowHz) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.denoiserProtectLowHz = min(Float(v), adv.denoiserProtectHighHz)
+                                if !adv.denoiserMatchesActivePreset { adv.linearDenoisingPreset = .custom }
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: 0.0...2000.0,
+                        step: 10.0,
+                        formatValue: { String(format: "%.0f Hz", $0) }
+                    )
+                    DynamicsSliderRow(
+                        label: "Protect Above",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.denoiserProtectHighHz) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.denoiserProtectHighHz = max(Float(v), adv.denoiserProtectLowHz)
+                                if !adv.denoiserMatchesActivePreset { adv.linearDenoisingPreset = .custom }
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: 0.0...20000.0,
+                        step: 100.0,
+                        formatValue: { String(format: "%.0f Hz", $0) }
+                    )
+                }
                 Divider()
                 TimelineView(.periodic(from: .now, by: 1.0 / 10.0)) { _ in
                     VStack(alignment: .leading, spacing: 4) {

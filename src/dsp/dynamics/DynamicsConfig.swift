@@ -1506,6 +1506,16 @@ enum AutoHeadroomSpeed: String, Codable, Equatable, Sendable, CaseIterable {
 
 // MARK: - Denoiser Preset
 
+struct DenoiserPresetValues: Equatable {
+    var noiseFloorDB: Float
+    var wienerFloor: Float
+    var reductionAmount: Float
+    var mode: DenoiserMode
+    var freqRangeEnabled: Bool
+    var protectLowHz: Float
+    var protectHighHz: Float
+}
+
 /// Named noise-reduction operating points for the spectral denoiser.
 /// Each preset encodes a paired noise-floor threshold and Wiener gain floor
 /// so users choose by intent rather than by raw DSP parameters.
@@ -1522,34 +1532,51 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
     case aggressive = "Aggressive"
     /// Tuned for stationary broadband hiss/static on poor-quality source
     /// material (tape, vinyl, field/phone recordings). Pairs best with a
-    /// captured noise profile (see startNoiseCapture()/resetNoiseProfile())
-    /// rather than pure adaptive tracking, since hiss character is usually
-    /// consistent for the whole recording.
+    /// captured noise profile rather than pure adaptive tracking, since
+    /// hiss character is usually consistent for the whole recording.
+    /// Frequency-range protection defaults on, protecting below 150 Hz —
+    /// a starting point matching the classic "hiss lives in the highs"
+    /// case; verify by ear and adjust.
     case dehiss     = "Dehiss"
     /// All controls set manually; preset picker shows Custom when values diverge.
     case custom     = "Custom"
 
-    /// Returns the `(noiseFloorDB, wienerFloor, reductionAmount, mode)` tuple for this preset.
-    /// `noiseFloorDB` feeds `setNoiseFloorDB(_:)` on the denoiser.
-    /// `wienerFloor` feeds `setWienerFloor(_:)` on the denoiser.
-    /// `reductionAmount` feeds `setReductionAmount(_:)` on the denoiser.
-    /// `mode` feeds the quality mode picker.
-    /// Returns `nil` for `.custom` — callers must read individual config fields instead.
-    var parameters: (noiseFloorDB: Float, wienerFloor: Float, reductionAmount: Float, mode: DenoiserMode)? {
+    var parameters: DenoiserPresetValues? {
         switch self {
-        // Natural/Standard/Aggressive keep reductionAmount/mode at the
-        // current global defaults (0.5 / .high) — selecting them changes
-        // nothing about existing behavior beyond what threshold/wienerFloor
-        // already did.
-        case .natural:    return (noiseFloorDB: -72.0, wienerFloor: 0.05,  reductionAmount: 0.5, mode: .high)
-        case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01,  reductionAmount: 0.5, mode: .high)
-        case .aggressive: return (noiseFloorDB: -48.0, wienerFloor: 0.002, reductionAmount: 0.5, mode: .high)
-        // reductionAmount 0.4 is a starting point based on listening
-        // feedback that the shared 0.5 default was too deep for clean
-        // results on Dehiss; verify by ear and adjust if needed.
-        case .dehiss:     return (noiseFloorDB: -58.0, wienerFloor: 0.004, reductionAmount: 0.4, mode: .high)
-        case .custom:     return nil
+        case .natural:
+            return DenoiserPresetValues(noiseFloorDB: -72.0, wienerFloor: 0.05, reductionAmount: 0.5,
+                                         mode: .high, freqRangeEnabled: false, protectLowHz: 0, protectHighHz: 0)
+        case .standard:
+            return DenoiserPresetValues(noiseFloorDB: -60.0, wienerFloor: 0.01, reductionAmount: 0.5,
+                                         mode: .high, freqRangeEnabled: false, protectLowHz: 0, protectHighHz: 0)
+        case .aggressive:
+            return DenoiserPresetValues(noiseFloorDB: -48.0, wienerFloor: 0.002, reductionAmount: 0.5,
+                                         mode: .high, freqRangeEnabled: false, protectLowHz: 0, protectHighHz: 0)
+        case .dehiss:
+            return DenoiserPresetValues(noiseFloorDB: -58.0, wienerFloor: 0.004, reductionAmount: 0.4,
+                                         mode: .high, freqRangeEnabled: true, protectLowHz: 150, protectHighHz: 20000)
+        case .custom:
+            return nil
         }
+    }
+}
+
+extension AdvancedProcessingConfig {
+    /// True if the denoiser's current field values still match the active
+    /// named preset's bundle. `denoiserMode` is deliberately excluded —
+    /// changing Quality mode for CPU/performance reasons shouldn't flip the
+    /// preset label to Custom. Used to decide whether a manual slider edit
+    /// should flip `linearDenoisingPreset` to `.custom`.
+    var denoiserMatchesActivePreset: Bool {
+        guard let p = linearDenoisingPreset.parameters else {
+            return linearDenoisingPreset == .custom
+        }
+        return linearDenoisingThresholdDB == p.noiseFloorDB &&
+               denoiserWienerFloor        == p.wienerFloor &&
+               denoiserReductionAmount    == p.reductionAmount &&
+               denoiserFreqRangeEnabled   == p.freqRangeEnabled &&
+               denoiserProtectLowHz       == p.protectLowHz &&
+               denoiserProtectHighHz      == p.protectHighHz
     }
 }
 
@@ -1675,6 +1702,12 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     var denoiserReductionAmount: Float = 0.5
     /// Denoiser FFT resolution mode. Default: .high.
     var denoiserMode: DenoiserMode = .high
+    /// Whether frequency-range protection is enabled. Default: false.
+    var denoiserFreqRangeEnabled: Bool = false
+    /// Low edge of protected frequency band in Hz. Default: 0.0.
+    var denoiserProtectLowHz: Float = 0.0
+    /// High edge of protected frequency band in Hz. Default: 300.0.
+    var denoiserProtectHighHz: Float = 300.0
     /// Whether a noise profile has been captured (vs adaptive mode).
     var denoiserHasCapturedProfile: Bool = false
     /// Spectral denoiser gain-envelope attack speed in milliseconds. Default: 11 ms.
@@ -1824,7 +1857,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case panningGainMatrixEnabled, panningCrossfeedAmount
         case linearDenoisingEnabled, linearDenoisingThresholdDB, linearDenoisingPreset
         case denoiserWienerFloor
-        case denoiserReductionAmount, denoiserMode, denoiserHasCapturedProfile
+        case denoiserReductionAmount, denoiserMode, denoiserFreqRangeEnabled, denoiserProtectLowHz, denoiserProtectHighHz, denoiserHasCapturedProfile
         case denoiserAttackMs, denoiserReleaseMs
         case speakerIRAlignmentEnabled, speakerIRDelayMs
         case crosstalkCancellationEnabled, crosstalkCancellationAmount, crosstalkHeadShadowHz
@@ -1878,6 +1911,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         denoiserWienerFloor: Float = 0.01,
         denoiserReductionAmount: Float = 0.5,
         denoiserMode: DenoiserMode = .high,
+        denoiserFreqRangeEnabled: Bool = false,
+        denoiserProtectLowHz: Float = 0.0,
+        denoiserProtectHighHz: Float = 300.0,
         denoiserHasCapturedProfile: Bool = false,
         denoiserAttackMs: Float = 11.0,
         denoiserReleaseMs: Float = 21.0,
@@ -2028,6 +2064,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         denoiserWienerFloor              = try c.decodeIfPresent(Float.self,                 forKey: .denoiserWienerFloor)              ?? 0.01
         denoiserReductionAmount          = try c.decodeIfPresent(Float.self,                 forKey: .denoiserReductionAmount)          ?? 0.5
         denoiserMode                    = try c.decodeIfPresent(DenoiserMode.self,         forKey: .denoiserMode)                    ?? .high
+        denoiserFreqRangeEnabled       = try c.decodeIfPresent(Bool.self,                  forKey: .denoiserFreqRangeEnabled)       ?? false
+        denoiserProtectLowHz            = try c.decodeIfPresent(Float.self,                 forKey: .denoiserProtectLowHz)            ?? 0.0
+        denoiserProtectHighHz           = try c.decodeIfPresent(Float.self,                 forKey: .denoiserProtectHighHz)           ?? 300.0
         denoiserHasCapturedProfile      = try c.decodeIfPresent(Bool.self,                  forKey: .denoiserHasCapturedProfile)      ?? false
         denoiserAttackMs                = try c.decodeIfPresent(Float.self,                 forKey: .denoiserAttackMs)                ?? 11.0
         denoiserReleaseMs               = try c.decodeIfPresent(Float.self,                 forKey: .denoiserReleaseMs)               ?? 21.0
@@ -2124,6 +2163,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(denoiserWienerFloor,                forKey: .denoiserWienerFloor)
         try c.encode(denoiserReductionAmount,            forKey: .denoiserReductionAmount)
         try c.encode(denoiserMode,                     forKey: .denoiserMode)
+        try c.encode(denoiserFreqRangeEnabled,        forKey: .denoiserFreqRangeEnabled)
+        try c.encode(denoiserProtectLowHz,            forKey: .denoiserProtectLowHz)
+        try c.encode(denoiserProtectHighHz,           forKey: .denoiserProtectHighHz)
         try c.encode(denoiserHasCapturedProfile,       forKey: .denoiserHasCapturedProfile)
         try c.encode(denoiserAttackMs,                   forKey: .denoiserAttackMs)
         try c.encode(denoiserReleaseMs,                  forKey: .denoiserReleaseMs)

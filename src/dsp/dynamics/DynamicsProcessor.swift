@@ -116,6 +116,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// so we only call setMode() (which blocks the main thread) when something actually changed.
     private var denoisersConfiguredMode: DenoiserMode = .high
     private var denoisersConfiguredSampleRate: Double = 0.0  // 0 forces update on first applyConfig
+    private var denoisersConfiguredFreqRangeEnabled: Bool = false
+    private var denoisersConfiguredProtectLowHz: Float = -1  // -1 forces update on first applyConfig
+    private var denoisersConfiguredProtectHighHz: Float = -1
 
     // ── Stereo Widener + LUFS ─────────────────────────────────────────────
     let stereoWidener:  StereoWidener
@@ -1947,6 +1950,18 @@ final class DynamicsProcessor: @unchecked Sendable {
             }
             denoisersConfiguredMode = adv.denoiserMode
             denoisersConfiguredSampleRate = storedSampleRate
+        }
+        if adv.denoiserFreqRangeEnabled != denoisersConfiguredFreqRangeEnabled ||
+           adv.denoiserProtectLowHz    != denoisersConfiguredProtectLowHz ||
+           adv.denoiserProtectHighHz   != denoisersConfiguredProtectHighHz {
+            for d in denoisers {
+                d.setFrequencyRangeProtection(enabled: adv.denoiserFreqRangeEnabled,
+                                               lowHz: adv.denoiserProtectLowHz,
+                                               highHz: adv.denoiserProtectHighHz)
+            }
+            denoisersConfiguredFreqRangeEnabled = adv.denoiserFreqRangeEnabled
+            denoisersConfiguredProtectLowHz      = adv.denoiserProtectLowHz
+            denoisersConfiguredProtectHighHz     = adv.denoiserProtectHighHz
         }
         for d in denoisers {
             d.setReductionAmount(adv.denoiserReductionAmount)

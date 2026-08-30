@@ -187,6 +187,16 @@ final class SpectralDenoiser: @unchecked Sendable {
     //  reduces suppression where the ear is sensitive).
     nonisolated(unsafe) private var maskingBias: [Float]   // length halfN+1
 
+    // Frequency-range protection state. Plain instance vars, not atomics —
+    // mutated only inside setFrequencyRangeProtection() while holding
+    // _processLock (same treatment as fftSize/hopSize/halfN), and read only
+    // when rebuilding maskingBias, also under the lock. Never read directly
+    // in process() — process() only ever reads the derived maskingBias
+    // array.
+    private var freqRangeEnabled: Bool = false
+    private var protectLowHz: Float = 0.0
+    private var protectHighHz: Float = 0.0
+
     // MARK: - Init
     init(mode: DenoiserMode = .high, sampleRate: Double = 48000.0) {
         self.mode = mode
@@ -219,10 +229,14 @@ final class SpectralDenoiser: @unchecked Sendable {
         // Formula: bias[k] = 1.0 - 0.30 × sensitivity(f_k)
         // where sensitivity(f) is derived from a simplified ATH approximation.
         var bias = [Float](repeating: 1.0, count: halfN + 1)
-        let binHz = Float(sampleRate) / Float(N)   // Hz per bin (using actual sample rate)
+        let binHz = Float(sampleRate) / Float(N)
         for k in 0...halfN {
             let f = Float(k) * binHz
-            bias[k] = Self.athSensitivity(freqHz: f)
+            var b = Self.athSensitivity(freqHz: f)
+            if freqRangeEnabled {
+                b *= Self.rangeProtectionFactor(freqHz: f, lowHz: protectLowHz, highHz: protectHighHz)
+            }
+            bias[k] = b
         }
         maskingBias = bias
 
@@ -288,10 +302,14 @@ final class SpectralDenoiser: @unchecked Sendable {
     private func rebuildMaskingBias() {
         let N = fftSize
         var bias = [Float](repeating: 1.0, count: halfN + 1)
-        let binHz = Float(sampleRate) / Float(N)   // Hz per bin (using actual sample rate)
+        let binHz = Float(sampleRate) / Float(N)
         for k in 0...halfN {
             let f = Float(k) * binHz
-            bias[k] = Self.athSensitivity(freqHz: f)
+            var b = Self.athSensitivity(freqHz: f)
+            if freqRangeEnabled {
+                b *= Self.rangeProtectionFactor(freqHz: f, lowHz: protectLowHz, highHz: protectHighHz)
+            }
+            bias[k] = b
         }
         maskingBias = bias
     }
@@ -462,6 +480,20 @@ final class SpectralDenoiser: @unchecked Sendable {
 
         // Reset all processing state.
         reset()
+    }
+
+    /// Main-thread only. Updates the protected frequency band and rebuilds
+    /// maskingBias under the same lock setMode() uses, since process() reads
+    /// maskingBias every frame under trylock.
+    func setFrequencyRangeProtection(enabled: Bool, lowHz: Float, highHz: Float) {
+        os_unfair_lock_lock(_processLock)
+        defer { os_unfair_lock_unlock(_processLock) }
+        freqRangeEnabled = enabled
+        let lo = max(0, min(lowHz, highHz))
+        let hi = max(lo, highHz)
+        protectLowHz = lo
+        protectHighHz = hi
+        rebuildMaskingBias()
     }
 
     // MARK: - Audio Thread
@@ -804,6 +836,29 @@ final class SpectralDenoiser: @unchecked Sendable {
         let sensitivity = (1.0 - (athDB / 80.0)).clamped(to: 0.0...1.0)
         // Bias: full suppression in insensitive regions, 30% less in sensitive regions.
         return 1.0 - 0.30 * sensitivity
+    }
+
+    /// Returns 1.0 outside [lowHz, highHz] (normal suppression allowed),
+    /// 0.0 inside it (fully protected — no suppression possible there),
+    /// with a half-octave smooth taper at each edge to avoid an audible
+    /// seam. Setting lowHz to 0 gives a classic single high-pass cutoff
+    /// (protect everything below highHz); setting highHz to the Nyquist
+    /// frequency gives a single low-pass cutoff (protect everything above
+    /// lowHz); interior values on both edges protect a middle band while
+    /// leaving both spectral extremes processed.
+    private static func rangeProtectionFactor(freqHz: Float, lowHz: Float, highHz: Float) -> Float {
+        guard highHz > lowHz else { return 1.0 }  // degenerate band — no-op
+        let transitionOctaves: Float = 0.5
+        if freqHz < lowHz {
+            guard lowHz > 0 else { return 0.0 }
+            let octavesBelow = log2(max(lowHz, 1.0) / max(freqHz, 1.0))
+            return (octavesBelow / transitionOctaves).clamped(to: 0.0...1.0)
+        } else if freqHz > highHz {
+            let octavesAbove = log2(max(freqHz, 1.0) / max(highHz, 1.0))
+            return (octavesAbove / transitionOctaves).clamped(to: 0.0...1.0)
+        } else {
+            return 0.0  // inside the protected band
+        }
     }
 }
 
