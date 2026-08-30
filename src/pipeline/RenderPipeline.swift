@@ -931,6 +931,18 @@ final class RenderPipeline {
     var livePhaseCorrelation: Float {
         callbackContext?.dynamicsProcessor.livePhaseCorrelation ?? 0.0
     }
+    var denoiserIsCapturing: Bool {
+        callbackContext?.dynamicsProcessor.denoiserIsCapturing ?? false
+    }
+    var denoiserProfileIsCaptured: Bool {
+        callbackContext?.dynamicsProcessor.denoiserProfileIsCaptured ?? false
+    }
+    var denoiserIsProfileLocked: Bool {
+        callbackContext?.dynamicsProcessor.denoiserIsProfileLocked ?? false
+    }
+    var denoiserCaptureProgress: Float {
+        callbackContext?.dynamicsProcessor.denoiserCaptureProgress ?? 0.0
+    }
     var liveCrestFactorDB: Float {
         callbackContext?.dynamicsProcessor.liveCrestFactorDB ?? 0.0
     }

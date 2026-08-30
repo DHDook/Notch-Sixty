@@ -1520,6 +1520,12 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
     /// to be attenuated more deeply. May introduce slight residual smoothing
     /// on very transient material; best for heavily noise-contaminated sources.
     case aggressive = "Aggressive"
+    /// Tuned for stationary broadband hiss/static on poor-quality source
+    /// material (tape, vinyl, field/phone recordings). Pairs best with a
+    /// captured noise profile (see startNoiseCapture()/resetNoiseProfile())
+    /// rather than pure adaptive tracking, since hiss character is usually
+    /// consistent for the whole recording.
+    case dehiss     = "Dehiss"
     /// All controls set manually; preset picker shows Custom when values diverge.
     case custom     = "Custom"
 
@@ -1529,9 +1535,10 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
     /// Returns `nil` for `.custom` — callers must read individual config fields instead.
     var parameters: (noiseFloorDB: Float, wienerFloor: Float)? {
         switch self {
-        case .natural:    return (noiseFloorDB: -55.0, wienerFloor: 0.05)
+        case .natural:    return (noiseFloorDB: -72.0, wienerFloor: 0.05)
         case .standard:   return (noiseFloorDB: -60.0, wienerFloor: 0.01)
-        case .aggressive: return (noiseFloorDB: -65.0, wienerFloor: 0.002)
+        case .aggressive: return (noiseFloorDB: -48.0, wienerFloor: 0.002)
+        case .dehiss:     return (noiseFloorDB: -58.0, wienerFloor: 0.004)
         case .custom:     return nil
         }
     }

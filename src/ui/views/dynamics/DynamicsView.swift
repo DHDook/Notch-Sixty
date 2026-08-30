@@ -190,7 +190,7 @@ struct DynamicsInlineView: View {
                         // Column 1 — early signal chain
                         definitionEntry(title: "Infrasonic Filter", body: "Steep high-pass filter removing subsonic content below the threshold of hearing. Protects drivers and amplifiers from HVAC turbulence, record warps, and room pressurisation. Does not affect audible content when set at or below 20 Hz.")
                         Divider()
-                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate.")
+                        definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate. The Dehiss preset, combined with a captured noise profile, targets stationary broadband hiss/static on lower-quality source material.")
                         Divider()
                         definitionEntry(title: "Dialogue-Relative Leveler", body: "Dynamically boosts dialogue when it's being masked by other audio content. Compares the dialogue band's level against the full program level and applies gain only when the gap exceeds the target threshold. Uses asymmetric attack/release for natural response.")
                         Divider()
@@ -447,6 +447,32 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.0f ms", $0) }
                 )
                 .help("Slower release smooths sustained material; faster release responds to changing noise floor.")
+                Divider()
+                HStack(spacing: 8) {
+                    Text("Profile")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .leading)
+                    Button(store.denoiserIsCapturing ? "Capturing…" : "Capture") {
+                        store.startNoiseCapture()
+                    }
+                    .disabled(store.denoiserIsCapturing)
+                    Button("Reset") {
+                        store.resetNoiseProfile()
+                    }
+                    .disabled(!store.denoiserProfileIsCaptured && !store.denoiserIsCapturing)
+                }
+                TimelineView(.periodic(from: .now, by: 1.0 / 10.0)) { _ in
+                    Group {
+                        if store.denoiserIsCapturing {
+                            ProgressView(value: store.denoiserCaptureProgress)
+                        } else if store.denoiserIsProfileLocked {
+                            Text("Profile locked — noise floor frozen to the captured measurement.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             col2ToggleWithSettings(
                 label: "Dial. Level.",

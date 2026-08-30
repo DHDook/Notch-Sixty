@@ -57,6 +57,11 @@ final class SpectralDenoiser: @unchecked Sendable {
     // the true noise power by this factor. 1.66 is standard for L≈64.
     private static let minStatsBias:       Float = 1.66
 
+    // Decision-directed a priori SNR smoothing constant (Ephraim & Malah, 1984).
+    // 0.98 is the standard literature value and works well across the hop sizes
+    // used by all three DenoiserMode settings; not exposed to the user.
+    private static let decisionDirectedAlpha: Float = 0.98
+
     // MARK: - FFT
     private var log2n:    vDSP_Length
     private var fftSetup: FFTSetup
@@ -84,6 +89,19 @@ final class SpectralDenoiser: @unchecked Sendable {
     nonisolated(unsafe) private var noisePowerHistory: [[Float]]  // [historyLength][halfN+1]
     nonisolated(unsafe) private var noiseFloorEst:     [Float]    // length halfN+1
     nonisolated(unsafe) private var historyWriteIdx:   Int = 0
+
+    // Raw (unweighted) per-bin magnitude² from the previous frame, used by the
+    // decision-directed a priori SNR estimator. Same indexing convention as
+    // noiseFloorEst / prevGain / maskingBias: length halfN+1, index 0 = DC,
+    // index halfN = Nyquist.
+    nonisolated(unsafe) private var prevMagSq: [Float]  // length halfN + 1
+
+    // Per-bin instantaneous decision-directed target gain, before frequency
+    // smoothing. Scratch buffer, fully overwritten every frame.
+    nonisolated(unsafe) private var targetGain:   [Float]  // length halfN + 1
+    // targetGain after a 3-tap frequency-domain smoothing pass. This is what
+    // feeds the existing temporal attack/release smoother.
+    nonisolated(unsafe) private var smoothedGain: [Float]  // length halfN + 1
 
     // MARK: - Output ring
     nonisolated(unsafe) private var outRing:     [Float]    // length N * 2
@@ -118,6 +136,14 @@ final class SpectralDenoiser: @unchecked Sendable {
 
     // Flag indicating whether a noise profile has been captured.
     private let _hasCapturedProfile: ManagedAtomic<Int32>
+
+    // Set to 1 automatically when a noise-profile capture completes; cleared by
+    // resetNoiseProfile(). While locked, the adaptive minimum-statistics update
+    // is skipped entirely and noiseFloorEst stays exactly as captured — this is
+    // what the existing startNoiseCapture() doc comment already promises
+    // ("locked to the measured profile until resetNoiseProfile() is called"),
+    // which the previous implementation did not actually do.
+    private let _profileLockActive: ManagedAtomic<Int32>
 
     /// Mutual-exclusion lock between process() (audio thread) and setMode() (main thread).
     ///
@@ -191,6 +217,11 @@ final class SpectralDenoiser: @unchecked Sendable {
 
         // Initialize smoothed gains to 1.0 — denoiser starts transparent and fades in.
         prevGain = [Float](repeating: 1.0, count: halfN + 1)
+        // Initialize previous magnitude² to epsilon for transparent warm-up.
+        prevMagSq = [Float](repeating: 1e-12, count: halfN + 1)
+        // Initialize gain smoothing buffers (zero-init is fine, fully overwritten each frame).
+        targetGain = [Float](repeating: 0.0, count: halfN + 1)
+        smoothedGain = [Float](repeating: 0.0, count: halfN + 1)
 
         // Initialise noise estimator history to a small non-zero value so the
         // Wiener filter is transparent on the first few frames before the estimator warms up.
@@ -214,6 +245,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         _wienerFloorBits = ManagedAtomic(Self.floatBits(0.01))
         _captureFramesRemaining = ManagedAtomic(Int32(0))
         _hasCapturedProfile = ManagedAtomic(Int32(0))
+        _profileLockActive = ManagedAtomic(Int32(0))
         _processLock = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
         _processLock.initialize(to: os_unfair_lock_s())
         captureAccum = [Double](repeating: 0.0, count: halfN + 1)
@@ -261,6 +293,21 @@ final class SpectralDenoiser: @unchecked Sendable {
         _hasCapturedProfile.load(ordering: .relaxed) != 0
     }
 
+    /// Returns true once a captured noise profile is active and locked — the
+    /// adaptive estimator is not running and noiseFloorEst is frozen to the
+    /// measured profile.
+    var isProfileLocked: Bool {
+        _profileLockActive.load(ordering: .relaxed) != 0
+    }
+
+    /// Progress of an in-progress capture, 0.0...1.0. Returns 0.0 when not
+    /// currently capturing.
+    var captureProgress: Float {
+        let remaining = _captureFramesRemaining.load(ordering: .relaxed)
+        guard remaining > 0 else { return 0.0 }
+        return 1.0 - Float(remaining) / Float(Self.captureLength)
+    }
+
     /// Sets the noise floor in dBFS.
     /// Bins whose magnitude is at or below this level are considered noise-dominated.
     /// -60 dBFS is a reasonable default for hiss removal; raise to -40 dBFS for
@@ -297,6 +344,7 @@ final class SpectralDenoiser: @unchecked Sendable {
     /// Clears the captured profile, returning the estimator to adaptive mode.
     func resetNoiseProfile() {
         _captureFramesRemaining.store(0, ordering: .relaxed)
+        _profileLockActive.store(0, ordering: .relaxed)
         // Re-initialise the history so the adaptive estimator takes over immediately.
         reset()
     }
@@ -374,6 +422,9 @@ final class SpectralDenoiser: @unchecked Sendable {
         workImag      = [Float](repeating: 0, count: N)
         outRing       = [Float](repeating: 0, count: ringCapacity)
         prevGain      = [Float](repeating: 1.0, count: halfN + 1)
+        prevMagSq     = [Float](repeating: 1e-12, count: halfN + 1)
+        targetGain    = [Float](repeating: 0.0, count: halfN + 1)
+        smoothedGain  = [Float](repeating: 0.0, count: halfN + 1)
 
         let initNoisePower: Float = 1e-12
         noisePowerHistory = [[Float]](
@@ -382,6 +433,10 @@ final class SpectralDenoiser: @unchecked Sendable {
         )
         noiseFloorEst = [Float](repeating: initNoisePower, count: halfN + 1)
         captureAccum  = [Double](repeating: 0.0, count: halfN + 1)
+
+        // Clear capture flags — a captured profile is meaningless after resolution change.
+        _hasCapturedProfile.store(0, ordering: .relaxed)
+        _profileLockActive.store(0, ordering: .relaxed)
 
         // Reset all processing state.
         reset()
@@ -403,6 +458,8 @@ final class SpectralDenoiser: @unchecked Sendable {
         accumPos    = 0
         // Reset smoothed gains to 1.0 so the denoiser opens transparently after a reset.
         for i in 0..<prevGain.count { prevGain[i] = 1.0 }
+        // Reset previous magnitude² to epsilon.
+        for i in 0..<prevMagSq.count { prevMagSq[i] = 1e-12 }
         // Reset noise estimator history.
         let initNoisePower: Float = 1e-12
         for f in 0..<Self.historyLength {
@@ -429,8 +486,16 @@ final class SpectralDenoiser: @unchecked Sendable {
         let ringSize   = outRing.count
 
         let amount = Self.bitsToFloat(_reductionAmountBits.load(ordering: .relaxed))
-        // Exponential mapping: 0% → floor≈0.90 (−0.9 dB), 100% → floor=0.01 (−40 dB)
-        let wienerFloor = 0.90 * pow(0.01 / 0.90, amount)
+        // Preset ceiling: the deepest gain floor this preset will ever reach, even
+        // at 100% reduction amount. Was previously hardcoded to 0.01 — now reads
+        // the value set via setWienerFloor() / the active DenoiserPreset.
+        let presetFloorCeiling = max(Self.bitsToFloat(_wienerFloorBits.load(ordering: .relaxed)), 1e-4)
+        // Exponential mapping: 0% → floor≈0.90 (−0.9 dB), 100% → presetFloorCeiling.
+        let wienerFloor = 0.90 * pow(presetFloorCeiling / 0.90, amount)
+
+        // User-set noise floor safety threshold (manual floor under adaptive/captured estimate).
+        let userFloorLinear = Self.bitsToFloat(_noiseFloorBits.load(ordering: .relaxed))
+        let userFloorPow = userFloorLinear * userFloorLinear  // amplitude → power
 
         var srcPos = 0
         while srcPos < count {
@@ -476,28 +541,30 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // noisePowerHistory values are in raw FFT magnitude² units (no halfN scaling
                         // needed — the noiseFloorEst is used directly against magSq below).
 
-                        // DC bin
-                        noisePowerHistory[historyWriteIdx][0]      = rp[0] * rp[0]
-                        // Nyquist bin
-                        noisePowerHistory[historyWriteIdx][halfN]  = ip[0] * ip[0]
-                        // Complex bins 1..halfN-1
-                        for k in 1..<halfN {
-                            noisePowerHistory[historyWriteIdx][k] = rp[k] * rp[k] + ip[k] * ip[k]
-                        }
-
-                        // Update rolling minimum for each bin and apply bias correction.
-                        let bias = Self.minStatsBias
-                        for k in 0...halfN {
-                            var minPow = noisePowerHistory[0][k]
-                            for f in 1..<Self.historyLength {
-                                let p = noisePowerHistory[f][k]
-                                if p < minPow { minPow = p }
+                        if _profileLockActive.load(ordering: .relaxed) == 0 {
+                            // DC bin
+                            noisePowerHistory[historyWriteIdx][0]      = rp[0] * rp[0]
+                            // Nyquist bin
+                            noisePowerHistory[historyWriteIdx][halfN]  = ip[0] * ip[0]
+                            // Complex bins 1..halfN-1
+                            for k in 1..<halfN {
+                                noisePowerHistory[historyWriteIdx][k] = rp[k] * rp[k] + ip[k] * ip[k]
                             }
-                            noiseFloorEst[k] = minPow * bias
-                        }
 
-                        // Advance circular write pointer.
-                        historyWriteIdx = (historyWriteIdx + 1) % Self.historyLength
+                            // Update rolling minimum for each bin and apply bias correction.
+                            let bias = Self.minStatsBias
+                            for k in 0...halfN {
+                                var minPow = noisePowerHistory[0][k]
+                                for f in 1..<Self.historyLength {
+                                    let p = noisePowerHistory[f][k]
+                                    if p < minPow { minPow = p }
+                                }
+                                noiseFloorEst[k] = minPow * bias
+                            }
+
+                            // Advance circular write pointer.
+                            historyWriteIdx = (historyWriteIdx + 1) % Self.historyLength
+                        }
 
                         // Profile capture: if active, accumulate per-bin power.
                         let captureRemaining = _captureFramesRemaining.load(ordering: .relaxed)
@@ -523,60 +590,108 @@ final class SpectralDenoiser: @unchecked Sendable {
                                 }
                                 // Mark that a profile has been captured
                                 _hasCapturedProfile.store(1, ordering: .relaxed)
+                                // Lock the profile — disable adaptive updates
+                                _profileLockActive.store(1, ordering: .relaxed)
                             }
                         }
 
-                        // ── Smoothed Wiener gain ───────────────────────────────────────────────
+                        // ── Pass 1: decision-directed target gain per bin ──────────────────────
                         //
-                        // The instantaneous Wiener gain G(k) = snrSq/(snrSq+1) is correct but
-                        // when applied frame-by-frame without memory, it produces abrupt bin-level
-                        // steps on transients that appear as spectral splatter / roughness in the
-                        // time domain. The synthesis window was masking this by blurring frame
-                        // boundaries, at the cost of Hann² amplitude modulation.
-                        //
-                        // The correct fix is a per-bin first-order IIR smoother with asymmetric
-                        // time constants: fast attack (signal appears quickly → minimal smear of
-                        // transient onset) and slow release (signal disappears slowly → no musical
-                        // noise as gains ramp down smoothly rather than stepping).
-                        //
-                        // Gain for frame n:  G_smooth[k,n] = alpha * G_smooth[k,n-1] + (1-alpha) * G_instant[k]
-                        // where alpha = gainAttackAlpha when G_instant > G_smooth (gain rising)
-                        //       alpha = gainReleaseAlpha when G_instant < G_smooth (gain falling)
+                        // Standard spectral-subtraction musical-noise fix (Ephraim & Malah, 1984):
+                        // instead of computing the Wiener gain directly from the instantaneous
+                        // (a posteriori) SNR each frame, smooth the SNR estimate itself using the
+                        // previous frame's *applied* gain and magnitude. This is what actually
+                        // suppresses musical noise — the temporal attack/release smoother below
+                        // only smooths the already-computed gain, which is a weaker effect.
 
+                        let ddAlpha = Self.decisionDirectedAlpha
+
+                        @inline(__always)
+                        func decisionDirectedTarget(magSq: Float, floorPow: Float,
+                                                     prevG: Float, prevMag: Float,
+                                                     binFloor: Float) -> Float {
+                            let safeFloor    = max(floorPow, 1e-20)
+                            let aPosteriori  = magSq / safeFloor
+                            let prevSignalPow = prevG * prevG * prevMag
+                            let aPriori = ddAlpha * (prevSignalPow / safeFloor)
+                                        + (1.0 - ddAlpha) * max(aPosteriori - 1.0, 0.0)
+                            return max(binFloor, aPriori / (aPriori + 1.0))
+                        }
+
+                        // DC bin
+                        do {
+                            let magSq    = rp[0] * rp[0]
+                            let floorPow = max(noiseFloorEst[0], userFloorPow)
+                            let binFloor = pow(wienerFloor, maskingBias[0])
+                            targetGain[0] = decisionDirectedTarget(magSq: magSq, floorPow: floorPow,
+                                                                    prevG: prevGain[0], prevMag: prevMagSq[0],
+                                                                    binFloor: binFloor)
+                            prevMagSq[0] = magSq
+                        }
+                        // Nyquist bin
+                        do {
+                            let magSq    = ip[0] * ip[0]
+                            let floorPow = max(noiseFloorEst[halfN], userFloorPow)
+                            let binFloor = pow(wienerFloor, maskingBias[halfN])
+                            targetGain[halfN] = decisionDirectedTarget(magSq: magSq, floorPow: floorPow,
+                                                                        prevG: prevGain[halfN], prevMag: prevMagSq[halfN],
+                                                                        binFloor: binFloor)
+                            prevMagSq[halfN] = magSq
+                        }
+                        // Complex bins 1..<halfN
+                        for k in 1..<halfN {
+                            let magSq    = rp[k] * rp[k] + ip[k] * ip[k]
+                            let floorPow = max(noiseFloorEst[k], userFloorPow)
+                            let binFloor = pow(wienerFloor, maskingBias[k])
+                            targetGain[k] = decisionDirectedTarget(magSq: magSq, floorPow: floorPow,
+                                                                    prevG: prevGain[k], prevMag: prevMagSq[k],
+                                                                    binFloor: binFloor)
+                            prevMagSq[k] = magSq
+                        }
+
+                        // ── Pass 2: frequency-domain gain smoothing (3-tap, edge-replicated) ───
+                        //
+                        // Suppresses isolated single-bin gain spikes/dips relative to their
+                        // neighbors — a major contributor to "musical noise" / roughness that
+                        // per-bin temporal smoothing alone cannot fix. Fixed light 3-tap kernel,
+                        // not exposed to the user (same design precedent as the ATH masking bias
+                        // curve and minimum-statistics bias constant already in this file).
+                        smoothedGain[0] = 0.75 * targetGain[0] + 0.25 * targetGain[1]
+                        for k in 1..<halfN {
+                            smoothedGain[k] = 0.25 * targetGain[k - 1]
+                                             + 0.50 * targetGain[k]
+                                             + 0.25 * targetGain[k + 1]
+                        }
+                        smoothedGain[halfN] = 0.25 * targetGain[halfN - 1] + 0.75 * targetGain[halfN]
+
+                        // ── Pass 3: temporal attack/release smoothing + apply (existing logic) ──
                         let attackAlpha  = gainAttackAlpha
                         let releaseAlpha = gainReleaseAlpha
 
-                        // DC bin (index 0 in prevGain)
-                        let dcMagSq   = rp[0] * rp[0]
-                        let dcSNRsq   = dcMagSq / max(noiseFloorEst[0], 1e-20)
-                        let dcFloor  = pow(wienerFloor, maskingBias[0])
-                        let dcTarget  = max(dcFloor, dcSNRsq / (dcSNRsq + 1.0))
-                        let dcAlpha   = dcTarget > prevGain[0] ? attackAlpha : releaseAlpha
-                        let dcGain    = dcAlpha * prevGain[0] + (1.0 - dcAlpha) * dcTarget
-                        prevGain[0]   = dcGain
-                        rp[0]        *= dcGain
-
-                        // Nyquist bin (index halfN in prevGain)
-                        let nyMagSq   = ip[0] * ip[0]
-                        let nySNRsq   = nyMagSq / max(noiseFloorEst[halfN], 1e-20)
-                        let nyFloor  = pow(wienerFloor, maskingBias[halfN])
-                        let nyTarget  = max(nyFloor, nySNRsq / (nySNRsq + 1.0))
-                        let nyAlpha   = nyTarget > prevGain[halfN] ? attackAlpha : releaseAlpha
-                        let nyGain    = nyAlpha * prevGain[halfN] + (1.0 - nyAlpha) * nyTarget
-                        prevGain[halfN] = nyGain
-                        ip[0]        *= nyGain
-
-                        // Complex bins 1..halfN-1
+                        // DC bin
+                        do {
+                            let target = smoothedGain[0]
+                            let alpha  = target > prevGain[0] ? attackAlpha : releaseAlpha
+                            let gain   = alpha * prevGain[0] + (1.0 - alpha) * target
+                            prevGain[0] = gain
+                            rp[0]      *= gain
+                        }
+                        // Nyquist bin
+                        do {
+                            let target = smoothedGain[halfN]
+                            let alpha  = target > prevGain[halfN] ? attackAlpha : releaseAlpha
+                            let gain   = alpha * prevGain[halfN] + (1.0 - alpha) * target
+                            prevGain[halfN] = gain
+                            ip[0]          *= gain
+                        }
+                        // Complex bins 1..<halfN
                         for k in 1..<halfN {
-                            let magSq    = rp[k] * rp[k] + ip[k] * ip[k]
-                            let snrSq    = magSq / max(noiseFloorEst[k], 1e-20)
-                            let binFloor = pow(wienerFloor, maskingBias[k])
-                            let target   = max(binFloor, snrSq / (snrSq + 1.0))
-                            let alpha    = target > prevGain[k] ? attackAlpha : releaseAlpha
-                            let gain     = alpha * prevGain[k] + (1.0 - alpha) * target
-                            prevGain[k]  = gain
-                            rp[k]       *= gain
-                            ip[k]       *= gain
+                            let target = smoothedGain[k]
+                            let alpha  = target > prevGain[k] ? attackAlpha : releaseAlpha
+                            let gain   = alpha * prevGain[k] + (1.0 - alpha) * target
+                            prevGain[k] = gain
+                            rp[k]      *= gain
+                            ip[k]      *= gain
                         }
 
                         // Inverse FFT.

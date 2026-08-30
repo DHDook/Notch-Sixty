@@ -1544,6 +1544,19 @@ final class DynamicsProcessor: @unchecked Sendable {
     func resetNoiseProfile() {
         denoisers.forEach { $0.resetNoiseProfile() }
     }
+
+    var denoiserIsCapturing: Bool {
+        denoisers.first?.isCapturing ?? false
+    }
+    var denoiserProfileIsCaptured: Bool {
+        denoisers.first?.hasCapturedProfile ?? false
+    }
+    var denoiserIsProfileLocked: Bool {
+        denoisers.first?.isProfileLocked ?? false
+    }
+    var denoiserCaptureProgress: Float {
+        denoisers.first?.captureProgress ?? 0.0
+    }
     func setChannelBalance(_ balance: Float) {
         _channelBalanceBits.store(floatBits(max(-1.0, min(1.0, balance))), ordering: .relaxed)
     }

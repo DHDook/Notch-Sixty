@@ -2293,6 +2293,19 @@ final class EqualiserStore: ObservableObject {
     func resetNoiseProfile() {
         routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.resetNoiseProfile()
     }
+
+    var denoiserIsCapturing: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.denoiserIsCapturing ?? false
+    }
+    var denoiserProfileIsCaptured: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.denoiserProfileIsCaptured ?? false
+    }
+    var denoiserIsProfileLocked: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.denoiserIsProfileLocked ?? false
+    }
+    var denoiserCaptureProgress: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.denoiserCaptureProgress ?? 0.0
+    }
     
     // MARK: - Preset Management
     
