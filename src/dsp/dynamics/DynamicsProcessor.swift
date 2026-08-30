@@ -1537,9 +1537,9 @@ final class DynamicsProcessor: @unchecked Sendable {
         denoisers.forEach { $0.setWienerFloor(floor) }
     }
     func setDenoisingPreset(_ preset: DenoiserPreset) {
-        guard let (noiseFloorDB, wienerFloor) = preset.parameters else { return }
-        setDenoisingThresholdDB(noiseFloorDB)
-        setDenoisingWienerFloor(wienerFloor)
+        guard let p = preset.parameters else { return }
+        setDenoisingThresholdDB(p.noiseFloorDB)
+        setDenoisingWienerFloor(p.wienerFloor)
     }
     func startNoiseCapture() {
         denoisers.forEach { $0.startNoiseCapture() }
