@@ -65,9 +65,9 @@ struct AppStateSnapshot: Sendable {
             captureMode: CaptureMode.sharedMemory.rawValue,
             dynamicsConfig: .default,
             metersEnabled: true,
-            rtaEnabled: true,
-            remainingMetersEnabled: true,
-            levelMetersEnabled: true,
+            rtaEnabled: false,
+            remainingMetersEnabled: false,
+            levelMetersEnabled: false,
             vuMetersEnabled: true,
             vuMeterSource: .output
         )
@@ -132,20 +132,20 @@ extension AppStateSnapshot: Codable {
         
         // Meter state with migration from old flags
         metersEnabled = try container.decodeIfPresent(Bool.self, forKey: .metersEnabled) ?? true
-        rtaEnabled = try container.decodeIfPresent(Bool.self, forKey: .rtaEnabled) ?? true
-        
+        rtaEnabled = try container.decodeIfPresent(Bool.self, forKey: .rtaEnabled) ?? false
+
         // Try new consolidated flag first, fall back to migrating from old individual flags
         if let newRemainingMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .remainingMetersEnabled) {
             remainingMetersEnabled = newRemainingMetersEnabled
         } else {
             // Migrate from old individual flags to consolidated remainingMetersEnabled
-            let goniometerEnabled = try container.decodeIfPresent(Bool.self, forKey: .goniometerEnabled) ?? true
-            let analyticsMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .analyticsMetersEnabled) ?? true
-            let gainStructureEnabled = try container.decodeIfPresent(Bool.self, forKey: .gainStructureEnabled) ?? true
+            let goniometerEnabled = try container.decodeIfPresent(Bool.self, forKey: .goniometerEnabled) ?? false
+            let analyticsMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .analyticsMetersEnabled) ?? false
+            let gainStructureEnabled = try container.decodeIfPresent(Bool.self, forKey: .gainStructureEnabled) ?? false
             remainingMetersEnabled = goniometerEnabled && analyticsMetersEnabled && gainStructureEnabled
         }
-        
-        levelMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .levelMetersEnabled) ?? true
+
+        levelMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .levelMetersEnabled) ?? false
         
         // VU meter fields - default if not present in old snapshots
         vuMetersEnabled = try container.decodeIfPresent(Bool.self, forKey: .vuMetersEnabled) ?? true

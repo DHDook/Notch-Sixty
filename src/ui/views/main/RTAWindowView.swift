@@ -10,9 +10,9 @@ struct RTAWindowView: View {
             WindowMetersToggleHeader(
                 title: "RTA Analyser",
                 isEnabled: meterStore.rtaEnabled,
+                masterMetersEnabled: meterStore.metersEnabled,
                 onToggle: { meterStore.rtaEnabled = $0 }
             )
-            .disabled(!meterStore.metersEnabled)
             RTADashboardView(
                 analyzer: store.rtaAnalyzer,
                 metersEnabled: meterStore.rtaEnabled,

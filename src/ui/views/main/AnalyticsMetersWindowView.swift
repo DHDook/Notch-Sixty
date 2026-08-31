@@ -13,9 +13,9 @@ struct AnalyticsMetersWindowView: View {
             WindowMetersToggleHeader(
                 title: "Meters",
                 isEnabled: meterStore.remainingMetersEnabled,
+                masterMetersEnabled: meterStore.metersEnabled,
                 onToggle: { meterStore.remainingMetersEnabled = $0 }
             )
-            .disabled(!meterStore.metersEnabled)
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 20) {
                     GainStructureMeterView()

@@ -145,9 +145,9 @@ final class GoniometerBufferEngine: ObservableObject, @unchecked Sendable {
     }
 
     // MARK: Run state gating
-    private var isViewVisible = true
-    private var isMetersEnabled = true
-    private var isIndividuallyEnabled = true
+    private var isViewVisible = false
+    private var isMetersEnabled = false
+    private var isIndividuallyEnabled = false
 
     // MARK: - Lifecycle
 

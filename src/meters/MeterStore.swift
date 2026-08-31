@@ -24,6 +24,14 @@ final class MeterStore: ObservableObject {
     @Published var metersEnabled: Bool = true {
         didSet {
             if !metersEnabled {
+                // Master off freezes every per-cluster toggle off too. The
+                // per-cluster didSet guards below stop them being switched back
+                // on again while the master stays off.
+                rtaEnabled = false
+                remainingMetersEnabled = false
+                levelMetersEnabled = false
+                vuMetersEnabled = false
+
                 // Reset all observers to silent state
                 notifyAllObserversSilent()
                 stopMeterUpdates()
@@ -33,11 +41,36 @@ final class MeterStore: ObservableObject {
         }
     }
 
-    /// Per-visualization enable/disable flags
-    @Published var rtaEnabled: Bool = true
-    @Published var remainingMetersEnabled: Bool = true
-    @Published var levelMetersEnabled: Bool = true
-    @Published var vuMetersEnabled: Bool = true
+    /// Per-visualization enable/disable flags. Each refuses to switch to `true`
+    /// while `metersEnabled` (the master toggle) is `false`.
+    @Published var rtaEnabled: Bool = false {
+        didSet {
+            if rtaEnabled && !metersEnabled {
+                rtaEnabled = false
+            }
+        }
+    }
+    @Published var remainingMetersEnabled: Bool = false {
+        didSet {
+            if remainingMetersEnabled && !metersEnabled {
+                remainingMetersEnabled = false
+            }
+        }
+    }
+    @Published var levelMetersEnabled: Bool = false {
+        didSet {
+            if levelMetersEnabled && !metersEnabled {
+                levelMetersEnabled = false
+            }
+        }
+    }
+    @Published var vuMetersEnabled: Bool = true {
+        didSet {
+            if vuMetersEnabled && !metersEnabled {
+                vuMetersEnabled = false
+            }
+        }
+    }
     @Published var vuMeterSource: VUSource = .output
 
     // MARK: - Per-Output Channel Metering (Part 2 Task AG)
@@ -92,9 +125,9 @@ final class MeterStore: ObservableObject {
     // MARK: - Initialization
 
     init(metersEnabled: Bool = true,
-         rtaEnabled: Bool = true,
-         remainingMetersEnabled: Bool = true,
-         levelMetersEnabled: Bool = true,
+         rtaEnabled: Bool = false,
+         remainingMetersEnabled: Bool = false,
+         levelMetersEnabled: Bool = false,
          vuMetersEnabled: Bool = true,
          vuMeterSource: VUSource = .output) {
         self.metersEnabled = metersEnabled

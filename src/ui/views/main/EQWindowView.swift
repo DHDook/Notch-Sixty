@@ -530,7 +530,6 @@ struct EQWindowView: View {
                 ) { _ in
                     Task { @MainActor in
                         store.meterStore.meterWindowBecameHidden(id: "equaliser")
-                        store.rtaAnalyzer.rtaWindowBecameHidden(id: "equaliser")
                     }
                 }
                 NotificationCenter.default.addObserver(
@@ -540,16 +539,18 @@ struct EQWindowView: View {
                 ) { _ in
                     Task { @MainActor in
                         store.meterStore.meterWindowBecameVisible(id: "equaliser")
-                        store.rtaAnalyzer.rtaWindowBecameVisible(id: "equaliser")
                     }
                 }
             }
         )
         .onAppear {
             store.meterStore.meterWindowBecameVisible(id: "equaliser")
-            store.rtaAnalyzer.rtaWindowBecameVisible(id: "equaliser")
             metersEnabledUI = store.meterStore.metersEnabled
             showStateResetAlert = store.didResetStateOnLaunch
+            showDriverSheet = needsDriverInstallation
+            if needsDriverUpdate {
+                openSettings()
+            }
         }
         .onChange(of: metersEnabledUI) { _, newValue in
             store.meterStore.metersEnabled = newValue
@@ -559,7 +560,6 @@ struct EQWindowView: View {
         }
         .onDisappear {
             store.meterStore.meterWindowBecameHidden(id: "equaliser")
-            store.rtaAnalyzer.rtaWindowBecameHidden(id: "equaliser")
         }
         .sheet(isPresented: $showDriverSheet) {
             DriverInstallationView(
@@ -578,12 +578,6 @@ struct EQWindowView: View {
         }
         .onChange(of: needsDriverUpdate) { _, newValue in
             if newValue {
-                openSettings()
-            }
-        }
-        .onAppear {
-            showDriverSheet = needsDriverInstallation
-            if needsDriverUpdate {
                 openSettings()
             }
         }

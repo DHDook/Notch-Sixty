@@ -262,8 +262,8 @@ final class AdvancedDualSpectrumAnalyzer: ObservableObject, @unchecked Sendable 
 
     // MARK: Run state gating
     private var visibleWindowIDs: Set<String> = []
-    private var isMetersEnabled = true
-    private var isIndividuallyEnabled = true
+    private var isMetersEnabled = false
+    private var isIndividuallyEnabled = false
 
     // MARK: - Init / deinit
 

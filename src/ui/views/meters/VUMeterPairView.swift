@@ -64,6 +64,7 @@ struct VUMeterPairView: View {
 /// the combined controls/launcher stack rather than above the gauges.
 struct VUControlsRow: View {
     @ObservedObject var meterStore: MeterStore
+    @State private var showMasterDisabledAlert = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -72,19 +73,46 @@ struct VUControlsRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            Picker("", selection: $meterStore.vuMeterSource) {
-                Text("In").tag(VUSource.input)
-                Text("Out").tag(VUSource.output)
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.mini)
-            .frame(width: 70)
-
-            Toggle("", isOn: $meterStore.vuMetersEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
+            ZStack {
+                Picker("", selection: $meterStore.vuMeterSource) {
+                    Text("In").tag(VUSource.input)
+                    Text("Out").tag(VUSource.output)
+                }
+                .pickerStyle(.segmented)
                 .controlSize(.mini)
+                .frame(width: 70)
+                .disabled(!meterStore.metersEnabled)
+
+                if !meterStore.metersEnabled {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showMasterDisabledAlert = true
+                        }
+                }
+            }
+
+            ZStack {
+                Toggle("", isOn: $meterStore.vuMetersEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .disabled(!meterStore.metersEnabled)
+
+                if !meterStore.metersEnabled {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showMasterDisabledAlert = true
+                        }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .center)
+        .alert("Master Meters Is Off", isPresented: $showMasterDisabledAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Turn on the master “Meters” toggle before enabling this meter cluster.")
+        }
     }
 }

@@ -10,9 +10,9 @@ struct LevelMetersWindowView: View {
             WindowMetersToggleHeader(
                 title: "Peak & RMS Meters",
                 isEnabled: meterStore.levelMetersEnabled,
+                masterMetersEnabled: meterStore.metersEnabled,
                 onToggle: { meterStore.levelMetersEnabled = $0 }
             )
-            .disabled(!meterStore.metersEnabled)
             LevelMetersView(meterStore: meterStore)
                 .padding(20)
         }
