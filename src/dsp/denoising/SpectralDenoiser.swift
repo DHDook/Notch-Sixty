@@ -98,7 +98,13 @@ final class SpectralDenoiser: @unchecked Sendable {
     private var hannWindow: [Float]  // length N
 
     // MARK: - Buffers (all pre-allocated at init — no allocations in process())
-    nonisolated(unsafe) private var prevHop:       [Float]  // length hopSize
+    // Rolling window of the most recent (fftSize - hopSize) samples of RAW
+    // input (never processed/windowed). Combined with the current hop's
+    // fresh input, this forms a full N-sample analysis frame each time —
+    // needed for any overlap ratio, not just 50%. At 50% overlap this
+    // equals exactly one hop (previous behavior); at 75% overlap it's
+    // three hops.
+    nonisolated(unsafe) private var history: [Float]  // length fftSize - hopSize
     nonisolated(unsafe) private var inputAccum:    [Float]  // length hopSize
     nonisolated(unsafe) private var accumPos:      Int = 0
     nonisolated(unsafe) private var outputOverlap: [Float]  // length N
@@ -262,7 +268,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         }
         maskingBias = bias
 
-        prevHop       = [Float](repeating: 0, count: hop)
+        history       = [Float](repeating: 0, count: N - hop)
         inputAccum    = [Float](repeating: 0, count: hop)
         outputOverlap = [Float](repeating: 0, count: N)
         workReal      = [Float](repeating: 0, count: N)
@@ -476,7 +482,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         // Reallocate all buffers.
         // Ring buffer must be large enough for the worst-case HAL callback size.
         let ringCapacity = max(N * 2, Int(AudioConstants.maxFrameCount) * 2)
-        prevHop       = [Float](repeating: 0, count: hop)
+        history       = [Float](repeating: 0, count: N - hop)
         inputAccum    = [Float](repeating: 0, count: hop)
         outputOverlap = [Float](repeating: 0, count: N)
         workReal      = [Float](repeating: 0, count: N)
@@ -540,7 +546,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         let hop = hopSize
         workReal.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
         workImag.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
-        prevHop.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(hop)) }
+        history.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N - hop)) }
         inputAccum.withUnsafeMutableBufferPointer    { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(hop)) }
         outputOverlap.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
         outRing.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(outRing.count)) }
@@ -599,18 +605,33 @@ final class SpectralDenoiser: @unchecked Sendable {
 
             if accumPos == hop {
 
-                // Form the full N-point analysis frame [prevHop | currentHop]
-                // and apply the N-point Hann window.
-                for i in 0..<hop { workReal[i]       = prevHop[i]    * hannWindow[i] }
-                for i in 0..<hop { workReal[hop + i] = inputAccum[i] * hannWindow[hop + i] }
+                // Form the full N-point analysis frame [history | currentHop]
+                // and apply the N-point Hann window. history holds exactly
+                // (N - hop) samples, so this always fills the whole N-length
+                // buffer with real input regardless of overlap ratio.
+                let histLen = N - hop
+                for i in 0..<histLen { workReal[i]          = history[i]    * hannWindow[i] }
+                for i in 0..<hop     { workReal[histLen + i] = inputAccum[i] * hannWindow[histLen + i] }
 
                 // FIX 3: Zero workImag with vDSP_vclr — no Array allocation.
                 workImag.withUnsafeMutableBufferPointer {
                     vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N))
                 }
 
-                // Save current hop for next frame.
-                for i in 0..<hop { prevHop[i]    = inputAccum[i] }
+                // Slide history forward by one hop: drop the oldest hop
+                // samples, append this frame's raw input as the newest hop.
+                // At 50% overlap (histLen == hop) this is a straight
+                // replace, identical to the previous prevHop behavior; at
+                // 75% overlap it's a partial shift + append.
+                if histLen > hop {
+                    history.withUnsafeMutableBufferPointer { buf in
+                        let base = buf.baseAddress!
+                        memmove(base, base + hop, MemoryLayout<Float>.stride * (histLen - hop))
+                    }
+                    for i in 0..<hop { history[histLen - hop + i] = inputAccum[i] }
+                } else {
+                    for i in 0..<hop { history[i] = inputAccum[i] }
+                }
                 for i in 0..<hop { inputAccum[i] = 0 }
                 accumPos = 0
 
