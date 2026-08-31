@@ -1553,8 +1553,14 @@ enum DenoiserPreset: String, Codable, Equatable, Sendable, CaseIterable {
             return DenoiserPresetValues(noiseFloorDB: -48.0, wienerFloor: 0.002, reductionAmount: 0.5,
                                          mode: .high, freqRangeEnabled: false, protectLowHz: 0, protectHighHz: 0)
         case .dehiss:
+            // Protected band is [0, 150] Hz — i.e. protect the bass/rumble
+            // end, process everything from 150 Hz up (where hiss actually
+            // lives). Previous values (150, 20000) had this backwards:
+            // they protected the band FROM 150 Hz TO 20 kHz, which covers
+            // almost the entire spectrum including the hiss itself, and
+            // left only the sub-150Hz sliver processed.
             return DenoiserPresetValues(noiseFloorDB: -58.0, wienerFloor: 0.004, reductionAmount: 0.4,
-                                         mode: .high, freqRangeEnabled: true, protectLowHz: 150, protectHighHz: 20000)
+                                         mode: .high, freqRangeEnabled: true, protectLowHz: 0, protectHighHz: 150)
         case .custom:
             return nil
         }

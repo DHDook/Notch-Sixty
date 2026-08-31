@@ -473,14 +473,17 @@ struct DynamicsInlineView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     Text(store.dynamicsConfig.advanced.denoiserFreqRangeEnabled
-                         ? "Protecting \(Int(store.dynamicsConfig.advanced.denoiserProtectLowHz))–\(Int(store.dynamicsConfig.advanced.denoiserProtectHighHz)) Hz"
+                         ? "Skipping \(Int(store.dynamicsConfig.advanced.denoiserProtectLowHz))–\(Int(store.dynamicsConfig.advanced.denoiserProtectHighHz)) Hz"
                          : "Full spectrum")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 if store.dynamicsConfig.advanced.denoiserFreqRangeEnabled {
+                    Text("Denoising is skipped between these two frequencies; everything outside this range is processed normally.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     DynamicsSliderRow(
-                        label: "Protect Below",
+                        label: "Skip From",
                         value: Binding(
                             get: { Double(store.dynamicsConfig.advanced.denoiserProtectLowHz) },
                             set: { v in
@@ -490,12 +493,12 @@ struct DynamicsInlineView: View {
                                 store.updateAdvancedProcessing(adv)
                             }
                         ),
-                        range: 0.0...2000.0,
+                        range: 0.0...20000.0,
                         step: 10.0,
                         formatValue: { String(format: "%.0f Hz", $0) }
                     )
                     DynamicsSliderRow(
-                        label: "Protect Above",
+                        label: "Skip To",
                         value: Binding(
                             get: { Double(store.dynamicsConfig.advanced.denoiserProtectHighHz) },
                             set: { v in
