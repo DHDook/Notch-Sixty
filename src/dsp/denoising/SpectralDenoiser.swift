@@ -73,6 +73,23 @@ final class SpectralDenoiser: @unchecked Sendable {
     // used by all three DenoiserMode settings; not exposed to the user.
     private static let decisionDirectedAlpha: Float = 0.98
 
+    // Onset/transient detector for adaptive decision-directed alpha. The
+    // decision-directed estimator above is known to lag on sudden level
+    // increases — its "prior" term is built from the previous (quieter)
+    // frame's signal estimate, so for the first frame or two of any
+    // transient the gain is briefly under-estimated. This is heard as a
+    // short amplitude notch right at the attack (distortion), not smooth
+    // musical noise, and gets worse the bigger and more sudden the
+    // transient — independent of Reduction Amount, since it's an estimate
+    // lag, not a suppression-depth issue. Detecting a broadband energy
+    // jump and temporarily using a much faster-responding alpha for that
+    // frame fixes it without giving up musical-noise suppression the rest
+    // of the time.
+    private static let onsetRatioFloorDB: Float = 3.0   // jump below this: no onset adaptation
+    private static let onsetRatioCeilDB: Float = 9.0    // jump at/above this: full onset adaptation
+    private static let onsetAlpha: Float = 0.3          // ddAlpha used during a full onset
+    private static let onsetTrackingAlpha: Float = 0.9  // smoothing for the "recent average" energy follower
+
     // MARK: - FFT
     private var log2n:    vDSP_Length
     private var fftSetup: FFTSetup
@@ -113,6 +130,11 @@ final class SpectralDenoiser: @unchecked Sendable {
     // noiseFloorEst / prevGain / maskingBias: length halfN+1, index 0 = DC,
     // index halfN = Nyquist.
     nonisolated(unsafe) private var prevMagSq: [Float]  // length halfN + 1
+
+    // Slow-following broadband frame energy, used only to detect sudden
+    // onsets for the adaptive ddAlpha above. Not per-bin — a single scalar
+    // covering the whole frame.
+    private var smoothedFrameEnergy: Float = 1e-12
 
     // Per-bin instantaneous decision-directed target gain, before frequency
     // smoothing. Scratch buffer, fully overwritten every frame.
@@ -529,6 +551,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         for i in 0..<prevGain.count { prevGain[i] = 1.0 }
         // Reset previous magnitude² to epsilon.
         for i in 0..<prevMagSq.count { prevMagSq[i] = 1e-12 }
+        smoothedFrameEnergy = 1e-12
         // Reset noise estimator history.
         let initNoisePower: Float = 1e-12
         for f in 0..<historyLength {
@@ -676,7 +699,21 @@ final class SpectralDenoiser: @unchecked Sendable {
                         // suppresses musical noise — the temporal attack/release smoother below
                         // only smooths the already-computed gain, which is a weaker effect.
 
+                        // Broadband onset detection: total frame energy vs. a slow-following
+                        // recent average. energyRatioDB > 0 means this frame is louder than
+                        // recent history; the further above onsetRatioFloorDB it is, the more
+                        // ddAlpha shifts toward the fast-responding onsetAlpha for this frame.
+                        var frameEnergy: Float = (rp[0] * rp[0]) + (ip[0] * ip[0])
+                        for k in 1..<halfN {
+                            frameEnergy += rp[k] * rp[k] + ip[k] * ip[k]
+                        }
+                        let energyRatioDB = 10.0 * log10(max(frameEnergy, 1e-20) / max(smoothedFrameEnergy, 1e-20))
+                        let onsetStrength = ((energyRatioDB - Self.onsetRatioFloorDB)
+                                             / (Self.onsetRatioCeilDB - Self.onsetRatioFloorDB)).clamped(to: 0.0...1.0)
                         let ddAlpha = Self.decisionDirectedAlpha
+                                    - onsetStrength * (Self.decisionDirectedAlpha - Self.onsetAlpha)
+                        smoothedFrameEnergy = Self.onsetTrackingAlpha * smoothedFrameEnergy
+                                             + (1.0 - Self.onsetTrackingAlpha) * frameEnergy
 
                         @inline(__always)
                         func decisionDirectedTarget(magSq: Float, floorPow: Float,
