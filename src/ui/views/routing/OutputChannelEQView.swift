@@ -62,10 +62,9 @@ struct OutputChannelEQView: View {
 
             // From Task AB (Part 2): Detected Resonances panel, shown only
             // when transfer function measurement data exists for this channel.
-            // TODO: Uncomment when store.transferFunctionDataset exists
-            // if store.transferFunctionDataset.channel(at: channelIndex)?.isMeasured == true {
-            detectedResonancesPanel
-            // }
+            if store.transferFunctionDataset.channels.first(where: { $0.channelIndex == channelIndex })?.isMeasured == true {
+                detectedResonancesPanel
+            }
 
             // From Task F: sub output restriction note.
             if !capabilities.supportsAdvancedPhase {
@@ -110,11 +109,15 @@ struct OutputChannelEQView: View {
                 .font(.subheadline)
             HStack {
                 Text("Pre-ringing:")
-                Slider(value: $channel.eq.preRingingBlend, in: 0...1)
-                Text(String(format: "%.2f", channel.eq.preRingingBlend))
+                Slider(value: Binding(
+                    get: { 0.0 },  // Always return 0.0 (pure linear-phase)
+                    set: { _ in }  // Ignore writes
+                ), in: 0...1)
+                .disabled(true)  // Disable the slider
+                Text("0.00")
                     .frame(width: 40)
             }
-            Text("0.0 = pure linear-phase, 1.0 = pure minimum-phase")
+            Text("0.0 = pure linear-phase (minimum-phase blending not implemented)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

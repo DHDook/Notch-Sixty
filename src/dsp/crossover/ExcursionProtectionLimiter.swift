@@ -27,35 +27,66 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
 
     // MARK: - Audio Thread State
 
+    // Complementary LP/HP filter pairs for proper band splitting
+    // Structure: [LP0, HP0, LP1, HP1, LP2, HP2, LP3, HP3] for 4 crossover points
     private nonisolated(unsafe) var bandFilters: [BiquadFilter]
     private nonisolated(unsafe) var bandEnvelopes: [Float]
     private nonisolated(unsafe) var bandGains: [Float]
     private nonisolated(unsafe) var bandCeilings: [Float]
+
+    // Scratch buffers for per-band processing (one buffer per band)
+    private nonisolated(unsafe) var bandBuffers: [UnsafeMutablePointer<Float>]
+    private let maxFrameCount: Int
 
     private let sampleRate: Double
     private let bandCount = 4
 
     // MARK: - Initialization
 
-    init(config: ExcursionProtectionConfig, baseCeilingDB: Float, sampleRate: Double) {
+    init(config: ExcursionProtectionConfig, baseCeilingDB: Float, sampleRate: Double, maxFrameCount: Int = 4096) {
         self.sampleRate = sampleRate
+        self.maxFrameCount = maxFrameCount
 
-        // Initialize band filters (crossover frequencies at Fs/4, Fs, 3×Fs)
+        // Initialize complementary LP/HP filter pairs (Linkwitz-Riley 4th-order at each crossover point)
+        // Crossover frequencies at Fs/4, Fs, 3×Fs, protectionCutoffHz
         let fs = Double(config.driverFsHz)
         let crossoverFrequencies: [Double] = [fs / 4.0, fs, fs * 3.0, Double(config.protectionCutoffHz)]
 
-        bandFilters = crossoverFrequencies.map { freq in
-            let filter = BiquadFilter()
-            let coeffs = BiquadMath.calculateCoefficients(
+        // Create LP/HP pairs - LR4 uses two cascaded 2nd-order Butterworth sections per side
+        bandFilters = []
+        for freq in crossoverFrequencies {
+            // Low-pass filter (2 cascaded sections for LR4)
+            let lpFilter = BiquadFilter()
+            let lpCoeffs = BiquadMath.calculateSections(
                 type: .lowPass,
                 sampleRate: sampleRate,
                 frequency: freq,
-                q: 0.707,
-                gain: 0.0
+                q: 0.7071067811865476,  // Butterworth Q
+                gain: 0.0,
+                slope: .db24  // 24 dB/oct = 4th order = LR4
             )
-            filter.stageCoefficients([coeffs], resetState: true)
-            filter.applyPendingSetup()
-            return filter
+            lpFilter.stageCoefficients(lpCoeffs, resetState: true)
+            lpFilter.applyPendingSetup()
+            bandFilters.append(lpFilter)
+
+            // High-pass filter (2 cascaded sections for LR4)
+            let hpFilter = BiquadFilter()
+            let hpCoeffs = BiquadMath.calculateSections(
+                type: .highPass,
+                sampleRate: sampleRate,
+                frequency: freq,
+                q: 0.7071067811865476,  // Butterworth Q
+                gain: 0.0,
+                slope: .db24  // 24 dB/oct = 4th order = LR4
+            )
+            hpFilter.stageCoefficients(hpCoeffs, resetState: true)
+            hpFilter.applyPendingSetup()
+            bandFilters.append(hpFilter)
+        }
+
+        // Allocate scratch buffers for per-band processing
+        bandBuffers = crossoverFrequencies.map { _ in
+            UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
         }
 
         bandEnvelopes = Array(repeating: 0.0, count: bandCount)
@@ -70,6 +101,13 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
         _protectionCutoffBits.store(Int32(bitPattern: config.protectionCutoffHz.bitPattern), ordering: .relaxed)
 
         updateBandCeilings()
+    }
+
+    deinit {
+        // Free allocated scratch buffers
+        for buffer in bandBuffers {
+            buffer.deallocate()
+        }
     }
 
     // MARK: - Main Thread Configuration
@@ -90,16 +128,31 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
         let fs = Double(config.driverFsHz)
         let crossoverFrequencies: [Double] = [fs / 4.0, fs, fs * 3.0, Double(config.protectionCutoffHz)]
 
+        // Rebuild complementary LP/HP filter pairs
         for (i, freq) in crossoverFrequencies.enumerated() {
-            let coeffs = BiquadMath.calculateCoefficients(
+            // Low-pass filter (2 cascaded sections for LR4)
+            let lpCoeffs = BiquadMath.calculateSections(
                 type: .lowPass,
                 sampleRate: sampleRate,
                 frequency: freq,
-                q: 0.707,
-                gain: 0.0
+                q: 0.7071067811865476,  // Butterworth Q
+                gain: 0.0,
+                slope: .db24  // 24 dB/oct = 4th order = LR4
             )
-            bandFilters[i].stageCoefficients([coeffs], resetState: false)
-            bandFilters[i].applyPendingSetup()
+            bandFilters[i * 2].stageCoefficients(lpCoeffs, resetState: false)
+            bandFilters[i * 2].applyPendingSetup()
+
+            // High-pass filter (2 cascaded sections for LR4)
+            let hpCoeffs = BiquadMath.calculateSections(
+                type: .highPass,
+                sampleRate: sampleRate,
+                frequency: freq,
+                q: 0.7071067811865476,  // Butterworth Q
+                gain: 0.0,
+                slope: .db24  // 24 dB/oct = 4th order = LR4
+            )
+            bandFilters[i * 2 + 1].stageCoefficients(hpCoeffs, resetState: false)
+            bandFilters[i * 2 + 1].applyPendingSetup()
         }
 
         updateBandCeilings()
@@ -146,19 +199,57 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
     @inline(__always)
     func process(buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         guard _enabled.load(ordering: .relaxed) != 0 else { return }
+        guard frameCount <= maxFrameCount else { return }
 
         let attackAlpha: Float = 0.01  // Fast attack for excursion protection
         let releaseAlpha: Float = 0.1   // Moderate release
 
-        // Process each band
+        // Save original input (we need it for each band's filtering)
+        let inputBuffer = bandBuffers[0]  // Use first band buffer as temp storage
+        memcpy(inputBuffer, buffer, frameCount * MemoryLayout<Float>.size)
+
+        // Clear output buffer (will be reconstructed from band sums)
+        memset(buffer, 0, frameCount * MemoryLayout<Float>.size)
+
+        // Process each band with proper splitting and recombination
         for bandIdx in 0..<bandCount {
             var envelope = bandEnvelopes[bandIdx]
             var gain = bandGains[bandIdx]
             let ceiling = bandCeilings[bandIdx]
+            let bandBuffer = bandBuffers[bandIdx]
 
-            // Apply band filter and compute envelope
+            // Copy input to band buffer for filtering
+            memcpy(bandBuffer, inputBuffer, frameCount * MemoryLayout<Float>.size)
+
+            // Apply filter cascade to isolate this band
+            // Band structure (crossover frequencies at fs/4, fs, 3×fs, protectionCutoffHz):
+            // Band 0: 0 to crossover[0] (LP0 only)
+            // Band 1: crossover[0] to crossover[1] (HP0 then LP1)
+            // Band 2: crossover[1] to crossover[2] (HP1 then LP2)
+            // Band 3: crossover[2] to ∞ (HP2 only - no LP, since protectionCutoffHz is the upper limit)
+            switch bandIdx {
+            case 0:
+                // Band 0: Just LP0 (very low frequencies)
+                bandFilters[0].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+            case 1:
+                // Band 1: HP0 then LP1 (low-mid frequencies)
+                bandFilters[1].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+                bandFilters[2].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+            case 2:
+                // Band 2: HP1 then LP2 (mid frequencies)
+                bandFilters[3].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+                bandFilters[4].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+            case 3:
+                // Band 3: HP2 only (high frequencies above protectionCutoffHz)
+                // This band should have NO protection (gain = 1.0 always)
+                bandFilters[5].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+            default:
+                break
+            }
+
+            // Compute envelope and apply gain reduction to the isolated band
             for i in 0..<frameCount {
-                let sample = buffer[i]
+                let sample = bandBuffer[i]
 
                 // Simple envelope follower (peak detector)
                 let absSample = abs(sample)
@@ -183,9 +274,13 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
                     gain = gain * releaseAlpha + targetGain * (1.0 - releaseAlpha)
                 }
 
-                // Apply gain (simplified - in a real implementation, this would use
-                // actual multiband splitting and recombination)
-                buffer[i] = sample * gain
+                // Apply gain to this band's sample
+                bandBuffer[i] = sample * gain
+            }
+
+            // Sum this band's processed output into the main buffer
+            for i in 0..<frameCount {
+                buffer[i] += bandBuffer[i]
             }
 
             bandEnvelopes[bandIdx] = envelope

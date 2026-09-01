@@ -49,7 +49,17 @@ struct OutputChannelEQConfig: Codable, Sendable {
     var activeBandCount: Int = 10
     /// Band definitions. Always sized to EQConfiguration.maxBandCount (64).
     /// Bands beyond activeBandCount are inactive but stored.
+    /// In linked mode, this array is used for both channels.
+    /// In stereo/mid-side mode, leftBands/rightBands are used instead.
     var bands: [EQBandConfiguration] = EQConfiguration.defaultBands()
+
+    /// Left-channel band definitions for stereo/mid-side modes.
+    /// Ignored in linked mode (bands array is used for both channels).
+    var leftBands: [EQBandConfiguration] = EQConfiguration.defaultBands()
+
+    /// Right-channel band definitions for stereo/mid-side modes.
+    /// Ignored in linked mode (bands array is used for both channels).
+    var rightBands: [EQBandConfiguration] = EQConfiguration.defaultBands()
 
     // MARK: - Gain
     /// Pre-EQ input gain trim (dB). Range: –24…+24.
@@ -95,6 +105,7 @@ struct OutputChannelEQConfig: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case activeBandCount, bands
+        case leftBands, rightBands
         case inputGainDB, outputGainDB
         case channelMode, compareMode
         case preRingingBlend, isBypassed
@@ -104,6 +115,8 @@ struct OutputChannelEQConfig: Codable, Sendable {
     init(
         activeBandCount: Int = 10,
         bands: [EQBandConfiguration] = EQConfiguration.defaultBands(),
+        leftBands: [EQBandConfiguration] = EQConfiguration.defaultBands(),
+        rightBands: [EQBandConfiguration] = EQConfiguration.defaultBands(),
         inputGainDB: Float = 0.0,
         outputGainDB: Float = 0.0,
         channelMode: ChannelMode = .linked,
@@ -114,6 +127,8 @@ struct OutputChannelEQConfig: Codable, Sendable {
     ) {
         self.activeBandCount = activeBandCount
         self.bands = bands
+        self.leftBands = leftBands
+        self.rightBands = rightBands
         self.inputGainDB = inputGainDB
         self.outputGainDB = outputGainDB
         self.channelMode = channelMode
@@ -127,6 +142,8 @@ struct OutputChannelEQConfig: Codable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         activeBandCount = try c.decodeIfPresent(Int.self, forKey: .activeBandCount) ?? 10
         bands = try c.decodeIfPresent([EQBandConfiguration].self, forKey: .bands) ?? EQConfiguration.defaultBands()
+        leftBands = try c.decodeIfPresent([EQBandConfiguration].self, forKey: .leftBands) ?? bands
+        rightBands = try c.decodeIfPresent([EQBandConfiguration].self, forKey: .rightBands) ?? bands
         inputGainDB = try c.decodeIfPresent(Float.self, forKey: .inputGainDB) ?? 0.0
         outputGainDB = try c.decodeIfPresent(Float.self, forKey: .outputGainDB) ?? 0.0
         channelMode = try c.decodeIfPresent(ChannelMode.self, forKey: .channelMode) ?? .linked
@@ -140,6 +157,8 @@ struct OutputChannelEQConfig: Codable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(activeBandCount, forKey: .activeBandCount)
         try c.encode(bands, forKey: .bands)
+        try c.encode(leftBands, forKey: .leftBands)
+        try c.encode(rightBands, forKey: .rightBands)
         try c.encode(inputGainDB, forKey: .inputGainDB)
         try c.encode(outputGainDB, forKey: .outputGainDB)
         try c.encode(channelMode, forKey: .channelMode)

@@ -104,7 +104,12 @@ final class OutputChannelEQProcessor {
         _targetInputGainBits.store(Int32(bitPattern: inLinear.bitPattern), ordering: .releasing)
         _targetOutputGainBits.store(Int32(bitPattern: outLinear.bitPattern), ordering: .releasing)
 
-        // 5. Delta solo
+        // 5. Pre-ringing blend: clamp to 0.0 (not implemented)
+        // The LinearPhaseEQEngine.setPreRingingBlend method does not exist.
+        // This control is effectively disabled - always pure linear-phase.
+        _preRingingBlendBits.store(Int32(bitPattern: Float(0.0).bitPattern), ordering: .releasing)
+
+        // 6. Delta solo
         if capabilities.supportsDeltaMode {
             _deltaSoloEnabled.store(config.compareMode == .delta ? 1 : 0, ordering: .releasing)
         }
@@ -169,11 +174,8 @@ final class OutputChannelEQProcessor {
 
         // EQ chain dispatch — mirrors processEQ phase mode switch exactly
         if _linearPhaseEnabled.load(ordering: .relaxed) != 0 {
-            // TODO: Implement setPreRingingBlend in LinearPhaseEQEngine
-            // let blend = Float(bitPattern: UInt32(bitPattern: _preRingingBlendBits.load(ordering: .relaxed)))
-            // if blend > 0.001 {
-            //     linearPhaseEngine.setPreRingingBlend(blend)
-            // }
+            // Pre-ringing blend is not implemented (requires minimum-phase reconstruction DSP)
+            // The control is clamped to 0.0 (pure linear-phase) in applyEQConfig
             linearPhaseEngine.process(bufL: leftBuf, bufR: rightBuf, frameCount: Int(frameCount))
         } else if _mixedPhaseEnabled.load(ordering: .relaxed) != 0 {
             // IIR biquad
@@ -294,22 +296,103 @@ final class OutputChannelEQProcessor {
         // For linked mode: return config.bands for both channels.
         // For stereo/midSide: return left-specific or right-specific band configs.
         // Mirror the exact storage pattern from EQConfiguration.leftBands / rightBands.
-        // For now, use config.bands for all channels (linked mode only).
-        // TODO: Add leftBands/rightBands to OutputChannelEQConfig for stereo/MS support.
-        return config.bands
+        switch config.channelMode {
+        case .linked:
+            return config.bands
+        case .stereo, .midSide:
+            switch channel {
+            case .left:
+                return config.leftBands
+            case .right:
+                return config.rightBands
+            }
+        }
     }
 
     private func stageChainUpdate(chains: [EQChain], bands: [EQBandConfiguration], sampleRate: Double) {
-        // TODO: Implement band staging similar to EQCoefficientStager
-        // For now, this is a placeholder
+        // Mirror EQCoefficientStager.reapplyConfiguration() pattern
+        var sections: [[BiquadCoefficients]] = []
+        var bypassFlags: [Bool] = []
+        var needsDoublePrecision: [Bool] = []
+
+        // Process bands up to maxBandCount
+        for band in bands.prefix(EQConfiguration.maxBandCount) {
+            // Skip FIR and dynamic bands (they're handled by other layers/paths)
+            guard band.filterType != FilterType.fir && !band.isDynamic else {
+                sections.append([])
+                bypassFlags.append(band.bypass)
+                needsDoublePrecision.append(false)
+                continue
+            }
+
+            // Compute biquad sections for this band
+            let secs = BiquadMath.calculateSections(
+                type: band.filterType,
+                sampleRate: sampleRate,
+                frequency: Double(band.frequency),
+                q: Double(band.q),
+                gain: Double(band.gain),
+                slope: band.slope
+            )
+            sections.append(secs)
+            bypassFlags.append(band.bypass)
+
+            // Double precision rule: Q > 4.0 or frequency < 300 Hz
+            needsDoublePrecision.append(!band.bypass && (Double(band.q) > 4.0 || Double(band.frequency) < 300.0))
+        }
+
+        // Stage the update on the first chain (layer 0 = user EQ)
+        chains[0].stageFullUpdate(
+            sections: sections,
+            bypassFlags: bypassFlags,
+            activeBandCount: bands.count,
+            layerBypass: false,
+            needsDoublePrecision: needsDoublePrecision
+        )
     }
 
     private func refreshLinearPhaseIR(config: OutputChannelEQConfig, sampleRate: Double) {
-        // TODO: Implement linear phase IR refresh
+        // Call LinearPhaseEQEngine.updateIR with resolved left/right band arrays
+        let leftBands = bandConfigs(for: config, channel: .left)
+        let rightBands = bandConfigs(for: config, channel: .right)
+        linearPhaseEngine.updateIR(leftBands: leftBands, rightBands: rightBands, sampleRate: sampleRate)
     }
 
     private func refreshMixedPhaseIR(config: OutputChannelEQConfig, sampleRate: Double) {
-        // TODO: Implement mixed phase IR refresh
+        // Mirror EQCoefficientStager.refreshMixedPhaseIRIfNeeded()
+        let leftBands = bandConfigs(for: config, channel: .left)
+        let rightBands = bandConfigs(for: config, channel: .right)
+
+        // Build per-band section arrays (bypassed bands contribute no sections)
+        var leftSections: [[BiquadCoefficients]] = []
+        var rightSections: [[BiquadCoefficients]] = []
+
+        func addSections(for bands: [EQBandConfiguration], into target: inout [[BiquadCoefficients]]) {
+            for band in bands where !band.bypass && !band.isDynamic && band.filterType != .fir {
+                let secs = BiquadMath.calculateSections(
+                    type: band.filterType,
+                    sampleRate: sampleRate,
+                    frequency: Double(band.frequency),
+                    q: Double(band.q),
+                    gain: Double(band.gain),
+                    slope: band.slope
+                )
+                target.append(secs)
+            }
+        }
+
+        addSections(for: leftBands, into: &leftSections)
+
+        // In linked mode, right = left; in stereo, compute independently
+        if config.channelMode == .linked {
+            rightSections = leftSections
+        } else {
+            addSections(for: rightBands, into: &rightSections)
+        }
+
+        // Stage sections onto all-pass chains
+        _ = leftAllPassChain.stageSections(from: leftSections, sampleRate: sampleRate)
+        _ = rightAllPassChain.stageSections(from: rightSections, sampleRate: sampleRate)
     }
 
     private func setLinearPhaseEnabled(_ enabled: Bool) {
