@@ -842,7 +842,7 @@ struct RoomCalibrationTab: View {
                                 Text("Schroeder frequency: \(Int(schroederFrequency)) Hz")
                                     .font(.caption)
                                 Slider(value: $schroederFrequency, in: 100...1000, step: 10)
-                                    .onChange(of: schroederFrequency) { _ in
+                                    .onChange(of: schroederFrequency) {
                                         loadDualCalibration()
                                     }
                                 Text("ⓘ The Schroeder frequency is where your room transitions from reverberant to direct-sound dominated. Typical range: 200–500 Hz. Leave at 300 Hz if unsure.")
