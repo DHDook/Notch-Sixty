@@ -5,6 +5,7 @@
 // Insertion points are marked with // TASK <letter>: comments.
 
 import SwiftUI
+import CoreAudio
 
 struct OutputChannelMatrixView: View {
     @ObservedObject var store: EqualiserStore
@@ -20,6 +21,8 @@ struct OutputChannelMatrixView: View {
     @State private var micCalibration: Double = 0.0
     @State private var calibrationWarnings: [BandLevelCalibrationEngine.CalibrationWarning] = []
     @State private var measuredLevels: [Int: Double] = [:]
+    @State private var availableMics: [(id: AudioDeviceID, name: String)] = []
+    @State private var selectedMicID: AudioDeviceID?
 
     // Preset state
     @State private var showSavePresetSheet = false
@@ -517,6 +520,17 @@ struct OutputChannelMatrixView: View {
                     .foregroundStyle(.secondary)
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("Input Microphone")
+                    Picker("Input Microphone", selection: $selectedMicID) {
+                        Text("Select microphone...").tag(nil as AudioDeviceID?)
+                        ForEach(availableMics, id: \.id) { device in
+                            Text(device.name).tag(device.id as AudioDeviceID?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(isCalibrating)
+                }
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Target SPL (dB)")
                     TextField("Target SPL", value: $targetSPL, format: .number)
                         .textFieldStyle(.roundedBorder)
@@ -533,7 +547,7 @@ struct OutputChannelMatrixView: View {
                         startCalibration()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isCalibrating)
+                    .disabled(isCalibrating || selectedMicID == nil)
                     Button("Stop") {
                         stopCalibration()
                     }
@@ -579,43 +593,30 @@ struct OutputChannelMatrixView: View {
                     }
                 }
             }
+            .onAppear {
+                availableMics = listInputDevices()
+            }
         }
     }
 
     private func startCalibration() {
-        isCalibrating = true
-        calibrationWarnings = []
-        measuredLevels = [:]
+        guard let micID = selectedMicID else { return }
 
-        // TODO: Integrate with BandLevelCalibrationEngine for full audio playback/capture
-        // Current implementation simulates measured levels
-        // Full integration requires:
-        // 1. Generate pink noise using BandLevelCalibrationEngine.generatePinkNoise
-        // 2. Play through each output channel via render pipeline
-        // 3. Capture audio from input device
-        // 4. Measure SPL using BandLevelCalibrationEngine.measureSPLFromAudio
-        // 5. Compute gain trims using BandLevelCalibrationEngine.computeGainTrims
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            // Simulate measured levels
-            measuredLevels = [0: -20.0, 1: -22.0, 2: -19.0, 3: -21.0]
+        Task {
+            isCalibrating = true
+            calibrationWarnings = []
+            measuredLevels = [:]
 
-            // Compute gain trims
-            let existingTrims = store.outputChannelMatrix.channels.enumerated().map { ($0.offset, $0.element.gainTrimDB) }
-            let (trims, warnings) = BandLevelCalibrationEngine.computeGainTrims(
-                measuredLevelsDB: measuredLevels,
-                existingTrimsDB: Dictionary(uniqueKeysWithValues: existingTrims)
+            let (levels, warnings) = await store.runBandLevelCalibration(
+                micInputDeviceID: micID,
+                durationSeconds: 5.0
             )
 
-            calibrationWarnings = warnings
-
-            // Apply computed trims
-            for (index, trim) in trims {
-                if index < store.outputChannelMatrix.channels.count {
-                    store.outputChannelMatrix.channels[index].gainTrimDB = trim
-                }
+            await MainActor.run {
+                measuredLevels = levels
+                calibrationWarnings = warnings
+                isCalibrating = false
             }
-
-            isCalibrating = false
         }
     }
 
@@ -636,6 +637,69 @@ struct OutputChannelMatrixView: View {
         case .trimClamped(_, let label, let requested, let applied):
             return "Trim clamped for \(label): requested \(String(format: "%.1f", requested)) dB, applied \(String(format: "%.1f", applied)) dB"
         }
+    }
+
+    // MARK: - Input Device Enumeration
+
+    private func listInputDevices() -> [(id: AudioDeviceID, name: String)] {
+        var devices: [(id: AudioDeviceID, name: String)] = []
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var deviceIDs: [AudioDeviceID] = []
+        var dataSize: UInt32 = 0
+
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize) == noErr else {
+            return devices
+        }
+
+        deviceIDs = Array(repeating: AudioDeviceID(), count: Int(dataSize) / MemoryLayout<AudioDeviceID>.size)
+
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize, &deviceIDs) == noErr else {
+            return devices
+        }
+
+        for deviceID in deviceIDs {
+            guard let nameStr = fetchStringProperty(id: deviceID, selector: kAudioObjectPropertyName),
+                  !nameStr.isEmpty else { continue }
+
+            var streamConfigAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioDevicePropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var bufferSize: UInt32 = 0
+            if AudioObjectGetPropertyDataSize(deviceID, &streamConfigAddress, 0, nil, &bufferSize) == noErr, bufferSize > 0 {
+                devices.append((id: deviceID, name: nameStr))
+            }
+        }
+
+        return devices
+    }
+
+    private func fetchStringProperty(id: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &propertyAddress, 0, nil, &dataSize) == noErr else {
+            return nil
+        }
+
+        let nameBuffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(dataSize))
+        defer { nameBuffer.deallocate() }
+
+        guard AudioObjectGetPropertyData(id, &propertyAddress, 0, nil, &dataSize, nameBuffer) == noErr else {
+            return nil
+        }
+
+        return String(cString: nameBuffer)
     }
 
     // MARK: - Preset Sheets

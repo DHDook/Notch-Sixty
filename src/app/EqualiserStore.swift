@@ -471,6 +471,127 @@ final class EqualiserStore: ObservableObject {
         tfMeasurementStep = .allChannelsComplete
     }
 
+    // MARK: - Band Level Calibration
+
+    /// Runs band level calibration for all enabled output channels.
+    ///
+    /// Plays pink noise through each channel in isolation, captures the response
+    /// from the microphone, measures the RMS level, and computes gain trims to
+    /// equalise all channels at the listening position.
+    ///
+    /// - Parameters:
+    ///   - micInputDeviceID: Physical microphone input device.
+    ///   - durationSeconds: Duration of pink noise burst per channel. Default 5.0 s.
+    /// - Returns: Dictionary mapping channel index → measured dBFS, and any warnings.
+    @MainActor
+    func runBandLevelCalibration(
+        micInputDeviceID: AudioDeviceID,
+        durationSeconds: Double = 5.0
+    ) async -> (measuredLevels: [Int: Double], warnings: [BandLevelCalibrationEngine.CalibrationWarning]) {
+        guard let pipeline = routingCoordinator.pipelineManager.renderPipeline else {
+            return ([:], [.measurementFailed(channelIndex: -1, channelLabel: "All")])
+        }
+
+        let sampleRate = pipeline.sampleRate
+        var measuredLevels: [Int: Double] = [:]
+        var warnings: [BandLevelCalibrationEngine.CalibrationWarning] = []
+
+        // Get enabled channels only
+        let enabledChannels = outputChannelMatrix.channels.indices.filter { outputChannelMatrix.channels[$0].isEnabled }
+        guard !enabledChannels.isEmpty else {
+            return ([:], [.measurementFailed(channelIndex: -1, channelLabel: "All")])
+        }
+
+        // Measure each channel in isolation
+        for channelIndex in enabledChannels {
+            try? Task.checkCancellation()
+
+            let label = "Channel \(channelIndex)"
+
+            // Solo this channel
+            let previousStates = soloOutputChannel(channelIndex)
+            try? await Task.sleep(nanoseconds: 250_000_000) // let solo state take effect
+
+            // Generate pink noise
+            let pinkNoise = BandLevelCalibrationEngine.generatePinkNoise(
+                durationSeconds: durationSeconds,
+                sampleRate: sampleRate
+            )
+
+            // Capture the response
+            guard let capturedSamples = await capturePinkNoisePlayback(
+                pinkNoise: pinkNoise,
+                micDeviceID: micInputDeviceID,
+                sampleRate: sampleRate
+            ) else {
+                restoreOutputChannelStates(previousStates)
+                warnings.append(.measurementFailed(channelIndex: channelIndex, channelLabel: label))
+                continue
+            }
+
+            // Measure RMS level
+            let levelDB = BandLevelCalibrationEngine.measureRMSLevel(
+                capturedSamples: capturedSamples,
+                sampleRate: sampleRate,
+                micCalibration: micCalibration
+            )
+
+            measuredLevels[channelIndex] = levelDB
+
+            // Restore channel states
+            restoreOutputChannelStates(previousStates)
+        }
+
+        // Compute gain trims
+        let existingTrims = outputChannelMatrix.channels.enumerated().map { ($0.offset, $0.element.gainTrimDB) }
+        let (trims, trimWarnings) = BandLevelCalibrationEngine.computeGainTrims(
+            measuredLevelsDB: measuredLevels,
+            existingTrimsDB: Dictionary(uniqueKeysWithValues: existingTrims)
+        )
+
+        warnings.append(contentsOf: trimWarnings)
+
+        // Apply computed trims
+        for (index, trim) in trims {
+            if index < outputChannelMatrix.channels.count {
+                outputChannelMatrix.channels[index].gainTrimDB = trim
+            }
+        }
+
+        // Re-stage configuration to apply trims
+        routingCoordinator.reapplyConfiguration()
+
+        return (measuredLevels, warnings)
+    }
+
+    /// Plays pink noise and captures the response from the microphone.
+    @MainActor
+    private func capturePinkNoisePlayback(
+        pinkNoise: [Float],
+        micDeviceID: AudioDeviceID,
+        sampleRate: Double
+    ) async -> [Float]? {
+        guard let pipeline = routingCoordinator.pipelineManager.renderPipeline else { return nil }
+
+        var capturedSamples: [Float] = []
+        let session = MicCaptureSession(deviceID: micDeviceID, sampleRate: sampleRate, channelCount: 1)
+        session.start { audioBuffer in
+            guard let samples = audioBuffer[0] else { return }
+            capturedSamples.append(contentsOf: samples)
+        }
+
+        return await withCheckedContinuation { continuation in
+            pipeline.onSweepPlaybackComplete = {
+                session.stop()
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 500_000_000) // reverb tail
+                    continuation.resume(returning: capturedSamples)
+                }
+            }
+            pipeline.startSweepPlayback(signal: pinkNoise)
+        }
+    }
+
     // MARK: - Diaphragm Resonance Detection (Part 2 Task AB)
 
     /// Runs resonance detection on the measured transfer function for a given channel
