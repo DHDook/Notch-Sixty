@@ -84,6 +84,28 @@ final class ActiveCrossoverEngine {
     nonisolated(unsafe) var upperHPConvolution: ConvolutionEngine?
     let hasFIRPendingUpdate = ManagedAtomic<Bool>(false)
 
+    // MARK: - Current FIR Kernels (for path alignment delay calculation)
+    // These track the currently active FIR IR for each crossover filter block.
+    // Updated whenever FIR crossover IR is (re)computed.
+    nonisolated(unsafe) var currentLowerLPFIRKernel: [Float]?
+    nonisolated(unsafe) var currentLowerHPFIRKernel: [Float]?
+    nonisolated(unsafe) var currentUpperLPFIRKernel: [Float]?
+    nonisolated(unsafe) var currentUpperHPFIRKernel: [Float]?
+
+    /// Sets FIR kernels for crossover filters and updates tracking properties.
+    /// Call this when FIR crossover IR is computed for each filter block.
+    func setFIRCrossoverKernels(
+        lowerLP: [Float]?,
+        lowerHP: [Float]?,
+        upperLP: [Float]?,
+        upperHP: [Float]?
+    ) {
+        currentLowerLPFIRKernel = lowerLP
+        currentLowerHPFIRKernel = lowerHP
+        currentUpperLPFIRKernel = upperLP
+        currentUpperHPFIRKernel = upperHP
+    }
+
     typealias SectionArray = [(b0: Float, b1: Float, b2: Float, na1: Float, na2: Float)]
 
     // MARK: - Constants

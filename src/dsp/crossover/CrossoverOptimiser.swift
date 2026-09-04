@@ -247,6 +247,102 @@ enum CrossoverOptimiser {
 
     // MARK: - Helper Functions
 
+    /// Converts a CrossoverPointConfig to a SectionArray for crossover filtering.
+    /// Uses BiquadMath sections (Butterworth or Linkwitz-Riley as appropriate).
+    private static func buildCrossoverSections(
+        point: CrossoverPointConfig,
+        isLowPass: Bool,
+        sampleRate: Double
+    ) -> ActiveCrossoverEngine.SectionArray {
+        let identity: (b0: Float, b1: Float, b2: Float, na1: Float, na2: Float) = (1, 0, 0, 0, 0)
+        let maxSections = ActiveCrossoverEngine.maxSections
+
+        let slope = isLowPass ? point.lpSlope : point.hpSlope
+        let freqHz = isLowPass ? Double(point.lpHz) : Double(point.hpHz)
+        let filterType: FilterType = isLowPass ? .lowPass : .highPass
+
+        // Only IIR (LR / Butterworth) types are handled here; FIR is managed via ConvolutionEngine
+        guard point.lpType != .firLinearPhase else {
+            return Array(repeating: identity, count: maxSections)
+        }
+
+        let biquadSections = BiquadMath.calculateSections(
+            type: filterType,
+            sampleRate: sampleRate,
+            frequency: min(freqHz, sampleRate * 0.499),
+            q: 0.7071067811865476,  // Butterworth Q — LR4 = two cascaded Butterworth sections
+            gain: 0.0,
+            slope: slope
+        )
+
+        // Convert BiquadCoefficients (Double) to the engine's Float tuple format
+        // BiquadCoefficients.a1/a2 are NOT pre-negated — must negate for DF2T recursion
+        var result = Array(repeating: identity, count: maxSections)
+        for (i, c) in biquadSections.prefix(maxSections).enumerated() {
+            result[i] = (b0: Float(c.b0),
+                         b1: Float(c.b1),
+                         b2: Float(c.b2),
+                         na1: Float(-c.a1),
+                         na2: Float(-c.a2))
+        }
+        return result
+    }
+
+    /// Applies crossover filter sections to a complex response using complex multiplication.
+    private static func applyCrossoverToResponse(
+        response: [(frequency: Double, real: Double, imag: Double)],
+        sections: ActiveCrossoverEngine.SectionArray,
+        frequencies: [Double],
+        sampleRate: Double
+    ) -> [(frequency: Double, real: Double, imag: Double)] {
+        var result: [(frequency: Double, real: Double, imag: Double)] = []
+
+        for (idx, f) in frequencies.enumerated() {
+            var real = response[idx].real
+            var imag = response[idx].imag
+
+            // Apply each biquad section
+            for section in sections {
+                // Skip identity sections
+                guard section.b0 != 1.0 || section.b1 != 0.0 || section.b2 != 0.0 ||
+                      section.na1 != 0.0 || section.na2 != 0.0 else { continue }
+
+                let omega = 2.0 * Double.pi * f / sampleRate
+                let cosW = cos(omega)
+                let cos2W = cos(2.0 * omega)
+                let sinW = sin(omega)
+                let sin2W = sin(2.0 * omega)
+
+                let b0 = Double(section.b0)
+                let b1 = Double(section.b1)
+                let b2 = Double(section.b2)
+                let a1 = -Double(section.na1)  // Convert back from negated form
+                let a2 = -Double(section.na2)
+
+                let numReal = b0 + b1 * cosW + b2 * cos2W
+                let numImag = b1 * sinW + b2 * sin2W
+                let denReal = 1.0 + a1 * cosW + a2 * cos2W
+                let denImag = a1 * sinW + a2 * sin2W
+
+                let denMag = denReal * denReal + denImag * denImag
+                guard denMag > 1e-30 else { continue }
+
+                let xoReal = (numReal * denReal + numImag * denImag) / denMag
+                let xoImag = (numImag * denReal - numReal * denImag) / denMag
+
+                // Complex multiplication
+                let newReal = real * xoReal - imag * xoImag
+                let newImag = real * xoImag + imag * xoReal
+                real = newReal
+                imag = newImag
+            }
+
+            result.append((frequency: f, real: real, imag: imag))
+        }
+
+        return result
+    }
+
     private static func generateLogFrequencies(
         low: Double,
         high: Double,
@@ -271,6 +367,12 @@ enum CrossoverOptimiser {
         frequencies: [Double],
         sampleRate: Double
     ) -> [(frequency: Double, gainDB: Double)] {
+        // Build crossover sections from config
+        let lowerLP = buildCrossoverSections(point: crossoverConfig.lowerPoint, isLowPass: true, sampleRate: sampleRate)
+        let lowerHP = buildCrossoverSections(point: crossoverConfig.lowerPoint, isLowPass: false, sampleRate: sampleRate)
+        let upperLP = buildCrossoverSections(point: crossoverConfig.upperPoint, isLowPass: true, sampleRate: sampleRate)
+        let upperHP = buildCrossoverSections(point: crossoverConfig.upperPoint, isLowPass: false, sampleRate: sampleRate)
+
         // Build channel responses from measurements
         var channelResponses: [AcousticSummationEngine.ChannelResponse] = []
 
@@ -280,11 +382,55 @@ enum CrossoverOptimiser {
             // Compute complex response from IR
             let complexResponse = computeComplexResponseFromIR(ir, frequencies: frequencies, sampleRate: sampleRate)
 
-            // Apply crossover filter (simplified - would use actual crossover sections in production)
-            // For now, pass through
-            let crossoverResponse = complexResponse
+            // Apply crossover filter based on signal source
+            let crossoverResponse: [(frequency: Double, real: Double, imag: Double)]
+            switch data.signalSource {
+            case .mainsLeftLow, .mainsRightLow:
+                // Low band: apply lower LP
+                crossoverResponse = applyCrossoverToResponse(
+                    response: complexResponse,
+                    sections: lowerLP,
+                    frequencies: frequencies,
+                    sampleRate: sampleRate
+                )
+            case .mainsLeftHigh, .mainsRightHigh:
+                // High band: apply lower HP (and upper HP if tri-amp)
+                let afterLowerHP = applyCrossoverToResponse(
+                    response: complexResponse,
+                    sections: lowerHP,
+                    frequencies: frequencies,
+                    sampleRate: sampleRate
+                )
+                if crossoverConfig.bandCount == .triAmp {
+                    crossoverResponse = applyCrossoverToResponse(
+                        response: afterLowerHP,
+                        sections: upperHP,
+                        frequencies: frequencies,
+                        sampleRate: sampleRate
+                    )
+                } else {
+                    crossoverResponse = afterLowerHP
+                }
+            case .mainsLeftMid, .mainsRightMid:
+                // Mid band (tri-amp only): apply lower HP, then upper LP
+                let afterLowerHP = applyCrossoverToResponse(
+                    response: complexResponse,
+                    sections: lowerHP,
+                    frequencies: frequencies,
+                    sampleRate: sampleRate
+                )
+                crossoverResponse = applyCrossoverToResponse(
+                    response: afterLowerHP,
+                    sections: upperLP,
+                    frequencies: frequencies,
+                    sampleRate: sampleRate
+                )
+            default:
+                // Main chain or other sources: no crossover
+                crossoverResponse = complexResponse
+            }
 
-            // Apply EQ (simplified)
+            // Apply EQ
             let eqConfig = eqConfigs[channelIndex]
             let eqResponse = applyEQToResponse(
                 response: crossoverResponse,
@@ -293,11 +439,16 @@ enum CrossoverOptimiser {
                 sampleRate: sampleRate
             )
 
+            // Get delay from measurements if available, otherwise 0
+            // Note: ChannelTransferFunctionData doesn't have delayMs, so we use 0 for now
+            // In a full implementation, this would come from the output channel matrix config
+            let delaySamples = 0.0
+
             let channelResponse = AcousticSummationEngine.ChannelResponse(
                 channelIndex: channelIndex,
                 channelLabel: data.channelLabel,
                 complexResponse: eqResponse,
-                delaySamples: 0.0  // Would use actual delay from config
+                delaySamples: delaySamples
             )
 
             channelResponses.append(channelResponse)
@@ -318,18 +469,26 @@ enum CrossoverOptimiser {
         frequencies: [Double],
         sampleRate: Double
     ) -> [(frequency: Double, real: Double, imag: Double)] {
-        // Simplified FFT-based complex response computation
+        // FFT-based complex response computation
         let N = ir.count
-        let half = N / 2 + 1
 
-        let log2n = vDSP_Length(log2(Double(N)).rounded())
+        // Pad to next power of two to avoid buffer overrun
+        let paddedSize = 1 << (Int(log2(Double(N - 1))) + 1)
+        let half = paddedSize / 2 + 1
+
+        let log2n = vDSP_Length(log2(Double(paddedSize)))
         guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
             return frequencies.map { (frequency: $0, real: 1.0, imag: 0.0) }
         }
         defer { vDSP_destroy_fftsetup(fftSetup) }
 
-        var realBuf = ir.map { Double($0) }
-        var imagBuf = [Double](repeating: 0, count: N)
+        var realBuf = [Double](repeating: 0, count: paddedSize)
+        var imagBuf = [Double](repeating: 0, count: paddedSize)
+
+        // Copy IR into padded buffer
+        for (i, sample) in ir.enumerated() {
+            realBuf[i] = Double(sample)
+        }
 
         realBuf.withUnsafeMutableBufferPointer { rp in
             imagBuf.withUnsafeMutableBufferPointer { ip in
@@ -340,7 +499,7 @@ enum CrossoverOptimiser {
 
         var result: [(frequency: Double, real: Double, imag: Double)] = []
         for f in frequencies {
-            let bin = Int(f * Double(N) / sampleRate)
+            let bin = Int(f * Double(paddedSize) / sampleRate)
             guard bin < half else {
                 result.append((frequency: f, real: 1.0, imag: 0.0))
                 continue

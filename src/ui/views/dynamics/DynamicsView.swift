@@ -1494,7 +1494,181 @@ struct DynamicsInlineView: View {
                     step: 1.0,
                     formatValue: { String(format: "%.0f samples", $0) }
                 )
-                // TODO: Expose lowBandLowShelfEnabled/FreqHz/GainDB, leftSpeakerDistanceM/rightSpeakerDistanceM/subwooferDistanceM, subEQBands
+
+                Toggle("Low-Band Shelf", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.bassManagement.lowBandLowShelfEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandLowShelfEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                if store.dynamicsConfig.advanced.bassManagement.lowBandLowShelfEnabled {
+                    DynamicsSliderRow(
+                        label: "Shelf Freq",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.bassManagement.lowBandLowShelfFreqHz) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandLowShelfFreqHz = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: 20.0...200.0,
+                        step: 1.0,
+                        formatValue: { String(format: "%.0f Hz", $0) }
+                    )
+                    DynamicsSliderRow(
+                        label: "Shelf Gain",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.bassManagement.lowBandLowShelfGainDB) },
+                            set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.lowBandLowShelfGainDB = Float(v); store.updateAdvancedProcessing(adv) }
+                        ),
+                        range: -6.0...6.0,
+                        step: 0.5,
+                        formatValue: { String(format: "%.1f dB", $0) }
+                    )
+                }
+
+                // Sub EQ Bands
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Sub EQ Bands")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    let bands = store.dynamicsConfig.advanced.bassManagement.subEQBands
+                    if bands.count > 0 {
+                        HStack(spacing: 8) {
+                            Text("Band 1")
+                                .font(.caption2)
+                                .frame(width: 50, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bands[0].frequency) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[0].frequency = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: 20.0...200.0
+                            )
+                            .frame(width: 100)
+                            Text("\(Int(bands[0].frequency)) Hz")
+                                .font(.caption2)
+                                .frame(width: 50)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bands[0].gain) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[0].gain = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: -12.0...12.0
+                            )
+                            .frame(width: 100)
+                            Text("\(String(format: "%.1f", bands[0].gain)) dB")
+                                .font(.caption2)
+                                .frame(width: 50)
+                        }
+                    }
+                    if bands.count > 1 {
+                        HStack(spacing: 8) {
+                            Text("Band 2")
+                                .font(.caption2)
+                                .frame(width: 50, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bands[1].frequency) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[1].frequency = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: 20.0...200.0
+                            )
+                            .frame(width: 100)
+                            Text("\(Int(bands[1].frequency)) Hz")
+                                .font(.caption2)
+                                .frame(width: 50)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bands[1].gain) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[1].gain = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: -12.0...12.0
+                            )
+                            .frame(width: 100)
+                            Text("\(String(format: "%.1f", bands[1].gain)) dB")
+                                .font(.caption2)
+                                .frame(width: 50)
+                        }
+                    }
+                    if bands.count > 2 {
+                        HStack(spacing: 8) {
+                            Text("Band 3")
+                                .font(.caption2)
+                                .frame(width: 50, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bands[2].frequency) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[2].frequency = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: 20.0...200.0
+                            )
+                            .frame(width: 100)
+                            Text("\(Int(bands[2].frequency)) Hz")
+                                .font(.caption2)
+                                .frame(width: 50)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bands[2].gain) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[2].gain = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: -12.0...12.0
+                            )
+                            .frame(width: 100)
+                            Text("\(String(format: "%.1f", bands[2].gain)) dB")
+                                .font(.caption2)
+                                .frame(width: 50)
+                        }
+                    }
+                }
+
+                // Speaker Distance-Based Delay
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Speaker Distances")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Delay Mode", selection: Binding(
+                        get: { store.dynamicsConfig.advanced.bassManagement.delayMode },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.delayMode = v; store.updateAdvancedProcessing(adv) }
+                    )) {
+                        Text("Manual (samples)").tag(BassManagementDelayMode.manual)
+                        Text("Auto (distances)").tag(BassManagementDelayMode.autoFromDistances)
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+
+                    if store.dynamicsConfig.advanced.bassManagement.delayMode == .autoFromDistances {
+                        DynamicsSliderRow(
+                            label: "Left Distance",
+                            value: Binding(
+                                get: { Double(store.dynamicsConfig.advanced.bassManagement.leftSpeakerDistanceM) },
+                                set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.leftSpeakerDistanceM = Float(v); store.updateAdvancedProcessing(adv) }
+                            ),
+                            range: 0.5...10.0,
+                            step: 0.1,
+                            formatValue: { String(format: "%.1f m", $0) }
+                        )
+                        DynamicsSliderRow(
+                            label: "Right Distance",
+                            value: Binding(
+                                get: { Double(store.dynamicsConfig.advanced.bassManagement.rightSpeakerDistanceM) },
+                                set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.rightSpeakerDistanceM = Float(v); store.updateAdvancedProcessing(adv) }
+                            ),
+                            range: 0.5...10.0,
+                            step: 0.1,
+                            formatValue: { String(format: "%.1f m", $0) }
+                        )
+                        DynamicsSliderRow(
+                            label: "Subwoofer Distance",
+                            value: Binding(
+                                get: { Double(store.dynamicsConfig.advanced.bassManagement.subwooferDistanceM) },
+                                set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subwooferDistanceM = Float(v); store.updateAdvancedProcessing(adv) }
+                            ),
+                            range: 0.5...10.0,
+                            step: 0.1,
+                            formatValue: { String(format: "%.1f m", $0) }
+                        )
+                    }
+                }
             }
             col2ToggleWithSettings(
                 label: "Gain Rider",

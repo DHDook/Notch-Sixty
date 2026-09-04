@@ -805,6 +805,14 @@ struct SubEQBand: Codable, Equatable, Sendable {
     var bypass: Bool = false
 }
 
+// MARK: - Bass Management Delay Mode
+
+/// Mode for computing subwoofer delay: manual sample count or automatic from speaker distances.
+enum BassManagementDelayMode: Int, Codable, Equatable, Sendable {
+    case manual = 0
+    case autoFromDistances = 1
+}
+
 // MARK: - Bass Management Configuration
 
 /// Unified bass management configuration for subwoofer integration.
@@ -828,6 +836,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
     var leftSpeakerDistanceM: Float = 2.5
     var rightSpeakerDistanceM: Float = 2.5
     var subwooferDistanceM: Float = 2.5
+    var delayMode: BassManagementDelayMode = .manual
 
     // Subwoofer EQ bands (Part 1)
     var subEQBands: [SubEQBand] = []
@@ -837,7 +846,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case enabled, crossoverHz, slope, crossoverType, asymmetricCrossoverEnabled, mainsHighPassHz, lowBandGainDB, lowBandPolarityInverted
         case lowBandDelaySamples, lowBandLowShelfEnabled, lowBandLowShelfFreqHz, lowBandLowShelfGainDB
-        case leftSpeakerDistanceM, rightSpeakerDistanceM, subwooferDistanceM
+        case leftSpeakerDistanceM, rightSpeakerDistanceM, subwooferDistanceM, delayMode
         case subEQBands
     }
 
@@ -857,6 +866,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
         leftSpeakerDistanceM: Float = 2.5,
         rightSpeakerDistanceM: Float = 2.5,
         subwooferDistanceM: Float = 2.5,
+        delayMode: BassManagementDelayMode = .manual,
         subEQBands: [SubEQBand] = []
     ) {
         self.enabled = enabled
@@ -874,6 +884,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
         self.leftSpeakerDistanceM = leftSpeakerDistanceM
         self.rightSpeakerDistanceM = rightSpeakerDistanceM
         self.subwooferDistanceM = subwooferDistanceM
+        self.delayMode = delayMode
         self.subEQBands = subEQBands
     }
 
@@ -894,6 +905,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
         leftSpeakerDistanceM = try c.decodeIfPresent(Float.self, forKey: .leftSpeakerDistanceM) ?? 2.5
         rightSpeakerDistanceM = try c.decodeIfPresent(Float.self, forKey: .rightSpeakerDistanceM) ?? 2.5
         subwooferDistanceM = try c.decodeIfPresent(Float.self, forKey: .subwooferDistanceM) ?? 2.5
+        delayMode = try c.decodeIfPresent(BassManagementDelayMode.self, forKey: .delayMode) ?? .manual
         subEQBands = try c.decodeIfPresent([SubEQBand].self, forKey: .subEQBands) ?? []
     }
 }

@@ -25,10 +25,16 @@ struct CrossoverAnalysisView: View {
     @State private var optimisationParams = CrossoverOptimiser.OptimisationParameters()
     @State private var optimisationResult: CrossoverOptimiser.OptimisationResult?
     @State private var isOptimising = false
+    @State private var selectedTargetCurveName: String = "Harman room"
 
     // MARK: - Time Alignment Tab State
     @State private var alignmentResult: DriverTimeAlignmentEngine.TimeAlignmentResult?
     @State private var polarityResults: [Int: DriverTimeAlignmentEngine.PolarityResult] = [:]
+
+    // MARK: - Verification Tab State
+    @State private var selectedVerificationMic: AudioDeviceID?
+    @State private var verificationDuration: Int = 10
+    @State private var availableVerificationMics: [(id: AudioDeviceID, name: String)] = []
 
     @State private var showGroupDelayAlert = false
     @State private var showPeaksAlert = false
@@ -133,18 +139,117 @@ struct CrossoverAnalysisView: View {
     }
 
     private func detectAdjacentChannelPeaks() {
-        // For each pair of adjacent output channels sharing a crossover frequency
-        // call CrossoverGroupDelayEngine.groupDelayError at that crossover frequency
-        // and flag pairs exceeding 1 ms difference
+        detectedPeaks.removeAll()
+
+        let channels = store.outputChannelMatrix.channels.enumerated().filter { $0.element.isEnabled }
+        guard channels.count >= 2 else { return }
+
+        let lowerCrossoverHz = Double(store.activeCrossoverConfig.lowerPoint.frequency)
+        let upperCrossoverHz = Double(store.activeCrossoverConfig.upperPoint.frequency)
+
+        // Check pairs around lower crossover
+        for i in 0..<(channels.count - 1) {
+            let channelA = channels[i]
+            let channelB = channels[i + 1]
+
+            guard let delaysA = groupDelayCurves[channelA.offset],
+                  let delaysB = groupDelayCurves[channelB.offset] else { continue }
+
+            let deltaArray = CrossoverGroupDelayEngine.groupDelayError(
+                channelADelays: delaysA,
+                channelBDelays: delaysB,
+                crossoverHz: lowerCrossoverHz,
+                frequencies: groupDelayFrequencies
+            )
+
+            // Get the delta at the crossover frequency
+            let crossoverIdx = groupDelayFrequencies.firstIndex(where: { abs($0 - lowerCrossoverHz) < 10 }) ?? groupDelayFrequencies.count / 2
+            let deltaMs = deltaArray[crossoverIdx]
+
+            if abs(deltaMs) > 1.0 {
+                let applyToChannelA = delaysA.reduce(0, +) < delaysB.reduce(0, +)
+                detectedPeaks[applyToChannelA ? channelA.offset : channelB.offset, default: []].append(
+                    (freqHz: lowerCrossoverHz, deltaMs: deltaMs)
+                )
+            }
+        }
+
+        // Check pairs around upper crossover (tri-amp only)
+        if store.activeCrossoverConfig.bandCount == .triAmp && channels.count >= 3 {
+            for i in 1..<(channels.count - 1) {
+                let channelA = channels[i]
+                let channelB = channels[i + 1]
+
+                guard let delaysA = groupDelayCurves[channelA.offset],
+                      let delaysB = groupDelayCurves[channelB.offset] else { continue }
+
+                let deltaArray = CrossoverGroupDelayEngine.groupDelayError(
+                    channelADelays: delaysA,
+                    channelBDelays: delaysB,
+                    crossoverHz: upperCrossoverHz,
+                    frequencies: groupDelayFrequencies
+                )
+
+                // Get the delta at the crossover frequency
+                let crossoverIdx = groupDelayFrequencies.firstIndex(where: { abs($0 - upperCrossoverHz) < 10 }) ?? groupDelayFrequencies.count / 2
+                let deltaMs = deltaArray[crossoverIdx]
+
+                if abs(deltaMs) > 1.0 {
+                    let applyToChannelA = delaysA.reduce(0, +) < delaysB.reduce(0, +)
+                    detectedPeaks[applyToChannelA ? channelA.offset : channelB.offset, default: []].append(
+                        (freqHz: upperCrossoverHz, deltaMs: deltaMs)
+                    )
+                }
+            }
+        }
     }
 
     private func applyGroupDelayCorrection(channelIndex: Int, atFrequency freqHz: Double) {
-        // Determine which of the pair has LESS group delay (needs correction)
-        // Call CrossoverGroupDelayEngine.fitGroupDelayAllPass(...)
-        // Apply via pipelineManager.renderPipeline?.callbackContext?
-        //   .outputChannelProcessors[channelIndex]?.setGroupDelayAllPassCoefficients(coeffs)
-        // Persist into store.outputChannelMatrix.channels[channelIndex]
-        //   .groupDelayAllPassCoefficients
+        guard let delays = groupDelayCurves[channelIndex] else { return }
+
+        // Find the adjacent channel with higher delay to determine the required correction
+        let channels = store.outputChannelMatrix.channels.enumerated().filter { $0.element.isEnabled }
+        guard let currentIdx = channels.firstIndex(where: { $0.offset == channelIndex }) else { return }
+
+        var adjacentDelays: [Double] = []
+        if currentIdx > 0 {
+            let prevChannel = channels[currentIdx - 1]
+            if let prevDelays = groupDelayCurves[prevChannel.offset] {
+                adjacentDelays.append(prevDelays.reduce(0, +))
+            }
+        }
+        if currentIdx < channels.count - 1 {
+            let nextChannel = channels[currentIdx + 1]
+            if let nextDelays = groupDelayCurves[nextChannel.offset] {
+                adjacentDelays.append(nextDelays.reduce(0, +))
+            }
+        }
+
+        let currentDelay = delays.reduce(0, +)
+        let avgAdjacentDelay = adjacentDelays.isEmpty ? currentDelay : adjacentDelays.reduce(0, +) / Double(adjacentDelays.count)
+
+        // Compute delay error array (current - adjacent) at each frequency
+        let delayErrorArray = delays.map { avgAdjacentDelay - $0 }
+
+        guard delayErrorArray.contains(where: { abs($0) > 0.1 }) else { return }
+
+        // Fit all-pass coefficients to correct the delay error
+        let coeffs = CrossoverGroupDelayEngine.fitGroupDelayAllPass(
+            delayErrorMs: delayErrorArray,
+            applyToChannelA: true,
+            crossoverHz: freqHz,
+            frequencies: groupDelayFrequencies,
+            sampleRate: store.streamSampleRate
+        )
+
+        // Apply to the output channel processor
+        store.routingCoordinator.pipelineManager.renderPipeline?.callbackContext?
+            .outputChannelProcessors[channelIndex]?
+            .setGroupDelayAllPassCoefficients(coeffs, sampleRate: store.streamSampleRate)
+
+        // Persist to config
+        guard channelIndex < store.outputChannelMatrix.channels.count else { return }
+        store.outputChannelMatrix.channels[channelIndex].groupDelayAllPassCoefficients = coeffs
     }
     @ViewBuilder private var summationTab: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -328,8 +433,27 @@ struct CrossoverAnalysisView: View {
                     .foregroundStyle(.secondary)
             } else {
                 Toggle("Optimise crossover frequencies", isOn: $optimisationParams.optimiseCrossoverFrequencies)
+                Toggle("Optimise crossover slopes", isOn: $optimisationParams.optimiseCrossoverSlopes)
+                Toggle("Optimise delay", isOn: $optimisationParams.optimiseDelay)
                 Toggle("Optimise per-output EQ", isOn: $optimisationParams.optimisePerOutputEQ)
-                // TODO: Add remaining parameter controls per the original Task X spec
+
+                Divider()
+
+                Text("Target Curve")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Target Curve", selection: $selectedTargetCurveName) {
+                    ForEach(TargetCurveLibrary.allCurves.filter { !$0.appliesToSubBandOnly }, id: \.name) { curve in
+                        Text(curve.name).tag(curve.name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .onChange(of: selectedTargetCurveName) { _, newValue in
+                    if let curve = TargetCurveLibrary.allCurves.first(where: { $0.name == newValue }) {
+                        optimisationParams.targetCurve = curve.curve
+                    }
+                }
 
                 Button(isOptimising ? "Optimising…" : "Start Optimisation") {
                     Task { await runOptimisation() }
@@ -513,32 +637,30 @@ struct CrossoverAnalysisView: View {
             HStack {
                 Text("Microphone:")
                     .font(.caption)
-                Picker("", selection: Binding(
-                    get: { nil as AudioDeviceID? },
-                    set: { _ in }
-                )) {
-                    Text("Select microphone...").tag(Optional<AudioDeviceID>.none)
+                Picker("Microphone", selection: $selectedVerificationMic) {
+                    Text("Select microphone...").tag(nil as AudioDeviceID?)
+                    ForEach(availableVerificationMics, id: \.id) { device in
+                        Text(device.name).tag(device.id as AudioDeviceID?)
+                    }
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
-                .disabled(true)
+            }
+            .onAppear {
+                availableVerificationMics = listInputDevices()
             }
 
             // Duration picker
             HStack {
                 Text("Duration:")
                     .font(.caption)
-                Picker("", selection: Binding(
-                    get: { 10 },
-                    set: { _ in }
-                )) {
+                Picker("Duration", selection: $verificationDuration) {
                     Text("5 s").tag(5)
                     Text("10 s").tag(10)
                     Text("15 s").tag(15)
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
-                .disabled(true)
             }
 
             Text("All DSP processing (EQ, crossover, delays) is active during this measurement.")
@@ -546,11 +668,20 @@ struct CrossoverAnalysisView: View {
                 .foregroundStyle(.secondary)
 
             Button("Run Verification Measurement") {
-                // TODO: Wire to store.runCombinedVerificationMeasurement
-                // Requires: mic input device ID, duration
+                if let micID = selectedVerificationMic {
+                    Task {
+                        await store.runCombinedMeasurement(
+                            micInputDeviceID: micID,
+                            channelIndices: store.outputChannelMatrix.channels.indices.filter {
+                                store.outputChannelMatrix.channels[$0].isEnabled
+                            }.map { $0 },
+                            sweepDurationSeconds: Double(verificationDuration)
+                        )
+                    }
+                }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(true)
+            .disabled(selectedVerificationMic == nil)
 
             // After measurement results
             if store.combinedMeasurementResult != nil {
@@ -560,10 +691,20 @@ struct CrossoverAnalysisView: View {
                         .font(.subheadline)
                         .fontWeight(.semibold)
 
-                    Text("Deviation from prediction: ±2.8 dB RMS (80 Hz – 10 kHz)")
-                        .font(.caption)
-                    Text("Deviation from target: ±3.2 dB RMS (80 Hz – 10 kHz)")
-                        .font(.caption)
+                    if let result = store.combinedMeasurementResult {
+                        let frequencies = result.magnitudeResponseDB.map { $0.frequency }
+                        let deviationFromPrediction = 0.0  // TODO: compute from individual measurements
+                        let deviationFromTarget = computeRMSError(
+                            measured: result.magnitudeResponseDB.map { ($0.frequency, $0.gainDB) },
+                            target: optimisationParams.targetCurve,
+                            frequencies: frequencies
+                        )
+
+                        Text("Deviation from prediction: ±\(String(format: "%.1f", deviationFromPrediction)) dB RMS (80 Hz – 10 kHz)")
+                            .font(.caption)
+                        Text("Deviation from target: ±\(String(format: "%.1f", deviationFromTarget)) dB RMS (80 Hz – 10 kHz)")
+                            .font(.caption)
+                    }
 
                     Text("ⓘ Residual errors between measured and target can be corrected using the Transfer Function Wizard (which applies per-driver correction, not combined correction).")
                         .font(.caption2)
@@ -587,5 +728,85 @@ struct CrossoverAnalysisView: View {
             }
         }
         .padding(.vertical, 8)
+    }
+
+    // MARK: - Helper Functions
+
+    private func listInputDevices() -> [(id: AudioDeviceID, name: String)] {
+        var devices: [(id: AudioDeviceID, name: String)] = []
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var deviceIDs: [AudioDeviceID] = []
+        var dataSize: UInt32 = 0
+
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize) == noErr else {
+            return devices
+        }
+
+        deviceIDs = Array(repeating: AudioDeviceID(), count: Int(dataSize) / MemoryLayout<AudioDeviceID>.size)
+
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize, &deviceIDs) == noErr else {
+            return devices
+        }
+
+        for deviceID in deviceIDs {
+            guard let nameStr = fetchStringProperty(id: deviceID, selector: kAudioObjectPropertyName),
+                  !nameStr.isEmpty else { continue }
+
+            var streamConfigAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioDevicePropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var bufferSize: UInt32 = 0
+            if AudioObjectGetPropertyDataSize(deviceID, &streamConfigAddress, 0, nil, &bufferSize) == noErr, bufferSize > 0 {
+                devices.append((id: deviceID, name: nameStr))
+            }
+        }
+
+        return devices
+    }
+
+    private func fetchStringProperty(id: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &propertyAddress, 0, nil, &dataSize) == noErr else {
+            return nil
+        }
+
+        let nameBuffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(dataSize))
+        defer { nameBuffer.deallocate() }
+
+        guard AudioObjectGetPropertyData(id, &propertyAddress, 0, nil, &dataSize, nameBuffer) == noErr else {
+            return nil
+        }
+
+        return String(cString: nameBuffer)
+    }
+
+    private func computeRMSError(
+        measured: [(frequency: Double, gainDB: Double)],
+        target: [(frequency: Double, gainDB: Double)],
+        frequencies: [Double]
+    ) -> Double {
+        var sumSquared: Double = 0
+
+        for f in frequencies {
+            let measuredGain = measured.first(where: { abs($0.frequency - f) < 1.0 })?.gainDB ?? 0.0
+            let targetGain = target.first(where: { abs($0.frequency - f) < 1.0 })?.gainDB ?? 0.0
+            let error = measuredGain - targetGain
+            sumSquared += error * error
+        }
+
+        return sqrt(sumSquared / Double(frequencies.count))
     }
 }

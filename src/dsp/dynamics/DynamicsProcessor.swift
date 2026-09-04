@@ -2039,7 +2039,19 @@ final class DynamicsProcessor: @unchecked Sendable {
         setLowBandLowShelfEnabled(adv.bassManagement.lowBandLowShelfEnabled)
         setLowBandLowShelfFreqHz(adv.bassManagement.lowBandLowShelfFreqHz)
         setLowBandLowShelfGainDB(adv.bassManagement.lowBandLowShelfGainDB)
-        setLowBandDelaySamples(adv.bassManagement.lowBandDelaySamples)
+
+        // Compute delay from speaker distances if in auto mode
+        if adv.bassManagement.delayMode == .autoFromDistances {
+            let speedOfSound: Float = 343.0  // m/s at room temperature
+            let avgMainsDistance = (adv.bassManagement.leftSpeakerDistanceM + adv.bassManagement.rightSpeakerDistanceM) / 2.0
+            let distanceDifference = adv.bassManagement.subwooferDistanceM - avgMainsDistance
+            let delaySeconds = distanceDifference / speedOfSound
+            let delaySamples = delaySeconds * Float(sampleRate)
+            setLowBandDelaySamples(delaySamples)
+        } else {
+            setLowBandDelaySamples(adv.bassManagement.lowBandDelaySamples)
+        }
+
         // Sub EQ bands — only recompute when bands or sample rate actually changed.
         if adv.bassManagement.subEQBands != previousSubEQBands || storedSampleRate != previousSubEQSampleRate {
             setSubEQBands(adv.bassManagement.subEQBands, sampleRate: sampleRate)
@@ -4444,7 +4456,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         let threshold    = bitsToFloat(_softClipperThreshold.load(ordering: .relaxed))
         let kneeSmooth   = bitsToFloat(_softClipperKnee.load(ordering: .relaxed))
         let curveType    = _softClipperCurveType.load(ordering: .relaxed)
-        let asymmetryTrim: Float = 0.0  // TODO: Add asymmetryTrim parameter to SoftClipperConfig when needed
+        let asymmetryTrim = bitsToFloat(_asymmetryTrimBits.load(ordering: .relaxed))
         let autoCompensate = _softClipperAutoCompensateEnabled.load(ordering: .relaxed) != 0
         let outputCompensation: Float = autoCompensate ? 1.0 / sqrt(driveLinear) : 1.0
 
