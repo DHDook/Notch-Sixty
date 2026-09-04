@@ -85,7 +85,7 @@ final class MeterStore: ObservableObject {
     
     // MARK: - Dependencies
     
-    private weak var renderPipeline: RenderPipeline?
+    private weak var renderPipeline: (any RenderPipelineProtocol)?
     private var visibleMeterWindowIDs: Set<String> = []
     
     // MARK: - Test Support
@@ -172,10 +172,12 @@ final class MeterStore: ObservableObject {
     
     // MARK: - Lifecycle
     
-    func setRenderPipeline(_ pipeline: RenderPipeline?) {
+    func setRenderPipeline(_ pipeline: (any RenderPipelineProtocol)?) {
         self.renderPipeline = pipeline
         // Propagate initial meters enabled state to the pipeline
-        pipeline?.setMetersEnabled(metersEnabled)
+        if let pipeline = pipeline as? RenderPipeline {
+            pipeline.setMetersEnabled(metersEnabled)
+        }
     }
     
     func meterWindowBecameVisible(id: String) {
@@ -202,7 +204,9 @@ final class MeterStore: ObservableObject {
             }
 
         // Enable audio thread meter calculations
-        renderPipeline?.setMetersEnabled(true)
+        if let pipeline = renderPipeline as? RenderPipeline {
+            pipeline.setMetersEnabled(true)
+        }
     }
 
     func stopMeterUpdates() {
@@ -212,7 +216,9 @@ final class MeterStore: ObservableObject {
         notifyAllObserversSilent()
 
         // Disable audio thread meter calculations
-        renderPipeline?.setMetersEnabled(false)
+        if let pipeline = renderPipeline as? RenderPipeline {
+            pipeline.setMetersEnabled(false)
+        }
     }
     
     // MARK: - Update Cycle
@@ -223,7 +229,7 @@ final class MeterStore: ObservableObject {
             return
         }
 
-        guard let pipeline = renderPipeline else { return }
+        guard let pipeline = renderPipeline as? RenderPipeline else { return }
 
         pipeline.decayEQPeakMeters()
 

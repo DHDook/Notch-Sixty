@@ -2831,7 +2831,7 @@ static OSStatus	BlackHole_GetDevicePropertyData(AudioServerPlugInDriverRef inDri
                     pthread_mutex_lock(&gPlugIn_StateMutex);
                     for (UInt32 i = 0, k = 0; k < theNumberItemsToFetch; i++)
                     {
-                        // TODO remove hack! There must be a better way than looking for a fixed i
+                        // Filter out pitch-adjust control when disabled
                         if ((kDevice_ObjectList[i].type == kObjectType_Control) && !(!gPitch_Adjust_Enabled && kDevice_ObjectList[i].id==kObjectID_Pitch_Adjust))
                         {
                             ((AudioObjectID*)outData)[k++] = kDevice_ObjectList[i].id;

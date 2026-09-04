@@ -101,9 +101,6 @@ final class OutputChannelMeteringTests: XCTestCase {
         XCTAssertTrue(isClipping, "Clipping flag should be set when pre-limiter exceeds threshold")
     }
 
-    // TODO: Fix MockRenderPipeline type mismatch - RenderPipeline is a concrete class, not a protocol
-    // This test is disabled until a proper mocking strategy can be implemented
-    /*
     func testMeterStorePublishesAllActiveChannels() {
         // 4 active channels → outputChannelLevels has 4 entries
         let store = MeterStore()
@@ -127,7 +124,6 @@ final class OutputChannelMeteringTests: XCTestCase {
 
         XCTAssertEqual(store.outputChannelLevels.count, 4, "MeterStore should publish all active channels")
     }
-    */
 
     // Helper methods no longer needed since we're using Float arrays instead of AudioBufferList
     // Kept for reference if future tests need AudioBufferList
@@ -166,6 +162,11 @@ final class OutputChannelMeteringTests: XCTestCase {
     */
 }
 
-protocol RenderPipelineProtocol {
-    func currentOutputChannelMeters() -> [Int: OutputChannelMeterData]
+// Mock implementation for testing
+class MockRenderPipeline: RenderPipelineProtocol {
+    var outputChannelMeters: [Int: OutputChannelMeterData] = [:]
+
+    func currentOutputChannelMeters() -> [Int: OutputChannelMeterData] {
+        return outputChannelMeters
+    }
 }

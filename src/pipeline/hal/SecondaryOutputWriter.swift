@@ -4,8 +4,9 @@
 // Architecture note (A1): multi-device output is implemented via independent
 // parallel AUHAL instances — one per target device that differs from the
 // primary output device. Clock drift is accepted because:
-//   • The aggregate-device path in RenderPipeline is still a stub (configureAggregateDevice
-//     is TODO), so we cannot rely on it yet.
+//   • The aggregate-device path in RenderPipeline delegates to configureSingleDevice
+//     (treating aggregate device IDs like any other HAL device), but this path
+//     has not been verified on real hardware with 2+ aggregatable devices.
 //   • For channel-offset writes within the *same* physical/aggregate device,
 //     no SecondaryOutputWriter is needed at all — processOutputChannelMatrix
 //     writes directly into the correct channel offset of the existing HAL output buffer.

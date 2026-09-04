@@ -4,6 +4,13 @@ import CoreAudio
 import os.log
 import Atomics
 
+// MARK: - RenderPipelineProtocol
+/// Protocol for render pipeline to enable mocking in tests
+@MainActor
+protocol RenderPipelineProtocol: AnyObject {
+    func currentOutputChannelMeters() -> [Int: OutputChannelMeterData]
+}
+
 struct LevelMeterSnapshot {
     let inputDB: [Float]
     let outputDB: [Float]
@@ -44,7 +51,7 @@ struct LevelMeterSnapshot {
 /// [Output HAL] → [Speakers]
 /// ```
 @MainActor
-final class RenderPipeline {
+final class RenderPipeline: RenderPipelineProtocol {
     // MARK: - Properties
 
     /// HAL manager for input (capture from BlackHole or other input device).
@@ -379,11 +386,6 @@ final class RenderPipeline {
             return .failure(error)
         }
         outputHALManager = outputManager
-
-        // TODO: Apply channel map via kAudioOutputUnitProperty_ChannelMap
-        // if !channelMap.isEmpty {
-        //     outputManager.setChannelMap(channelMap)
-        // }
 
         // Validate sample rates match between input and output
         if case .failure(let error) = validateFormats() {

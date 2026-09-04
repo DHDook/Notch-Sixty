@@ -1402,9 +1402,8 @@ final class EqualiserStore: ObservableObject {
     /// acoustic summation, and other crossover-related analyses.
     /// - Parameter source: The signal source to get coefficients for.
     /// - Returns: A tuple containing the crossover sections and FIR kernel (if any).
-    /// Note: Currently returns nil for all sources since ActiveCrossoverEngine
-    /// is not yet integrated into DynamicsProcessor. This is a placeholder for
-    /// when the crossover engine is integrated (see TODO in RenderCallbackContext.swift).
+    /// Note: Returns the currently active crossover sections from DynamicsProcessor's
+    /// ActiveCrossoverEngine. FIR kernels are tracked separately via setFIRCrossoverKernels.
     func activeCrossoverCoefficients(for source: SignalSource) -> (sections: ActiveCrossoverEngine.SectionArray?, firKernel: [Float]?) {
         guard let engine = routingCoordinator.pipelineManager.renderPipeline?
                 .callbackContext?.dynamicsProcessor.activeCrossoverEngine
@@ -1415,14 +1414,14 @@ final class EqualiserStore: ObservableObject {
         // or just Mid (tri-amp); the HP side of the upper crossover drives High (tri-amp).
         switch source {
         case .mainsLeftLow,  .mainsRightLow:
-            return (engine.activeLowerLP, nil)
+            return (engine.activeLowerLP, engine.currentLowerLPFIRKernel)
         case .mainsLeftMid,  .mainsRightMid:
-            return (engine.activeLowerHP, nil)
+            return (engine.activeLowerHP, engine.currentLowerHPFIRKernel)
         case .mainsLeftHigh, .mainsRightHigh:
             if engine.activeBandCount >= 3 {
-                return (engine.activeUpperHP, nil)
+                return (engine.activeUpperHP, engine.currentUpperHPFIRKernel)
             } else {
-                return (engine.activeLowerHP, nil)
+                return (engine.activeLowerHP, engine.currentLowerHPFIRKernel)
             }
         default:
             return (nil, nil)

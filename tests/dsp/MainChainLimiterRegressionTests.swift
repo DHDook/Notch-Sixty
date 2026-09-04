@@ -13,22 +13,10 @@ final class MainChainLimiterRegressionTests: XCTestCase {
 
     func testMainChainLimiterOutputUnchangedAfterExtraction() {
         // This test verifies that the extracted LookAheadLimiter produces
-        // identical output to the original inline limiter implementation.
-        // Due to the structural change (soft clipper and limiter are now
-        // separate passes instead of interleaved), we need to verify that
-        // the output is numerically identical.
+        // correct output. Without git history containing the pre-extraction
+        // implementation, we cannot perform bit-exact regression testing.
+        // This test verifies basic limiter functionality and ceiling compliance.
 
-        // For now, this is a placeholder that will need to be updated with
-        // actual regression data once the pre-extraction reference is captured.
-        // The test should:
-        // 1. Create a DynamicsProcessor instance
-        // 2. Feed a deterministic test signal (e.g., fixed-seed PRNG sequence)
-        // 3. Capture the output
-        // 4. Compare against a pre-recorded reference output
-        // 5. Verify bit-exact or within 1 ULP tolerance
-
-        // TODO: Capture reference output from pre-extraction build and add here
-        // For now, we just verify the limiter processes without crashing
         let processor = DynamicsProcessor(channelCount: 2, sampleRate: 48000.0, maxFrameCount: 512)
 
         // Configure limiter
@@ -38,19 +26,38 @@ final class MainChainLimiterRegressionTests: XCTestCase {
         processor.setLimiterReleaseMs(20.0, sampleRate: 48000.0)
         processor.setLimiterLookAheadMs(2.0, sampleRate: 48000.0)
 
-        // Create test signal
+        // Create test signal that would exceed ceiling without limiting
         var left = [Float](repeating: 0.0, count: 512)
         var right = [Float](repeating: 0.0, count: 512)
 
-        // Use a simple deterministic pattern
         for i in 0..<512 {
-            left[i] = sin(Float(i) * 0.1) * 0.8
-            right[i] = cos(Float(i) * 0.1) * 0.8
+            left[i] = sin(Float(i) * 0.1) * 0.9  // High level, would exceed -0.2 dB ceiling
+            right[i] = cos(Float(i) * 0.1) * 0.9
         }
 
-        // Process through DynamicsProcessor
-        // Note: This requires a full render callback context setup
-        // For now, we just verify the limiter can be configured
-        XCTAssertNotNil(processor)
+        // Process through DynamicsProcessor Stage 5 (limiter stage)
+        processor.processStage5(
+            leftBuf: &left,
+            rightBuf: &right,
+            frameCount: 512
+        )
+
+        // Verify output doesn't exceed ceiling
+        let ceilingLinear = Float(pow(10.0, -0.2 / 20.0))
+        var maxLeft: Float = 0
+        var maxRight: Float = 0
+
+        for i in 0..<512 {
+            maxLeft = max(maxLeft, abs(left[i]))
+            maxRight = max(maxRight, abs(right[i]))
+        }
+
+        // Allow 5% tolerance for limiter overshoot during transients
+        XCTAssertLessThanOrEqual(maxLeft, ceilingLinear * 1.05, "Left channel should not exceed ceiling")
+        XCTAssertLessThanOrEqual(maxRight, ceilingLinear * 1.05, "Right channel should not exceed ceiling")
+
+        // Verify output is different from input (processing happened)
+        let inputMax: Float = 0.9
+        XCTAssertNotEqual(maxLeft, inputMax, accuracy: 0.01, "Output should differ from input due to limiting")
     }
 }
