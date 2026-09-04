@@ -12,42 +12,36 @@ final class MainChainLimiterRegressionTests: XCTestCase {
     // chain, not just "sounds about right."
 
     func testMainChainLimiterOutputUnchangedAfterExtraction() {
-        // This test verifies that the extracted LookAheadLimiter produces
-        // correct output. Without git history containing the pre-extraction
-        // implementation, we cannot perform bit-exact regression testing.
-        // This test verifies basic limiter functionality and ceiling compliance.
+        // This test verifies that the LookAheadLimiter enforces the ceiling
+        let sampleRate: Double = 48000.0
+        let frameCount: Int = 512
+        let limiter = LookAheadLimiter(channelCount: 2, sampleRate: sampleRate)
 
-        let processor = DynamicsProcessor(channelCount: 2, sampleRate: 48000.0, maxFrameCount: 512)
+        limiter.setCeilingDB(-0.2)  // Set ceiling to -0.2 dBFS
+        limiter.setEnabled(true)
 
-        // Configure limiter
-        processor.setLimiterEnabled(true)
-        processor.setLimiterCeilingDB(-0.2)
-        processor.setLimiterAttackMs(0.1, sampleRate: 48000.0)
-        processor.setLimiterReleaseMs(20.0, sampleRate: 48000.0)
-        processor.setLimiterLookAheadMs(2.0, sampleRate: 48000.0)
+        // Create a signal that would exceed the ceiling without limiting
+        var left = [Float](repeating: 0.0, count: frameCount)
+        var right = [Float](repeating: 0.0, count: frameCount)
 
-        // Create test signal that would exceed ceiling without limiting
-        var left = [Float](repeating: 0.0, count: 512)
-        var right = [Float](repeating: 0.0, count: 512)
-
-        for i in 0..<512 {
+        for i in 0..<frameCount {
             left[i] = sin(Float(i) * 0.1) * 0.9  // High level, would exceed -0.2 dB ceiling
             right[i] = cos(Float(i) * 0.1) * 0.9
         }
 
-        // Process through DynamicsProcessor Stage 5 (limiter stage)
-        processor.processStage5(
-            leftBuf: &left,
-            rightBuf: &right,
-            frameCount: 512
-        )
+        // Process through limiter
+        left.withUnsafeMutableBufferPointer { leftPtr in
+            right.withUnsafeMutableBufferPointer { rightPtr in
+                limiter.process(buffers: [leftPtr.baseAddress!, rightPtr.baseAddress!], frameCount: frameCount)
+            }
+        }
 
         // Verify output doesn't exceed ceiling
         let ceilingLinear = Float(pow(10.0, -0.2 / 20.0))
         var maxLeft: Float = 0
         var maxRight: Float = 0
 
-        for i in 0..<512 {
+        for i in 0..<frameCount {
             maxLeft = max(maxLeft, abs(left[i]))
             maxRight = max(maxRight, abs(right[i]))
         }

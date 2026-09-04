@@ -166,33 +166,41 @@ final class OutputChannelProcessorTests: XCTestCase {
 
     func testGroupDelayAllPassAppliedBetweenTrimAndEQ() {
         // Group delay all-pass should be applied between calibration trim and EQ.
-        // Test by verifying the processor handles configuration without crashing.
+        // Test by comparing outputs from configs that differ only in all-pass coefficients.
         let processor = OutputChannelProcessor(source: .mainsLeft, maxFrameCount: 512, sampleRate: 48000)
 
-        var config = OutputChannelConfig.default
-        config.gainTrimDB = 6.0
-        // Add all-pass coefficients for phase correction
-        config.groupDelayAllPass = [
+        // Config 1: with all-pass coefficients
+        var configWithAllPass = OutputChannelConfig.default
+        configWithAllPass.groupDelayAllPassCoefficients = [
             BiquadCoefficients(b0: 1.0, b1: 0.5, b2: 0.25, a1: 0.1, a2: 0.05)
         ]
 
-        processor.applyChannelConfig(config, sampleRate: 48000)
+        // Config 2: without all-pass coefficients (empty array)
+        var configWithoutAllPass = OutputChannelConfig.default
+        configWithoutAllPass.groupDelayAllPassCoefficients = []
 
-        // Verify processing doesn't crash
         let input = [Float](repeating: 0.5, count: 512)
-        var output = input
-        output.withUnsafeMutableBufferPointer { ptr in
+
+        // Process with all-pass
+        processor.applyChannelConfig(configWithAllPass, sampleRate: 48000)
+        var outputWithAllPass = input
+        outputWithAllPass.withUnsafeMutableBufferPointer { ptr in
             processor.process(leftBuf: ptr.baseAddress!, rightBuf: nil, frameCount: 512)
         }
 
-        // Verify output is not identical to input (processing occurred)
-        var maxDifference: Float = 0
-        for i in 0..<512 {
-            maxDifference = max(maxDifference, abs(output[i] - input[i]))
+        // Process without all-pass
+        processor.applyChannelConfig(configWithoutAllPass, sampleRate: 48000)
+        var outputWithoutAllPass = input
+        outputWithoutAllPass.withUnsafeMutableBufferPointer { ptr in
+            processor.process(leftBuf: ptr.baseAddress!, rightBuf: nil, frameCount: 512)
         }
 
-        // The all-pass chain should modify the signal (even if magnitude is preserved,
-        // phase changes affect the time-domain representation)
+        // Verify outputs differ (all-pass processing modifies the signal)
+        var maxDifference: Float = 0
+        for i in 0..<512 {
+            maxDifference = max(maxDifference, abs(outputWithAllPass[i] - outputWithoutAllPass[i]))
+        }
+
         XCTAssertGreaterThan(maxDifference, 0.01, "All-pass processing should modify the signal")
     }
 

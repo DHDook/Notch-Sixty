@@ -85,7 +85,7 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
         }
 
         // Allocate scratch buffers for per-band processing
-        bandBuffers = crossoverFrequencies.map { _ in
+        bandBuffers = (0..<bandCount).map { _ in
             UnsafeMutablePointer<Float>.allocate(capacity: maxFrameCount)
         }
 

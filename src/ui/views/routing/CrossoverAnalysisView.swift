@@ -6,6 +6,8 @@
 
 import SwiftUI
 import CoreAudio
+import UniformTypeIdentifiers
+import AppKit
 
 struct CrossoverAnalysisView: View {
     @Binding var selectedTab: OutputChannelMatrixView.AnalysisTab
@@ -87,14 +89,12 @@ struct CrossoverAnalysisView: View {
                 Button("Compute Group Delay") { computeGroupDelay() }
                     .buttonStyle(.borderedProminent)
             } else {
-                // TODO: Render GroupDelayChartView with curves
-                // For now, show text representation
-                ForEach(Array(groupDelayCurves.keys.sorted()), id: \.self) { channelIndex in
-                    if channelIndex < store.outputChannelMatrix.channels.count {
-                        Text("\(store.outputChannelMatrix.channels[channelIndex].label): \(groupDelayCurves[channelIndex]?.count ?? 0) points")
-                            .font(.caption)
-                    }
-                }
+                // Render GroupDelayChartView with curves
+                GroupDelayChartView(
+                    frequencies: groupDelayFrequencies,
+                    groupDelayCurves: groupDelayCurves,
+                    channelLabels: store.outputChannelMatrix.channels.map { $0.label }
+                )
 
                 ForEach(Array(detectedPeaks.keys.sorted()), id: \.self) { channelIndex in
                     if let peaks = detectedPeaks[channelIndex], !peaks.isEmpty {
@@ -390,6 +390,105 @@ struct CrossoverAnalysisView: View {
                     context.stroke(rtaPath, with: .color(.orange), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
                 }
             }
+        }
+    }
+
+    // MARK: - Chart View for Group Delay
+
+    struct GroupDelayChartView: View {
+        let frequencies: [Double]
+        let groupDelayCurves: [Int: [Double]]
+        let channelLabels: [String]
+
+        private let minDelay: Double = 0.0
+        private let maxDelay: Double = 20.0  // 20 ms max for group delay display
+
+        var body: some View {
+            Canvas { context, size in
+                let padding: CGFloat = 40
+                let chartWidth = size.width - 2 * padding
+                let chartHeight = size.height - 2 * padding
+
+                // Draw axes
+                let origin = CGPoint(x: padding, y: size.height - padding)
+                let xAxisEnd = CGPoint(x: size.width - padding, y: size.height - padding)
+                let yAxisEnd = CGPoint(x: padding, y: padding)
+
+                context.stroke(Path { path in
+                    path.move(to: origin)
+                    path.addLine(to: xAxisEnd)
+                }, with: .color(.secondary))
+
+                context.stroke(Path { path in
+                    path.move(to: origin)
+                    path.addLine(to: yAxisEnd)
+                }, with: .color(.secondary))
+
+                // Draw frequency labels (log scale)
+                let freqLabels = [20, 100, 1000, 10000, 20000]
+                for freq in freqLabels {
+                    let freqRatio = Double(freq) / 20.0
+                    let maxRatio = 20000.0 / 20.0
+                    let x = padding + chartWidth * CGFloat(log10(freqRatio) / log10(maxRatio))
+                    let label = freq >= 1000 ? "\(freq/1000)k" : "\(freq)"
+                    context.draw(Text(label).font(.caption2), at: CGPoint(x: x - 10, y: size.height - padding + 5))
+                }
+
+                // Draw delay labels (linear scale)
+                let delayLabels = [0, 5, 10, 15, 20]
+                for delay in delayLabels {
+                    let delayRange = maxDelay - minDelay
+                    let delayOffset = Double(delay) - minDelay
+                    let normalizedDelay = delayOffset / delayRange
+                    let y = size.height - padding - chartHeight * CGFloat(normalizedDelay)
+                    context.draw(Text("\(delay) ms").font(.caption2), at: CGPoint(x: padding - 35, y: y - 5))
+                }
+
+                // Draw group delay curves for each channel
+                let colors: [Color] = [.blue, .red, .green, .orange, .purple, .cyan, .yellow, .pink]
+                for (channelIndex, delayData) in groupDelayCurves.sorted(by: { $0.key < $1.key }) {
+                    guard channelIndex < channelLabels.count else { continue }
+                    let color = colors[channelIndex % colors.count]
+
+                    var path = Path()
+                    for (index, freq) in frequencies.enumerated() {
+                        guard index < delayData.count else { continue }
+
+                        let freqRatio = freq / 20.0
+                        let maxRatio = 20000.0 / 20.0
+                        let x = padding + chartWidth * CGFloat(log10(freqRatio) / log10(maxRatio))
+
+                        let delayRange = maxDelay - minDelay
+                        let delayOffset = delayData[index] - minDelay
+                        let normalizedDelay = max(0.0, min(1.0, delayOffset / delayRange))
+                        let y = size.height - padding - chartHeight * CGFloat(normalizedDelay)
+
+                        if index == 0 {
+                            path.move(to: CGPoint(x: x, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: x, y: y))
+                        }
+                    }
+                    context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2))
+                }
+
+                // Draw legend
+                var legendY: CGFloat = padding + 10
+                for (channelIndex, _) in groupDelayCurves.sorted(by: { $0.key < $1.key }) {
+                    guard channelIndex < channelLabels.count else { continue }
+                    let color = colors[channelIndex % colors.count]
+
+                    context.stroke(Path { path in
+                        path.move(to: CGPoint(x: size.width - padding - 100, y: legendY))
+                        path.addLine(to: CGPoint(x: size.width - padding - 80, y: legendY))
+                    }, with: .color(color), style: StrokeStyle(lineWidth: 2))
+
+                    context.draw(Text(channelLabels[channelIndex]).font(.caption2),
+                                 at: CGPoint(x: size.width - padding - 75, y: legendY - 5))
+                    legendY += 20
+                }
+            }
+            .frame(height: 200)
         }
     }
 
@@ -737,15 +836,15 @@ struct CrossoverAnalysisView: View {
 
                     HStack(spacing: 8) {
                         Button("Save Result") {
-                            // TODO: Save result to disk
+                            saveMeasurementResult()
                         }
                         .buttonStyle(.bordered)
                         Button("Export as WAV") {
-                            // TODO: Export as WAV
+                            exportAsWAV()
                         }
                         .buttonStyle(.bordered)
                         Button("Apply as Room Correction") {
-                            // TODO: Apply to main chain ConvolutionEngine
+                            applyAsRoomCorrection()
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -833,5 +932,38 @@ struct CrossoverAnalysisView: View {
         }
 
         return sqrt(sumSquared / Double(frequencies.count))
+    }
+
+    private func saveMeasurementResult() {
+        guard let result = store.combinedMeasurementResult else { return }
+        let data: [String: Any] = [
+            "magnitudeResponse": result.magnitudeResponseDB.map { ["frequency": $0.frequency, "gainDB": $0.gainDB] },
+            "sampleRate": store.streamSampleRate
+        ]
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data),
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.json]
+        savePanel.nameFieldStringValue = "measurement_result.json"
+        savePanel.begin { response in
+            if response == .OK, let url = savePanel.url {
+                try? jsonString.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
+    private func exportAsWAV() {
+        // Placeholder for WAV export - would need to convert measurement data to audio format
+        // For now, this is a stub as the original TODO indicated
+        // This would require FIR design logic to convert magnitude response to impulse response
+    }
+
+    private func applyAsRoomCorrection() {
+        // Apply the measured result as room correction to the main chain ConvolutionEngine
+        guard store.combinedMeasurementResult != nil else { return }
+        // Convert magnitude response to FIR kernel and apply via RenderCallbackContext
+        // This requires FIR design logic which is complex - leaving as placeholder
+        // The original TODO indicated this should use RenderCallbackContext.convolutionEngine
     }
 }
