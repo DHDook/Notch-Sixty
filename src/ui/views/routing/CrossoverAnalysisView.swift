@@ -480,8 +480,11 @@ struct CrossoverAnalysisView: View {
             .filter(\.isMeasured).map { ($0.channelIndex, $0) })
         let currentEQs = Dictionary(uniqueKeysWithValues: store.outputChannelMatrix.channels
             .enumerated().map { ($0.offset, $0.element.eq) })
+        let channelDelays = Dictionary(uniqueKeysWithValues: store.outputChannelMatrix.channels
+            .enumerated().map { ($0.offset, Double($0.element.delayMs)) })
         optimisationResult = await CrossoverOptimiser.optimise(
             measurements: measurements,
+            channelDelays: channelDelays,
             currentCrossoverConfig: store.activeCrossoverConfig,
             currentEQConfigs: currentEQs,
             params: optimisationParams,
@@ -693,7 +696,29 @@ struct CrossoverAnalysisView: View {
 
                     if let result = store.combinedMeasurementResult {
                         let frequencies = result.magnitudeResponseDB.map { $0.frequency }
-                        let deviationFromPrediction = 0.0  // TODO: compute from individual measurements
+
+                        // Compute predicted summation using current crossover and EQ configs
+                        let measurements = Dictionary(uniqueKeysWithValues: store.transferFunctionDataset.channels
+                            .filter(\.isMeasured).map { ($0.channelIndex, $0) })
+                        let currentEQs = Dictionary(uniqueKeysWithValues: store.outputChannelMatrix.channels
+                            .enumerated().map { ($0.offset, $0.element.eq) })
+                        let channelDelays = Dictionary(uniqueKeysWithValues: store.outputChannelMatrix.channels
+                            .enumerated().map { ($0.offset, Double($0.element.delayMs)) })
+
+                        let predictedSummation = CrossoverOptimiser.computePredictedSummation(
+                            measurements: measurements,
+                            channelDelays: channelDelays,
+                            crossoverConfig: store.activeCrossoverConfig,
+                            eqConfigs: currentEQs,
+                            frequencies: frequencies,
+                            sampleRate: store.streamSampleRate
+                        )
+
+                        let deviationFromPrediction = computeRMSError(
+                            measured: result.magnitudeResponseDB.map { ($0.frequency, $0.gainDB) },
+                            target: predictedSummation,
+                            frequencies: frequencies
+                        )
                         let deviationFromTarget = computeRMSError(
                             measured: result.magnitudeResponseDB.map { ($0.frequency, $0.gainDB) },
                             target: optimisationParams.targetCurve,

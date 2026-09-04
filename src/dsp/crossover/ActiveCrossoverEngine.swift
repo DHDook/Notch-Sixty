@@ -94,6 +94,8 @@ final class ActiveCrossoverEngine {
 
     /// Sets FIR kernels for crossover filters and updates tracking properties.
     /// Call this when FIR crossover IR is computed for each filter block.
+    /// Note: FIR crossover kernel generation is not yet implemented - this method
+    /// is a placeholder for future FIR crossover support.
     func setFIRCrossoverKernels(
         lowerLP: [Float]?,
         lowerHP: [Float]?,

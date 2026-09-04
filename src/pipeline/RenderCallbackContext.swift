@@ -1260,32 +1260,31 @@ final class RenderCallbackContext: @unchecked Sendable {
             let crossoverDelaySamples: Int
             if let engine = dynamicsProcessor.activeCrossoverEngine {
                 // Determine which crossover filter this path uses
-                // Note: FIR crossover delay calculation not yet implemented
-                // For now, only IIR crossover is supported
+                // FIR crossover delay calculation now supported
                 if source == .mainsLeftLow || source == .mainsRightLow {
                     crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
                         crossoverSections: engine.activeLowerLP,
-                        crossoverFIRKernel: nil,  // FIR not yet supported
+                        crossoverFIRKernel: engine.currentLowerLPFIRKernel,
                         sampleRate: sampleRate
                     )
                 } else if source == .mainsLeftHigh || source == .mainsRightHigh {
                     if engine.activeBandCount == 3 {
                         crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
                             crossoverSections: engine.activeUpperHP,
-                            crossoverFIRKernel: nil,  // FIR not yet supported
+                            crossoverFIRKernel: engine.currentUpperHPFIRKernel,
                             sampleRate: sampleRate
                         )
                     } else {
                         crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
                             crossoverSections: engine.activeLowerHP,
-                            crossoverFIRKernel: nil,  // FIR not yet supported
+                            crossoverFIRKernel: engine.currentLowerHPFIRKernel,
                             sampleRate: sampleRate
                         )
                     }
                 } else if source == .mainsLeftMid || source == .mainsRightMid {
                     crossoverDelaySamples = CrossoverGroupDelayEngine.crossoverFilterCharacteristicDelay(
                         crossoverSections: engine.activeUpperLP,
-                        crossoverFIRKernel: nil,  // FIR not yet supported
+                        crossoverFIRKernel: engine.currentUpperLPFIRKernel,
                         sampleRate: sampleRate
                     )
                 } else {

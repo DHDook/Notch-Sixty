@@ -107,8 +107,27 @@ final class OutputChannelProcessorTests: XCTestCase {
             processor.process(leftBuf: ptr.baseAddress!, rightBuf: nil, frameCount: 512)
         }
 
-        // Verify processing doesn't crash with delay configured
-        XCTAssertNotNil(processor)
+        // Verify impulse appears at approximately the correct sample (480 samples for 10ms at 48kHz)
+        // Allow some tolerance for processing chain offset
+        let expectedSample = 480
+        let tolerance = 10  // Allow ±10 samples tolerance
+
+        var foundImpulse = false
+        for i in (expectedSample - tolerance)..<(expectedSample + tolerance) {
+            if i < 512 && abs(output[i]) > 0.5 {
+                foundImpulse = true
+                break
+            }
+        }
+
+        XCTAssertTrue(foundImpulse, "Impulse should appear around sample \(expectedSample) for 10ms delay")
+
+        // Verify first samples are near zero (delayed)
+        var maxEarlySample: Float = 0
+        for i in 0..<(expectedSample - tolerance) {
+            maxEarlySample = max(maxEarlySample, abs(output[i]))
+        }
+        XCTAssertLessThan(maxEarlySample, 0.1, "Early samples should be near zero due to delay")
     }
 
     func testLimiterPreventsClipping() {
@@ -152,6 +171,10 @@ final class OutputChannelProcessorTests: XCTestCase {
 
         var config = OutputChannelConfig.default
         config.gainTrimDB = 6.0
+        // Add all-pass coefficients for phase correction
+        config.groupDelayAllPass = [
+            BiquadCoefficients(b0: 1.0, b1: 0.5, b2: 0.25, a1: 0.1, a2: 0.05)
+        ]
 
         processor.applyChannelConfig(config, sampleRate: 48000)
 
@@ -162,7 +185,15 @@ final class OutputChannelProcessorTests: XCTestCase {
             processor.process(leftBuf: ptr.baseAddress!, rightBuf: nil, frameCount: 512)
         }
 
-        XCTAssertNotNil(processor)
+        // Verify output is not identical to input (processing occurred)
+        var maxDifference: Float = 0
+        for i in 0..<512 {
+            maxDifference = max(maxDifference, abs(output[i] - input[i]))
+        }
+
+        // The all-pass chain should modify the signal (even if magnitude is preserved,
+        // phase changes affect the time-domain representation)
+        XCTAssertGreaterThan(maxDifference, 0.01, "All-pass processing should modify the signal")
     }
 
     func testProcessOrderIsCorrect() {

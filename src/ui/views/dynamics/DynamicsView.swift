@@ -1778,6 +1778,16 @@ struct DynamicsInlineView: View {
                     leftEndLabel: "Hard",
                     rightEndLabel: "Soft"
                 )
+                DynamicsSliderRow(
+                    label: "Asymmetry Trim",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.clipperAsymmetryTrimDB) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.clipperAsymmetryTrimDB = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: -3.0...3.0,
+                    step: 0.1,
+                    formatValue: { String(format: "%+.1f dB", $0) }
+                )
                 HStack(spacing: 8) {
                     Text("Curve")
                         .font(.system(size: 13))

@@ -84,19 +84,21 @@ enum CrossoverOptimiser {
     ///
     /// - Parameters:
     ///   - measurements: Per-driver measured transfer functions (from TransferFunctionDataset).
+    ///   - channelDelays: Per-driver delay settings.
     ///   - currentCrossoverConfig: Starting point for optimisation.
     ///   - currentEQConfigs: Current per-output EQ configurations, keyed by channel index.
     ///   - params: Optimisation parameters.
     ///   - sampleRate: System sample rate.
     ///   - progressHandler: Called after each iteration with (iteration, currentRMSError).
     ///     Return false to cancel optimisation.
-    static func optimise(
+    public static func optimise(
         measurements: [Int: ChannelTransferFunctionData],
+        channelDelays: [Int: Double],
         currentCrossoverConfig: ActiveCrossoverConfig,
         currentEQConfigs: [Int: OutputChannelEQConfig],
         params: OptimisationParameters,
         sampleRate: Double,
-        progressHandler: @escaping (Int, Double) -> Bool
+        progressHandler: @Sendable (Int, Double) -> Bool
     ) async -> OptimisationResult {
         var crossoverConfig = currentCrossoverConfig
         var eqConfigs = currentEQConfigs
@@ -111,6 +113,7 @@ enum CrossoverOptimiser {
         // Step 1: Compute initial predicted summation
         let initialSummation = computePredictedSummation(
             measurements: measurements,
+            channelDelays: channelDelays,
             crossoverConfig: crossoverConfig,
             eqConfigs: eqConfigs,
             frequencies: frequencies,
@@ -137,6 +140,7 @@ enum CrossoverOptimiser {
             // Step 2: Compute residual
             let currentSummation = computePredictedSummation(
                 measurements: measurements,
+                channelDelays: channelDelays,
                 crossoverConfig: crossoverConfig,
                 eqConfigs: eqConfigs,
                 frequencies: frequencies,
@@ -179,6 +183,7 @@ enum CrossoverOptimiser {
             // Step 5: Recompute error
             let newSummation = computePredictedSummation(
                 measurements: measurements,
+                channelDelays: channelDelays,
                 crossoverConfig: crossoverConfig,
                 eqConfigs: eqConfigs,
                 frequencies: frequencies,
@@ -208,6 +213,7 @@ enum CrossoverOptimiser {
         // Compute final predicted summation
         let finalSummation = computePredictedSummation(
             measurements: measurements,
+            channelDelays: channelDelays,
             crossoverConfig: crossoverConfig,
             eqConfigs: eqConfigs,
             frequencies: frequencies,
@@ -360,8 +366,9 @@ enum CrossoverOptimiser {
         return frequencies
     }
 
-    private static func computePredictedSummation(
+    public static func computePredictedSummation(
         measurements: [Int: ChannelTransferFunctionData],
+        channelDelays: [Int: Double],
         crossoverConfig: ActiveCrossoverConfig,
         eqConfigs: [Int: OutputChannelEQConfig],
         frequencies: [Double],
@@ -439,10 +446,9 @@ enum CrossoverOptimiser {
                 sampleRate: sampleRate
             )
 
-            // Get delay from measurements if available, otherwise 0
-            // Note: ChannelTransferFunctionData doesn't have delayMs, so we use 0 for now
-            // In a full implementation, this would come from the output channel matrix config
-            let delaySamples = 0.0
+            // Get delay from channelDelays if available, otherwise 0
+            let delayMs = channelDelays[channelIndex] ?? 0.0
+            let delaySamples = delayMs * sampleRate / 1000.0
 
             let channelResponse = AcousticSummationEngine.ChannelResponse(
                 channelIndex: channelIndex,

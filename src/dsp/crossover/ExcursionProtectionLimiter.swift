@@ -39,7 +39,7 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
     private let maxFrameCount: Int
 
     private let sampleRate: Double
-    private let bandCount = 4
+    private let bandCount = 5
 
     // MARK: - Initialization
 
@@ -172,7 +172,8 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
             crossoverFrequencies[0] / 2.0,
             sqrt(crossoverFrequencies[0] * crossoverFrequencies[1]),
             sqrt(crossoverFrequencies[1] * crossoverFrequencies[2]),
-            crossoverFrequencies[2] * 2.0
+            sqrt(crossoverFrequencies[2] * crossoverFrequencies[3]),
+            crossoverFrequencies[3] * 2.0
         ]
 
         for i in 0..<bandCount {
@@ -226,7 +227,8 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
             // Band 0: 0 to crossover[0] (LP0 only)
             // Band 1: crossover[0] to crossover[1] (HP0 then LP1)
             // Band 2: crossover[1] to crossover[2] (HP1 then LP2)
-            // Band 3: crossover[2] to ∞ (HP2 only - no LP, since protectionCutoffHz is the upper limit)
+            // Band 3: crossover[2] to crossover[3] (HP2 then LP3)
+            // Band 4: crossover[3] to ∞ (HP3 only - no protection, gain = 1.0 always)
             switch bandIdx {
             case 0:
                 // Band 0: Just LP0 (very low frequencies)
@@ -240,9 +242,13 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
                 bandFilters[3].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
                 bandFilters[4].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
             case 3:
-                // Band 3: HP2 only (high frequencies above protectionCutoffHz)
-                // This band should have NO protection (gain = 1.0 always)
+                // Band 3: HP2 then LP3 (high-mid frequencies)
                 bandFilters[5].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+                bandFilters[6].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
+            case 4:
+                // Band 4: HP3 only (frequencies above protectionCutoffHz)
+                // This band should have NO protection (gain = 1.0 always)
+                bandFilters[7].process(input: bandBuffer, output: bandBuffer, frameCount: UInt32(frameCount))
             default:
                 break
             }
@@ -250,6 +256,12 @@ final class ExcursionProtectionLimiter: @unchecked Sendable {
             // Compute envelope and apply gain reduction to the isolated band
             for i in 0..<frameCount {
                 let sample = bandBuffer[i]
+
+                // Band 4 (above protectionCutoffHz) has no protection - pass through
+                if bandIdx == 4 {
+                    bandBuffer[i] = sample
+                    continue
+                }
 
                 // Simple envelope follower (peak detector)
                 let absSample = abs(sample)
