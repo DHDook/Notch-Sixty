@@ -954,16 +954,81 @@ struct CrossoverAnalysisView: View {
     }
 
     private func exportAsWAV() {
-        // Placeholder for WAV export - would need to convert measurement data to audio format
-        // For now, this is a stub as the original TODO indicated
-        // This would require FIR design logic to convert magnitude response to impulse response
+        guard let result = store.combinedMeasurementResult else { return }
+        let impulseResponse = result.impulseResponse
+        let sampleRate = result.sampleRate
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.wav]
+        savePanel.nameFieldStringValue = "measurement_export.wav"
+        savePanel.begin { response in
+            if response == .OK, let url = savePanel.url {
+                self.writeWAVFile(url: url, samples: impulseResponse, sampleRate: sampleRate)
+            }
+        }
+    }
+
+    private func writeWAVFile(url: URL, samples: [Float], sampleRate: Double) {
+        let dataLength = samples.count * MemoryLayout<Float>.size
+        let totalLength = 44 + dataLength  // 44 byte WAV header + data
+
+        var wavData = Data(capacity: totalLength)
+
+        // Helper to append multi-byte values
+        func append<T>(_ value: T) {
+            withUnsafeBytes(of: value) { wavData.append(contentsOf: $0) }
+        }
+
+        // RIFF header
+        wavData.append("RIFF".data(using: .ascii)!)
+        append(UInt32(totalLength).littleEndian)
+
+        // WAVE format
+        wavData.append("WAVE".data(using: .ascii)!)
+
+        // fmt chunk
+        wavData.append("fmt ".data(using: .ascii)!)
+        append(UInt32(16).littleEndian)  // PCM chunk size
+        append(UInt16(3).littleEndian)  // Format: IEEE float (3)
+        append(UInt16(1).littleEndian)  // Channels: mono
+        append(UInt32(Int32(sampleRate)).littleEndian)  // Sample rate
+        append(UInt32(Int32(sampleRate * 4)).littleEndian)  // Byte rate (sampleRate * channels * bits/8)
+        append(UInt16(4).littleEndian)  // Block align (channels * bits/8)
+        append(UInt16(32).littleEndian)  // Bits per sample
+
+        // data chunk
+        wavData.append("data".data(using: .ascii)!)
+        append(UInt32(dataLength).littleEndian)
+
+        // Write samples as 32-bit float
+        for sample in samples {
+            append(sample)
+        }
+
+        try? wavData.write(to: url)
     }
 
     private func applyAsRoomCorrection() {
-        // Apply the measured result as room correction to the main chain ConvolutionEngine
-        guard store.combinedMeasurementResult != nil else { return }
-        // Convert magnitude response to FIR kernel and apply via RenderCallbackContext
-        // This requires FIR design logic which is complex - leaving as placeholder
-        // The original TODO indicated this should use RenderCallbackContext.convolutionEngine
+        guard let result = store.combinedMeasurementResult else { return }
+        guard let pipeline = store.routingCoordinator.pipelineManager.renderPipeline else { return }
+        guard let context = pipeline.callbackContext else { return }
+
+        // Map magnitude response to (frequency, gainDB) tuples
+        let measured = result.magnitudeResponseDB.map { ($0.frequency, $0.gainDB) }
+        let target = optimisationParams.targetCurve
+
+        // Generate minimum-phase FIR correction
+        let sampleRate = store.streamSampleRate
+        let (leftIR, rightIR) = RoomCorrectionEngine.minimumPhaseFIRCorrection(
+            measured: measured,
+            target: target,
+            sampleRate: sampleRate,
+            maxGainDB: 6.0,
+            smoothingCrossoverHz: 200.0,
+            tapCount: 8192
+        )
+
+        // Apply to main chain ConvolutionEngine
+        context.updateConvolutionIR(left: leftIR, right: rightIR)
     }
 }
