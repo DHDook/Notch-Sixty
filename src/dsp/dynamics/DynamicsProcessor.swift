@@ -370,6 +370,13 @@ final class DynamicsProcessor: @unchecked Sendable {
     // Linear denoising (one SpectralDenoiser per channel)
     private let denoisers: [SpectralDenoiser]
 
+    // Mains hum notch (one EQChain per channel for harmonic cascade)
+    private let mainsNotchChains: [EQChain]
+    private let mainsHumDetector: MainsHumDetector
+    private var mainsNotchTickTimer: Timer?
+    private var mainsNotchConfigured: MainsNotchConfig = MainsNotchConfig()
+    private let _mainsNotchEnabled: ManagedAtomic<Int32>
+
     // MARK: - Atomic Parameters (main thread → audio thread)
 
     // De-esser
@@ -647,6 +654,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     var firConvolutionEngineDelaySamples: Double {
         firConvolutionEngine.loadedIRDelaySamples
     }
+
+    // Mains hum notch UI-facing passthrough getters
+    var mainsNotchIsCapturing: Bool { mainsHumDetector.isCapturing }
+    var mainsNotchCaptureProgress: Float { mainsHumDetector.captureProgress }
+    var mainsNotchCurrentHz: Double { mainsHumDetector.currentFundamentalHz }
+
     /// Resets the sticky true-peak trip flags. Call from the main thread after showing the indicator.
     func clearTruePeakFlags() {
         _truePeakClipperTripped.store(0, ordering: .relaxed)
@@ -718,6 +731,11 @@ final class DynamicsProcessor: @unchecked Sendable {
         self.stereoWidener = StereoWidener(maxFrameCount: maxFrameCount)
         self.lufsProcessor = LoudnessMatchProcessor()
         self.dialogueLeveler = DialogueRelativeLeveler()
+
+        // Mains hum notch chains and detector
+        self.mainsNotchChains = (0..<ch).map { _ in EQChain(maxFrameCount: UInt32(maxFrameCount)) }
+        self.mainsHumDetector = MainsHumDetector(sampleRate: sampleRate, region: .sixty)
+        _mainsNotchEnabled = ManagedAtomic(0)
 
         // Look-ahead limiter (extracted from inline implementation)
         self.mainLimiter = LookAheadLimiter(channelCount: ch, sampleRate: sampleRate, lookAheadMs: 2.0)
@@ -1738,11 +1756,65 @@ final class DynamicsProcessor: @unchecked Sendable {
         // Update ConvolutionEngine with the scaled IR
         firConvolutionEngine.updateIR(left: scaledLeftIR, right: scaledRightIR)
     }
+
+    func setMainsNotchConfig(_ config: MainsNotchConfig, sampleRate: Double) {
+        _mainsNotchEnabled.store(config.enabled ? 1 : 0, ordering: .relaxed)
+        let regionChanged = config.region != mainsNotchConfigured.region
+        if regionChanged {
+            mainsHumDetector.setNominal(config.region)
+        }
+        if config.trackingEnabled != mainsNotchConfigured.trackingEnabled {
+            mainsHumDetector.setTrackingEnabled(config.trackingEnabled)
+        }
+        mainsNotchConfigured = config
+        rebuildMainsNotchCoefficients(sampleRate: sampleRate)
+        startMainsNotchTicking(sampleRate: sampleRate)
+    }
+
+    /// Rebuilds and stages harmonic notch coefficients for every channel
+    /// from the detector's current (slewed) fundamental. Call from the
+    /// same ~30 Hz timer driving MainsHumDetector.tick(), and also
+    /// whenever depth/Q/harmonicCount config changes.
+    private func rebuildMainsNotchCoefficients(sampleRate: Double) {
+        guard mainsNotchConfigured.enabled else { return }
+        let sections = MainsNotchCoefficients.buildSections(
+            fundamentalHz: mainsHumDetector.currentFundamentalHz,
+            sampleRate: sampleRate,
+            harmonicCount: mainsNotchConfigured.harmonicCount,
+            harmonicDepthsDB: mainsNotchConfigured.harmonicDepthsDB,
+            q: mainsNotchConfigured.q
+        )
+        for chain in mainsNotchChains {
+            for (i, section) in sections.enumerated() {
+                chain.stageBandUpdate(index: i, sections: [section], bypass: false)
+            }
+        }
+    }
+
+    /// Call once, e.g. from wherever the render pipeline already starts a
+    /// ~30 Hz UI-facing timer (or create a dedicated one) — drives both the
+    /// frequency slew and the resulting coefficient rebuild.
+    private func startMainsNotchTicking(sampleRate: Double) {
+        mainsNotchTickTimer?.invalidate()
+        mainsNotchTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.mainsHumDetector.tick(deltaSeconds: 1.0/30.0)
+            self.rebuildMainsNotchCoefficients(sampleRate: sampleRate)
+        }
+    }
+
     func setMainsHighPassHz(_ hz: Float) {
         // Store the mains high-pass frequency for asymmetric mode
         // This will be used when staging the mains high-pass crossover
         // No atomic needed since it's only used on the main thread for staging
     }
+
+    // MARK: - UI-facing passthrough getters for mains notch
+
+    func startMainsNotchDetect() {
+        mainsHumDetector.startDetect(region: mainsNotchConfigured.region)
+    }
+
     func setDynamicEQConfig(_ config: DynamicEQConfig, sampleRate: Double) {
         let bands = config.bands
         let n = min(bands.count, DynamicEQConfig.maxDynamicEQBands)
@@ -2077,6 +2149,12 @@ final class DynamicsProcessor: @unchecked Sendable {
             lastBassCrossoverSlope = adv.bassManagement.slope
             lastBassCrossoverType = adv.bassManagement.crossoverType
             lastBassCrossoverSampleRate = storedSampleRate
+        }
+
+        // Mains hum notch — only rebuild when config actually changed
+        if adv.mainsNotch != mainsNotchConfigured {
+            setMainsNotchConfig(adv.mainsNotch, sampleRate: sampleRate)
+            mainsNotchConfigured = adv.mainsNotch
         }
 
         // Stage mains high-pass crossover update if asymmetric mode is enabled and parameters changed
@@ -2681,9 +2759,10 @@ final class DynamicsProcessor: @unchecked Sendable {
         let dynamicEQOn = _dynamicEQEnabled.load(ordering: .relaxed) != 0
         let dialogueLevelerOn = _dialogueLevelerEnabled.load(ordering: .relaxed) != 0
         let firOn       = _firEnabled.load(ordering: .relaxed) != 0
+        let mainsNotchOn = _mainsNotchEnabled.load(ordering: .relaxed) != 0
         guard stereoModeRaw != 0 || dcOn || subPhaseOn || symBalanceOn || panningOn || irAlignOn || crosstalkOn || denoisingOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
-                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || dialogueLevelerOn || firOn else {
+                || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || dialogueLevelerOn || firOn || mainsNotchOn else {
             // The entire chain is idle this callback. Zero every per-stage meter rather
             // than just the limiter's, so the gain-structure meter doesn't freeze on the
             // last nonzero reading from before the stages were disabled.
@@ -2711,6 +2790,22 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Capture pre-chain signal for delta solo (must be first).
         if deltaSoloOn { captureDeltaInput(abl: abl, numCh: numCh, count: count) }
+
+        // Stage −2.2: Mains hum notch. Runs before the denoiser so a
+        // strong tonal hum component can't skew its per-bin noise-floor
+        // estimate — remove what's deterministic and well-characterized
+        // before statistical broadband noise reduction sees the signal.
+        if mainsNotchOn {
+            for ch in 0..<min(numCh, mainsNotchChains.count) {
+                guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                mainsNotchChains[ch].process(buffer: buf, frameCount: UInt32(count))
+            }
+        }
+        // Feed the detector regardless of whether the notcher is enabled —
+        // Detect/Tracking should work while auditioning with it off.
+        if let mono = abl[0].mData?.assumingMemoryBound(to: Float.self) {
+            mainsHumDetector.accumulate(mono, count: count)
+        }
 
         // Stage −2: Spectral noise gate.
         if denoisingOn { processDenoising(abl: abl, numCh: numCh, count: count) }

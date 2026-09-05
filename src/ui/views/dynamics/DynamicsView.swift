@@ -135,7 +135,7 @@ private struct DynamicsSliderRow: View {
 // MARK: - Inline Header Widget
 
 /// Compact dynamics widget shown inline in the main window header.
-/// Six-column layout (max 10 toggles per column):
+/// Four-column layout (3 toggle columns of 10 + 1 picker column):
 ///   Col 1 — core dynamics chain stages, in signal-chain order
 ///   Col 2 — later dynamics + spatial stages
 ///   Col 3 — LTI processing + global processing-mode flags
@@ -538,6 +538,115 @@ struct DynamicsInlineView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+            }
+            let mainsNotchEasterEgg = store.dynamicsConfig.advanced.mainsNotch.enabled
+                                    && store.dynamicsConfig.advanced.mainsNotch.region == .sixty
+            col2ToggleWithSettings(
+                label: mainsNotchEasterEgg ? "NOTCH SIXTY" : "Mains Notch",
+                isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.mainsNotch.enabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.enabled = v; store.updateAdvancedProcessing(adv) }
+                ),
+                fullName: "Mains Hum Notch Filter",
+                labelColor: mainsNotchEasterEgg
+                    ? Color(red: 232.0/255.0, green: 168.0/255.0, blue: 74.0/255.0)
+                    : nil,
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = MainsNotchConfig()
+                    adv.mainsNotch.region = d.region
+                    adv.mainsNotch.harmonicCount = d.harmonicCount
+                    adv.mainsNotch.harmonicDepthsDB = d.harmonicDepthsDB
+                    adv.mainsNotch.q = d.q
+                    adv.mainsNotch.trackingEnabled = d.trackingEnabled
+                    store.updateAdvancedProcessing(adv)
+                }
+            ) {
+                // Region picker (segmented, like Quality mode)
+                Picker("", selection: Binding(
+                    get: { store.dynamicsConfig.advanced.mainsNotch.region },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.region = v; store.updateAdvancedProcessing(adv) }
+                )) {
+                    Text("50 Hz").tag(MainsRegion.fifty)
+                    Text("60 Hz").tag(MainsRegion.sixty)
+                }
+                .pickerStyle(.segmented)
+
+                Divider()
+
+                // Detect button + status, wrapped in the same TimelineView polling
+                // pattern established for denoiser capture
+                TimelineView(.periodic(from: .now, by: 1.0/10.0)) { _ in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text("Detect")
+                                .font(.system(size: 13)).foregroundStyle(.secondary)
+                                .frame(width: 80, alignment: .leading)
+                            Button(store.mainsNotchIsCapturing ? "Detecting…" : "Detect") {
+                                store.startMainsNotchDetect()
+                            }
+                            .disabled(store.mainsNotchIsCapturing)
+                            Text(String(format: "%.2f Hz", store.mainsNotchCurrentHz))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if store.mainsNotchIsCapturing {
+                            ProgressView(value: store.mainsNotchCaptureProgress)
+                        }
+                    }
+                }
+
+                // Tracking toggle
+                Toggle("Continuous Tracking", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.mainsNotch.trackingEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.trackingEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+
+                Divider()
+
+                // Harmonic count
+                DynamicsSliderRow(
+                    label: "Harmonics",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.mainsNotch.harmonicCount) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.harmonicCount = Int(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 1...16,
+                    step: 1,
+                    formatValue: { String(format: "%.0f", $0) }
+                )
+
+                // Global Q
+                DynamicsSliderRow(
+                    label: "Q",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.mainsNotch.q) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.q = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 5...60,
+                    step: 1,
+                    formatValue: { String(format: "%.0f", $0) }
+                )
+
+                Divider()
+
+                // Per-harmonic depth list — only show rows up to the current harmonicCount
+                ForEach(0..<Int(store.dynamicsConfig.advanced.mainsNotch.harmonicCount), id: \.self) { i in
+                    let freq = store.mainsNotchCurrentHz * Double(i + 1)
+                    DynamicsSliderRow(
+                        label: "H\(i + 1) (\(String(format: "%.0f", freq)) Hz)",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.mainsNotch.harmonicDepthsDB[i]) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.mainsNotch.harmonicDepthsDB[i] = Float(v)
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: -40.0...0.0,
+                        step: 1.0,
+                        formatValue: { String(format: "%.0f dB", $0) }
+                    )
                 }
             }
             col2ToggleWithSettings(
@@ -976,6 +1085,13 @@ struct DynamicsInlineView: View {
                 }
             }
             col2Toggle(label: "Contour", isOn: inlineLoudnessContourEnabled)
+        }
+    }
+
+    // MARK: - Column 2: Dynamics + spatial
+
+    private var column2: some View {
+        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "De-Esser",
                 isOn: deEsserEnabledBinding,
@@ -1064,13 +1180,6 @@ struct DynamicsInlineView: View {
                     formatValue: { String(format: "%.0f ms", $0) }
                 )
             }
-        }
-    }
-
-    // MARK: - Column 2: Dynamics + spatial
-
-    private var column2: some View {
-        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "M-Band",
                 isOn: mbEnabledBinding,
@@ -1933,6 +2042,13 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "5 ms"
                 )
             }
+        }
+    }
+
+    // MARK: - Column 3: LTI suite + processing-mode flags
+
+    private var column3: some View {
+        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Sym. Bal.",
                 isOn: inlineSymmetryBalanceEnabled,
@@ -1957,13 +2073,6 @@ struct DynamicsInlineView: View {
                     rightEndLabel: "R"
                 )
             }
-        }
-    }
-
-    // MARK: - Column 3: LTI suite + processing-mode flags
-
-    private var column3: some View {
-        VStack(alignment: .leading, spacing: 4) {
             col2ToggleWithSettings(
                 label: "Panning",
                 isOn: inlinePanningEnabled,
@@ -2360,13 +2469,16 @@ struct DynamicsInlineView: View {
         label: String,
         isOn: Binding<Bool>,
         fullName: String,
+        labelColor: Color? = nil,
         onReset: (() -> Void)? = nil,
         @ViewBuilder settings: @escaping () -> Content
     ) -> some View {
         HStack(spacing: 4) {
             Text(label)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(labelColor ?? .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .frame(width: 68, alignment: .leading)
             Toggle("", isOn: isOn)
                 .labelsHidden()

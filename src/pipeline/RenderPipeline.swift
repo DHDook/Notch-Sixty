@@ -945,6 +945,15 @@ final class RenderPipeline: RenderPipelineProtocol {
     var denoiserCaptureProgress: Float {
         callbackContext?.dynamicsProcessor.denoiserCaptureProgress ?? 0.0
     }
+    var mainsNotchIsCapturing: Bool {
+        callbackContext?.dynamicsProcessor.mainsNotchIsCapturing ?? false
+    }
+    var mainsNotchCaptureProgress: Float {
+        callbackContext?.dynamicsProcessor.mainsNotchCaptureProgress ?? 0.0
+    }
+    var mainsNotchCurrentHz: Double {
+        callbackContext?.dynamicsProcessor.mainsNotchCurrentHz ?? 60.0
+    }
     var liveCrestFactorDB: Float {
         callbackContext?.dynamicsProcessor.liveCrestFactorDB ?? 0.0
     }

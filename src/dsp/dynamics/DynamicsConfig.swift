@@ -1598,6 +1598,50 @@ extension AdvancedProcessingConfig {
     }
 }
 
+// MARK: - Mains Hum Notch Configuration
+
+/// Configuration for the mains hum harmonic notch filter.
+struct MainsNotchConfig: Codable, Equatable, Sendable {
+    var enabled: Bool = false
+    var region: MainsRegion = .sixty
+    var harmonicCount: Int = 8          // 1...16
+    var harmonicDepthsDB: [Float] = MainsNotchCoefficients.defaultDepthsDB(count: 16)
+    var q: Float = MainsNotchCoefficients.defaultQ
+    var trackingEnabled: Bool = false
+
+    static let `default` = MainsNotchConfig()
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, region, harmonicCount, harmonicDepthsDB, q, trackingEnabled
+    }
+
+    init(
+        enabled: Bool = false,
+        region: MainsRegion = .sixty,
+        harmonicCount: Int = 8,
+        harmonicDepthsDB: [Float] = MainsNotchCoefficients.defaultDepthsDB(count: 16),
+        q: Float = MainsNotchCoefficients.defaultQ,
+        trackingEnabled: Bool = false
+    ) {
+        self.enabled = enabled
+        self.region = region
+        self.harmonicCount = harmonicCount
+        self.harmonicDepthsDB = harmonicDepthsDB
+        self.q = q
+        self.trackingEnabled = trackingEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        region = try c.decodeIfPresent(MainsRegion.self, forKey: .region) ?? .sixty
+        harmonicCount = try c.decodeIfPresent(Int.self, forKey: .harmonicCount) ?? 8
+        harmonicDepthsDB = try c.decodeIfPresent([Float].self, forKey: .harmonicDepthsDB) ?? MainsNotchCoefficients.defaultDepthsDB(count: 16)
+        q = try c.decodeIfPresent(Float.self, forKey: .q) ?? MainsNotchCoefficients.defaultQ
+        trackingEnabled = try c.decodeIfPresent(Bool.self, forKey: .trackingEnabled) ?? false
+    }
+}
+
 struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
 
     // ── A. High-Resolution Coefficient Decoupling ───────────────────────
@@ -1790,6 +1834,9 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
     /// Infrasonic High-Pass Filter — removes subsonic content below the threshold of hearing.
     var infrasonicFilter: InfrasonicFilterConfig = InfrasonicFilterConfig()
 
+    /// Mains Hum Notch Filter — harmonic notch cascade for removing 50/60 Hz mains hum and its harmonics.
+    var mainsNotch: MainsNotchConfig = MainsNotchConfig()
+
     /// Mono Bass Summing — sums L+R below crossover frequency for subwoofer output.
     /// DEPRECATED: Migrated to bassManagement.enabled. Kept for backward compatibility only.
     var monoBassEnabled: Bool = false
@@ -1866,6 +1913,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         case activeCrossover
         case excessPhaseConfig
         case infrasonicFilter
+        case mainsNotch
         case monoBassEnabled, monoBassCrossover
         case mainsHighPassEnabled, mainsHighPassFrequency
         case volumeDependentLoudnessEnabled, loudnessReferencePhon, loudnessReferenceVolume
@@ -1953,6 +2001,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         activeCrossover: ActiveCrossoverConfig = ActiveCrossoverConfig(),
         excessPhaseConfig: ExcessPhaseConfig = ExcessPhaseConfig(),
         infrasonicFilter: InfrasonicFilterConfig = InfrasonicFilterConfig(),
+        mainsNotch: MainsNotchConfig = MainsNotchConfig(),
         monoBassEnabled: Bool = false,
         monoBassCrossover: Float = 80.0,
         mainsHighPassEnabled: Bool = false,
@@ -2027,6 +2076,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         self.activeCrossover                  = activeCrossover
         self.excessPhaseConfig               = excessPhaseConfig
         self.infrasonicFilter                = infrasonicFilter
+        self.mainsNotch                      = mainsNotch
         self.monoBassEnabled                  = monoBassEnabled
         self.monoBassCrossover                = monoBassCrossover
         self.mainsHighPassEnabled             = mainsHighPassEnabled
@@ -2108,6 +2158,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         activeCrossover                  = try c.decodeIfPresent(ActiveCrossoverConfig.self,  forKey: .activeCrossover)  ?? ActiveCrossoverConfig()
         excessPhaseConfig               = try c.decodeIfPresent(ExcessPhaseConfig.self,    forKey: .excessPhaseConfig) ?? ExcessPhaseConfig()
         infrasonicFilter                = try c.decodeIfPresent(InfrasonicFilterConfig.self, forKey: .infrasonicFilter) ?? InfrasonicFilterConfig()
+        mainsNotch                      = try c.decodeIfPresent(MainsNotchConfig.self,       forKey: .mainsNotch)       ?? MainsNotchConfig()
 
         // Decode legacy fields for backward compatibility
         let legacyMonoBassEnabled        = try c.decodeIfPresent(Bool.self,                  forKey: .monoBassEnabled)                  ?? false
@@ -2205,6 +2256,7 @@ struct AdvancedProcessingConfig: Codable, Equatable, Sendable {
         try c.encode(activeCrossover,                    forKey: .activeCrossover)
         try c.encode(excessPhaseConfig,                  forKey: .excessPhaseConfig)
         try c.encode(infrasonicFilter,                   forKey: .infrasonicFilter)
+        try c.encode(mainsNotch,                         forKey: .mainsNotch)
         // Legacy fields (monoBassEnabled, monoBassCrossover, mainsHighPassEnabled, mainsHighPassFrequency)
         // are NOT encoded - they are decode-only for backward compatibility
         try c.encode(volumeDependentLoudnessEnabled,     forKey: .volumeDependentLoudnessEnabled)

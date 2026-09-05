@@ -2414,6 +2414,11 @@ final class EqualiserStore: ObservableObject {
         routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.resetNoiseProfile()
     }
 
+    /// Starts mains hum frequency detection.
+    func startMainsNotchDetect() {
+        routingCoordinator.pipelineManager.renderPipeline?.callbackContext?.startMainsNotchDetect()
+    }
+
     var denoiserIsCapturing: Bool {
         routingCoordinator.pipelineManager.renderPipeline?.denoiserIsCapturing ?? false
     }
@@ -2426,7 +2431,15 @@ final class EqualiserStore: ObservableObject {
     var denoiserCaptureProgress: Float {
         routingCoordinator.pipelineManager.renderPipeline?.denoiserCaptureProgress ?? 0.0
     }
-    
+    var mainsNotchIsCapturing: Bool {
+        routingCoordinator.pipelineManager.renderPipeline?.mainsNotchIsCapturing ?? false
+    }
+    var mainsNotchCaptureProgress: Float {
+        routingCoordinator.pipelineManager.renderPipeline?.mainsNotchCaptureProgress ?? 0.0
+    }
+    var mainsNotchCurrentHz: Double {
+        routingCoordinator.pipelineManager.renderPipeline?.mainsNotchCurrentHz ?? 60.0
+    }
     // MARK: - Preset Management
     
     /// Saves the current EQ settings as a new preset.

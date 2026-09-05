@@ -1460,6 +1460,11 @@ final class RenderCallbackContext: @unchecked Sendable {
         dynamicsProcessor.resetNoiseProfile()
     }
 
+    /// Starts mains hum frequency detection.
+    func startMainsNotchDetect() {
+        dynamicsProcessor.startMainsNotchDetect()
+    }
+
     /// Updates the convolution engine's impulse response.
     /// - Parameters:
     ///   - left: Left channel impulse response samples.
