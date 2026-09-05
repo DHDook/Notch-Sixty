@@ -981,7 +981,7 @@ struct CrossoverAnalysisView: View {
 
         // RIFF header
         wavData.append("RIFF".data(using: .ascii)!)
-        append(UInt32(totalLength).littleEndian)
+        append(UInt32(totalLength - 8).littleEndian)
 
         // WAVE format
         wavData.append("WAVE".data(using: .ascii)!)
