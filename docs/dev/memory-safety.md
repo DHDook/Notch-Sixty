@@ -114,6 +114,48 @@ volumeForwardQueue.async { [weak self] in
 - Serial queues ensure ordering but don't prevent retain cycles
 - Use `[weak self]` for any closure that might outlive the current scope
 
+## NotificationCenter Observers
+
+Block-based observers (`addObserver(forName:object:queue:using:)`) are retained by
+`NotificationCenter` itself until explicitly removed — `[weak self]` inside the block does
+**not** protect against this, because the leak is the registration itself, not a capture cycle.
+
+```swift
+// WRONG: token discarded — this observer can never be removed, and if this
+// call site re-runs (e.g. inside `updateNSView`, a `body` re-evaluation, or
+// any other repeatable code path) each run adds a permanent, unremovable
+// duplicate.
+NotificationCenter.default.addObserver(forName: .someEvent, object: nil, queue: .main) { _ in
+    self?.handleEvent()
+}
+
+// CORRECT: store the token, remove it when the observer's owner goes away
+private var eventToken: NSObjectProtocol?
+
+eventToken = NotificationCenter.default.addObserver(forName: .someEvent, object: nil, queue: .main) { _ in
+    self?.handleEvent()
+}
+
+deinit {
+    if let eventToken { NotificationCenter.default.removeObserver(eventToken) }
+}
+```
+
+Rules:
+- Always capture the return value of `addObserver(forName:object:queue:using:)`.
+- Remove it in `deinit` (classes) or `.onDisappear` (SwiftUI views whose lifetime matches the
+  window/scene).
+- Never call `addObserver` from a function that can run more than once per logical "session"
+  (e.g. `updateNSView`, a `body` computed property, or any `makeNSView` that could be invoked
+  again) without first removing any previously-stored token — otherwise each re-run
+  permanently leaks another observer.
+- Prefer the selector-based `addObserver(self, selector:...)` + `removeObserver(self)` form for
+  anything registered exactly once for an object's whole lifetime (see `EqualiserStore.init`/
+  `deinit`); reserve the block-based form for cases that genuinely need per-registration tokens.
+- See `WindowAccessor.swift` for the pattern that ensures a callback fires only once per actual
+  state change, so call sites registering observers inside it don't need to guard against
+  re-entrancy themselves.
+
 ## Swift/ObjC Interop
 
 This project uses CoreAudio (C API) and AVFoundation (ObjC framework):

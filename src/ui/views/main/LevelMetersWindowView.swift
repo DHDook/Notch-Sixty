@@ -4,6 +4,7 @@ import SwiftUI
 struct LevelMetersWindowView: View {
     @EnvironmentObject var store: EqualiserStore
     @ObservedObject var meterStore: MeterStore
+    @State private var windowObservers: [NSObjectProtocol] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,11 +23,15 @@ struct LevelMetersWindowView: View {
         .onDisappear {
             meterStore.levelMetersEnabled = false
             meterStore.meterWindowBecameHidden(id: "levels-window")
+            NotificationCenter.default.removeObservers(windowObservers)
+            windowObservers.removeAll()
         }
         .background(
             WindowAccessor { window in
+                NotificationCenter.default.removeObservers(windowObservers)
+                windowObservers.removeAll()
                 guard let window = window else { return }
-                NotificationCenter.default.addObserver(
+                let miniaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didMiniaturizeNotification,
                     object: window,
                     queue: .main
@@ -36,7 +41,7 @@ struct LevelMetersWindowView: View {
                         meterStore.meterWindowBecameHidden(id: "levels-window")
                     }
                 }
-                NotificationCenter.default.addObserver(
+                let deminiaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didDeminiaturizeNotification,
                     object: window,
                     queue: .main
@@ -45,6 +50,7 @@ struct LevelMetersWindowView: View {
                         meterStore.meterWindowBecameVisible(id: "levels-window")
                     }
                 }
+                windowObservers = [miniaturizeToken, deminiaturizeToken]
             }
         )
     }

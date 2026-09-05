@@ -7,6 +7,7 @@ struct AnalyticsMetersWindowView: View {
     @ObservedObject var meterStore: MeterStore
     @StateObject private var inlineMeterBridge = InlineMeterBridge()
     @State private var analyticsTopRowHeight: CGFloat = 0
+    @State private var windowObservers: [NSObjectProtocol] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -68,11 +69,15 @@ struct AnalyticsMetersWindowView: View {
         .onDisappear {
             meterStore.remainingMetersEnabled = false
             meterStore.meterWindowBecameHidden(id: "analytics-window")
+            NotificationCenter.default.removeObservers(windowObservers)
+            windowObservers.removeAll()
         }
         .background(
             WindowAccessor { window in
+                NotificationCenter.default.removeObservers(windowObservers)
+                windowObservers.removeAll()
                 guard let window = window else { return }
-                NotificationCenter.default.addObserver(
+                let miniaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didMiniaturizeNotification,
                     object: window,
                     queue: .main
@@ -82,7 +87,7 @@ struct AnalyticsMetersWindowView: View {
                         meterStore.meterWindowBecameHidden(id: "analytics-window")
                     }
                 }
-                NotificationCenter.default.addObserver(
+                let deminiaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didDeminiaturizeNotification,
                     object: window,
                     queue: .main
@@ -91,6 +96,7 @@ struct AnalyticsMetersWindowView: View {
                         meterStore.meterWindowBecameVisible(id: "analytics-window")
                     }
                 }
+                windowObservers = [miniaturizeToken, deminiaturizeToken]
             }
         )
     }

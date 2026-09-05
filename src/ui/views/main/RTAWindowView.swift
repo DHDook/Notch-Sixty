@@ -4,6 +4,7 @@ import SwiftUI
 struct RTAWindowView: View {
     @EnvironmentObject var store: EqualiserStore
     @ObservedObject var meterStore: MeterStore
+    @State private var windowObservers: [NSObjectProtocol] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,11 +27,15 @@ struct RTAWindowView: View {
         .onDisappear {
             meterStore.rtaEnabled = false
             store.rtaAnalyzer.rtaWindowBecameHidden(id: "rta-window")
+            NotificationCenter.default.removeObservers(windowObservers)
+            windowObservers.removeAll()
         }
         .background(
             WindowAccessor { window in
+                NotificationCenter.default.removeObservers(windowObservers)
+                windowObservers.removeAll()
                 guard let window = window else { return }
-                NotificationCenter.default.addObserver(
+                let miniaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didMiniaturizeNotification,
                     object: window,
                     queue: .main
@@ -40,7 +45,7 @@ struct RTAWindowView: View {
                         store.rtaAnalyzer.rtaWindowBecameHidden(id: "rta-window")
                     }
                 }
-                NotificationCenter.default.addObserver(
+                let deminiaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didDeminiaturizeNotification,
                     object: window,
                     queue: .main
@@ -49,6 +54,7 @@ struct RTAWindowView: View {
                         store.rtaAnalyzer.rtaWindowBecameVisible(id: "rta-window")
                     }
                 }
+                windowObservers = [miniaturizeToken, deminiaturizeToken]
             }
         )
     }
