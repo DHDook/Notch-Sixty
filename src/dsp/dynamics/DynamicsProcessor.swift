@@ -2760,6 +2760,22 @@ final class DynamicsProcessor: @unchecked Sendable {
         let dialogueLevelerOn = _dialogueLevelerEnabled.load(ordering: .relaxed) != 0
         let firOn       = _firEnabled.load(ordering: .relaxed) != 0
         let mainsNotchOn = _mainsNotchEnabled.load(ordering: .relaxed) != 0
+
+        // Feed the hum detector before the idle-chain guard and before the
+        // notch cascade runs, for two independent reasons:
+        //  1. Detect/Tracking must keep working even when the entire chain
+        //     is idle (e.g. testing Detect before deciding to enable
+        //     anything) — the guard below returns early when nothing is
+        //     on, which would otherwise skip this every callback and Detect
+        //     would never complete.
+        //  2. Tracking needs to measure the hum's true incoming frequency,
+        //     not the signal after the notch cascade has already
+        //     suppressed it — reading pre-notch avoids the tracker trying
+        //     to re-measure a tone it just attenuated.
+        if let mono = abl[0].mData?.assumingMemoryBound(to: Float.self) {
+            mainsHumDetector.accumulate(mono, count: count)
+        }
+
         guard stereoModeRaw != 0 || dcOn || subPhaseOn || symBalanceOn || panningOn || irAlignOn || crosstalkOn || denoisingOn || wideOn || lufsOn || contourOn
                 || deEsserOn || mbOn || compOn || expOn || softOn || limOn
                 || deharshOn || pauseOn || ditherMode != 0 || deltaSoloOn || bassMgmtOn || dynamicEQOn || dialogueLevelerOn || firOn || mainsNotchOn else {
@@ -2800,11 +2816,6 @@ final class DynamicsProcessor: @unchecked Sendable {
                 guard let buf = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
                 mainsNotchChains[ch].process(buffer: buf, frameCount: UInt32(count))
             }
-        }
-        // Feed the detector regardless of whether the notcher is enabled —
-        // Detect/Tracking should work while auditioning with it off.
-        if let mono = abl[0].mData?.assumingMemoryBound(to: Float.self) {
-            mainsHumDetector.accumulate(mono, count: count)
         }
 
         // Stage −2: Spectral noise gate.

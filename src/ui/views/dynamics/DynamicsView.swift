@@ -190,6 +190,8 @@ struct DynamicsInlineView: View {
                         // Column 1 — early signal chain
                         definitionEntry(title: "Infrasonic Filter", body: "Steep high-pass filter removing subsonic content below the threshold of hearing. Protects drivers and amplifiers from HVAC turbulence, record warps, and room pressurisation. Does not affect audible content when set at or below 20 Hz.")
                         Divider()
+                        definitionEntry(title: "Mains Hum Notch", body: "Cascade of narrow notches at the mains frequency and its harmonics, removing 50/60 Hz electrical hum and buzz. Works immediately from the nominal region setting with no measurement required; Detect measures the actual fundamental for sources that have drifted from nominal (tape or turntable speed variation), and Tracking continuously re-measures to follow further drift. Runs before the Denoiser so a strong hum tone can't skew its noise-floor estimate.")
+                        Divider()
                         definitionEntry(title: "Denoiser", body: "Spectral subtraction noise floor reduction using a running noise power estimate. The Dehiss preset, combined with a captured noise profile, targets stationary broadband hiss/static on lower-quality source material.")
                         Divider()
                         definitionEntry(title: "Dialogue-Relative Leveler", body: "Dynamically boosts dialogue when it's being masked by other audio content. Compares the dialogue band's level against the full program level and applies gain only when the gap exceeds the target threshold. Uses asymmetric attack/release for natural response.")
@@ -320,6 +322,115 @@ struct DynamicsInlineView: View {
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()
+                }
+            }
+            let mainsNotchEasterEgg = store.dynamicsConfig.advanced.mainsNotch.enabled
+                                    && store.dynamicsConfig.advanced.mainsNotch.region == .sixty
+            col2ToggleWithSettings(
+                label: mainsNotchEasterEgg ? "NOTCH SIXTY" : "Mains Notch",
+                isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.mainsNotch.enabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.enabled = v; store.updateAdvancedProcessing(adv) }
+                ),
+                fullName: "Mains Hum Notch Filter",
+                labelColor: mainsNotchEasterEgg
+                    ? Color(red: 232.0/255.0, green: 168.0/255.0, blue: 74.0/255.0)
+                    : nil,
+                onReset: {
+                    var adv = store.dynamicsConfig.advanced
+                    let d = MainsNotchConfig()
+                    adv.mainsNotch.region = d.region
+                    adv.mainsNotch.harmonicCount = d.harmonicCount
+                    adv.mainsNotch.harmonicDepthsDB = d.harmonicDepthsDB
+                    adv.mainsNotch.q = d.q
+                    adv.mainsNotch.trackingEnabled = d.trackingEnabled
+                    store.updateAdvancedProcessing(adv)
+                }
+            ) {
+                // Region picker (segmented, like Quality mode)
+                Picker("", selection: Binding(
+                    get: { store.dynamicsConfig.advanced.mainsNotch.region },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.region = v; store.updateAdvancedProcessing(adv) }
+                )) {
+                    Text("50 Hz").tag(MainsRegion.fifty)
+                    Text("60 Hz").tag(MainsRegion.sixty)
+                }
+                .pickerStyle(.segmented)
+
+                Divider()
+
+                // Detect button + status, wrapped in the same TimelineView polling
+                // pattern established for denoiser capture
+                TimelineView(.periodic(from: .now, by: 1.0/10.0)) { _ in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text("Detect")
+                                .font(.system(size: 13)).foregroundStyle(.secondary)
+                                .frame(width: 80, alignment: .leading)
+                            Button(store.mainsNotchIsCapturing ? "Detecting…" : "Detect") {
+                                store.startMainsNotchDetect()
+                            }
+                            .disabled(store.mainsNotchIsCapturing)
+                            Text(String(format: "%.2f Hz", store.mainsNotchCurrentHz))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if store.mainsNotchIsCapturing {
+                            ProgressView(value: store.mainsNotchCaptureProgress)
+                        }
+                    }
+                }
+
+                // Tracking toggle
+                Toggle("Continuous Tracking", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.mainsNotch.trackingEnabled },
+                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.trackingEnabled = v; store.updateAdvancedProcessing(adv) }
+                ))
+
+                Divider()
+
+                // Harmonic count
+                DynamicsSliderRow(
+                    label: "Harmonics",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.mainsNotch.harmonicCount) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.harmonicCount = Int(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 1...16,
+                    step: 1,
+                    formatValue: { String(format: "%.0f", $0) }
+                )
+
+                // Global Q
+                DynamicsSliderRow(
+                    label: "Q",
+                    value: Binding(
+                        get: { Double(store.dynamicsConfig.advanced.mainsNotch.q) },
+                        set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.q = Float(v); store.updateAdvancedProcessing(adv) }
+                    ),
+                    range: 5...60,
+                    step: 1,
+                    formatValue: { String(format: "%.0f", $0) }
+                )
+
+                Divider()
+
+                // Per-harmonic depth list — only show rows up to the current harmonicCount
+                ForEach(0..<Int(store.dynamicsConfig.advanced.mainsNotch.harmonicCount), id: \.self) { i in
+                    let freq = store.mainsNotchCurrentHz * Double(i + 1)
+                    DynamicsSliderRow(
+                        label: "H\(i + 1) (\(String(format: "%.0f", freq)) Hz)",
+                        value: Binding(
+                            get: { Double(store.dynamicsConfig.advanced.mainsNotch.harmonicDepthsDB[i]) },
+                            set: { v in
+                                var adv = store.dynamicsConfig.advanced
+                                adv.mainsNotch.harmonicDepthsDB[i] = Float(v)
+                                store.updateAdvancedProcessing(adv)
+                            }
+                        ),
+                        range: -40.0...0.0,
+                        step: 1.0,
+                        formatValue: { String(format: "%.0f dB", $0) }
+                    )
                 }
             }
             col2ToggleWithSettings(
@@ -538,115 +649,6 @@ struct DynamicsInlineView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                }
-            }
-            let mainsNotchEasterEgg = store.dynamicsConfig.advanced.mainsNotch.enabled
-                                    && store.dynamicsConfig.advanced.mainsNotch.region == .sixty
-            col2ToggleWithSettings(
-                label: mainsNotchEasterEgg ? "NOTCH SIXTY" : "Mains Notch",
-                isOn: Binding(
-                    get: { store.dynamicsConfig.advanced.mainsNotch.enabled },
-                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.enabled = v; store.updateAdvancedProcessing(adv) }
-                ),
-                fullName: "Mains Hum Notch Filter",
-                labelColor: mainsNotchEasterEgg
-                    ? Color(red: 232.0/255.0, green: 168.0/255.0, blue: 74.0/255.0)
-                    : nil,
-                onReset: {
-                    var adv = store.dynamicsConfig.advanced
-                    let d = MainsNotchConfig()
-                    adv.mainsNotch.region = d.region
-                    adv.mainsNotch.harmonicCount = d.harmonicCount
-                    adv.mainsNotch.harmonicDepthsDB = d.harmonicDepthsDB
-                    adv.mainsNotch.q = d.q
-                    adv.mainsNotch.trackingEnabled = d.trackingEnabled
-                    store.updateAdvancedProcessing(adv)
-                }
-            ) {
-                // Region picker (segmented, like Quality mode)
-                Picker("", selection: Binding(
-                    get: { store.dynamicsConfig.advanced.mainsNotch.region },
-                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.region = v; store.updateAdvancedProcessing(adv) }
-                )) {
-                    Text("50 Hz").tag(MainsRegion.fifty)
-                    Text("60 Hz").tag(MainsRegion.sixty)
-                }
-                .pickerStyle(.segmented)
-
-                Divider()
-
-                // Detect button + status, wrapped in the same TimelineView polling
-                // pattern established for denoiser capture
-                TimelineView(.periodic(from: .now, by: 1.0/10.0)) { _ in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Text("Detect")
-                                .font(.system(size: 13)).foregroundStyle(.secondary)
-                                .frame(width: 80, alignment: .leading)
-                            Button(store.mainsNotchIsCapturing ? "Detecting…" : "Detect") {
-                                store.startMainsNotchDetect()
-                            }
-                            .disabled(store.mainsNotchIsCapturing)
-                            Text(String(format: "%.2f Hz", store.mainsNotchCurrentHz))
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                        if store.mainsNotchIsCapturing {
-                            ProgressView(value: store.mainsNotchCaptureProgress)
-                        }
-                    }
-                }
-
-                // Tracking toggle
-                Toggle("Continuous Tracking", isOn: Binding(
-                    get: { store.dynamicsConfig.advanced.mainsNotch.trackingEnabled },
-                    set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.trackingEnabled = v; store.updateAdvancedProcessing(adv) }
-                ))
-
-                Divider()
-
-                // Harmonic count
-                DynamicsSliderRow(
-                    label: "Harmonics",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.mainsNotch.harmonicCount) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.harmonicCount = Int(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 1...16,
-                    step: 1,
-                    formatValue: { String(format: "%.0f", $0) }
-                )
-
-                // Global Q
-                DynamicsSliderRow(
-                    label: "Q",
-                    value: Binding(
-                        get: { Double(store.dynamicsConfig.advanced.mainsNotch.q) },
-                        set: { v in var adv = store.dynamicsConfig.advanced; adv.mainsNotch.q = Float(v); store.updateAdvancedProcessing(adv) }
-                    ),
-                    range: 5...60,
-                    step: 1,
-                    formatValue: { String(format: "%.0f", $0) }
-                )
-
-                Divider()
-
-                // Per-harmonic depth list — only show rows up to the current harmonicCount
-                ForEach(0..<Int(store.dynamicsConfig.advanced.mainsNotch.harmonicCount), id: \.self) { i in
-                    let freq = store.mainsNotchCurrentHz * Double(i + 1)
-                    DynamicsSliderRow(
-                        label: "H\(i + 1) (\(String(format: "%.0f", freq)) Hz)",
-                        value: Binding(
-                            get: { Double(store.dynamicsConfig.advanced.mainsNotch.harmonicDepthsDB[i]) },
-                            set: { v in
-                                var adv = store.dynamicsConfig.advanced
-                                adv.mainsNotch.harmonicDepthsDB[i] = Float(v)
-                                store.updateAdvancedProcessing(adv)
-                            }
-                        ),
-                        range: -40.0...0.0,
-                        step: 1.0,
-                        formatValue: { String(format: "%.0f dB", $0) }
-                    )
                 }
             }
             col2ToggleWithSettings(
