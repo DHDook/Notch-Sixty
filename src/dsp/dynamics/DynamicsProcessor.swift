@@ -1795,7 +1795,7 @@ final class DynamicsProcessor: @unchecked Sendable {
     /// ~30 Hz UI-facing timer (or create a dedicated one) — drives both the
     /// frequency slew and the resulting coefficient rebuild.
     private func startMainsNotchTicking(sampleRate: Double) {
-        mainsNotchTickTimer?.invalidate()
+        guard mainsNotchTickTimer == nil else { return }
         mainsNotchTickTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.mainsHumDetector.tick(deltaSeconds: 1.0/30.0)
@@ -2606,6 +2606,14 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Reset dialogue leveler state for new sample rate
         dialogueLeveler.resetState(sampleRate: sampleRate)
+        
+        // Restart mains notch timer with new sample rate
+        mainsNotchTickTimer?.invalidate()
+        mainsNotchTickTimer = nil
+        if mainsNotchConfigured.enabled {
+            startMainsNotchTicking(sampleRate: sampleRate)
+        }
+        
         limiterGainCurrent  = 1.0
         for i in 0..<deEsserFilterState.count  { deEsserFilterState[i]  = 0 }
         for i in 0..<mbFilterState.count        { mbFilterState[i]        = 0 }
