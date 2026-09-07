@@ -414,6 +414,11 @@ struct DynamicsInlineView: View {
 
                 Divider()
 
+                Text("Defaults taper from −24 dB at the fundamental toward −6 dB at higher harmonics — hum is usually strongest at low harmonics. Adjust any harmonic individually if your source doesn't follow that pattern.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 // Per-harmonic depth list — only show rows up to the current harmonicCount
                 ForEach(0..<Int(store.dynamicsConfig.advanced.mainsNotch.harmonicCount), id: \.self) { i in
                     let freq = store.mainsNotchCurrentHz * Double(i + 1)

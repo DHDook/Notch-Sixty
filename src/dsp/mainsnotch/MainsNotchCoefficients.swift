@@ -2,11 +2,11 @@ import Foundation
 
 enum MainsNotchCoefficients {
     /// Default reduction depth taper: harmonic 1 (fundamental) gets the
-    /// deepest cut; each subsequent harmonic gets 2 dB less, floored at
+    /// deepest cut; each subsequent harmonic gets 2 dB less, capped at
     /// -6 dB. This is a starting point — fully overridable per harmonic
     /// via the UI.
     static func defaultDepthsDB(count: Int) -> [Float] {
-        (1...count).map { max(-24.0 + Float($0 - 1) * 2.0, -6.0) }
+        (1...count).map { min(-24.0 + Float($0 - 1) * 2.0, -6.0) }
     }
 
     /// Q applied to every harmonic notch. Not per-harmonic in this version
