@@ -601,16 +601,6 @@ struct CurveSnapshot {
     /// Current contour treble gain (dB) for the magnitude overlay.
     let contourTrebleGainDB: Double
 
-    /// Group delay in milliseconds of the EQ band cascade at `phaseFrequencies`.
-    let eqGroupDelayMs:     [Double]
-
-    /// Per-output-channel group delay in milliseconds (keyed by channel index).
-    /// Includes crossover, per-channel delays, and all-pass corrections.
-    let channelGroupDelayMs: [Int: [Double]]
-
-    /// Shared frequency grid used for phase and group delay arrays.
-    let phaseFrequencies:   [Double]   // log-spaced 20 Hz – 20 kHz, 256 points
-
     // Mains Hum Notch fields
     let mainsNotchEnabled:       Bool
     let mainsNotchHarmonicCount: Int
