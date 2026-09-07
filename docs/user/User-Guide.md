@@ -107,7 +107,7 @@ Keep the **Peak OUT** meter below **−0.5 dBFS** continuously. The Limiter (Sta
 | Low Shelf | Boosts or cuts all frequencies below the corner | Bass warmth or thinness |
 | High Pass | Rolls off everything below the frequency | Removing rumble, sub-bass below speaker range |
 | Low Pass | Rolls off everything above the frequency | Taming harshness above hearing range |
-| Notch | Very narrow deep cut | Removing electrical hum (50/60 Hz) |
+| Notch | Very narrow deep cut | Removing electrical hum (50/60 Hz) — see the dedicated Mains Hum Notch (Part 8) for auto-detected, multi-harmonic removal |
 | All-Pass | Changes phase without affecting amplitude | Phase alignment, group delay correction |
 
 ### Bandwidth (Q) Guidance
@@ -524,7 +524,7 @@ Synchronises the internal processing buffer to the selected latency mode. When e
 
 ## Part 8 — LTI Processing Suite
 
-The LTI (Linear Time-Invariant) processing suite contains ten advanced signal processing algorithms. All ten have master bypass toggles in both the Dynamics Inline panel and the Dynamics configuration panel.
+The LTI (Linear Time-Invariant) processing suite contains eleven advanced signal processing algorithms. All eleven have master bypass toggles in both the Dynamics Inline panel and the Dynamics configuration panel.
 
 ### Symmetry Balance
 
@@ -563,26 +563,94 @@ This simulates the acoustic crosstalk that occurs with speakers at approximately
 
 **Use case:** Particularly useful over headphones to simulate speaker listening. The 0.3 default crossfeed amount is calibrated for a standard 60° stereo loudspeaker placement angle.
 
-### Linear Denoising Engine
+### Mains Hum Notch
 
-**What it does:** Spectral subtraction noise floor reduction. The engine builds a running estimate of the noise power spectrum (measured during quiet passages) and subtracts it from each analysis frame. The threshold sets the estimated noise floor ceiling.
+**What it does:** A cascade of narrow cuts at the mains electrical
+frequency (50 or 60 Hz) and its harmonics, removing hum and buzz picked up
+from ground loops, transformers, dimmer switches, or nearby mains-powered
+equipment. Unlike the Linear Denoising Engine below — which targets
+broadband, non-tonal noise like hiss — this is purpose-built for the
+narrowband, harmonically-structured character of electrical hum, and runs
+earlier in the chain so a strong hum tone can't skew the Denoiser's
+noise-floor estimate.
 
 **Mathematical Model:**
-Spectral subtraction with over-subtraction factor and spectral floor:
+Each harmonic is an independent parametric cut:
 ```
-|Y(f)|² = |X(f)|² - α × |N(f)|²
+notch_k(f) = peaking_filter(frequency = f₀ × k, Q, gain_dB = depth_k)   for k = 1...harmonic_count
 ```
-Where X(f) is the input spectrum, N(f) is the noise estimate, and α is the over-subtraction factor (typically 1-2). To prevent musical artifacts:
-```
-|Y(f)|² = max(|Y(f)|², β × |X(f)|²)
-```
-Where β is the spectral floor parameter (typically 0.01-0.1). The noise estimate is updated during quiet passages using exponential smoothing:
-```
-|N(f)|²(n) = γ × |X(f)|²(n) + (1-γ) × |N(f)|²(n-1)
-```
-Only updated when the signal level is below the threshold parameter.
+Where f₀ is the fundamental (50 or 60 Hz nominal, or a precisely measured
+value). Using an adjustable-depth bell rather than a mathematically pure
+notch means each harmonic's reduction is a real, continuous amount rather
+than an all-or-nothing null. When the fundamental updates — from a new
+measurement or continuous tracking — the notch frequencies slide smoothly
+to the new value rather than jumping, avoiding an audible sweep.
 
-**Use case:** Removes low-level HVAC, room noise, and transformer hum from recordings made in live or untreated spaces.
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| Region | 50 Hz / 60 Hz | Nominal mains frequency for your region — works immediately with no measurement needed |
+| Detect | button | One-shot measurement of the actual fundamental, for sources that have drifted from nominal (tape or turntable speed variation) |
+| Continuous Tracking | On / Off | Continuously re-measures and follows further drift over the course of playback |
+| Harmonics | 1 – 16 | Number of harmonic notches applied (default 8 — covers the fundamental through the 8th harmonic, comfortably below where most vocal and instrumental fundamentals live) |
+| Q | 5 – 60 | Notch width — higher is narrower |
+| Per-harmonic Depth | 0 to −40 dB | Independent reduction amount for each harmonic; higher harmonics typically need less, since hum energy generally falls off with harmonic order |
+
+**Use case:** Removes 50/60 Hz electrical hum and its harmonics — the
+"buzz" heard from ground loops, transformer coupling, or electrically
+noisy equipment sharing a circuit with your source gear.
+
+**Setup:** For most cases, select your region and enable — no measurement
+required, since real-world mains frequency deviates only slightly from
+nominal. If the source has drifted from nominal (common on analogue tape
+or turntable transfers running slightly off-speed), press Detect during a
+passage where the hum is clearly audible. For sources with ongoing pitch
+drift over the length of the recording, enable Continuous Tracking as well
+so the notches keep following it.
+
+### Linear Denoising Engine
+
+**What it does:** Adaptive spectral noise reduction using a per-frequency
+Wiener filter. Rather than a single broadband threshold, the engine tracks
+a separate noise-floor estimate for every frequency, using the quietest
+recent measurement at that frequency (minimum-statistics tracking,
+corrected for a small, well-known statistical bias). Suppression gain is
+computed using a decision-directed SNR estimate — the standard method for
+avoiding the robotic, "underwater" artefacts common to older-generation
+noise reduction — and is additionally smoothed across neighbouring
+frequencies before being applied, since real noise has a naturally smooth
+spectral shape and isolated per-frequency spikes in the estimate are
+themselves a source of artefacts, not signal.
+
+**Mathematical Model:**
+```
+λ[k] = bias × min over recent frames( |X(f)|²[k] )                 (per-bin noise floor estimate)
+γ[k] = |X(f)|²[k] / λ[k]                                            (instantaneous SNR)
+ξ[k] = α·(G_prev[k]² × |X_prev(f)|²[k] / λ[k]) + (1-α)·max(γ[k]-1, 0)   (decision-directed SNR estimate)
+G[k] = max(floor[k], ξ[k] / (ξ[k] + 1))                             (suppression gain, per frequency)
+```
+Both λ[k] (the noise floor estimate) and the resulting G[k] (the gain) are
+separately smoothed across neighbouring frequencies before use.
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| Preset | Natural / Standard / Aggressive / Dehiss | Bundles a matched safety threshold and maximum suppression depth. Dehiss is tuned specifically for stationary hiss/static on poor-quality recordings. |
+| Reduction Amount | 0 – 100% | How close suppression is allowed to get to the active preset's maximum depth |
+| Threshold | dB | A safety floor under the noise estimate — guards against under-suppression on material that rarely goes fully silent, rather than setting suppression depth directly |
+| Quality | Quality / High / Ultra | FFT resolution. Higher settings track a longer real-time noise-floor averaging window and separate hiss from signal more cleanly, at higher CPU cost. |
+| Frequency Range | Off by default; two edges when enabled | Optionally excludes a frequency band from processing entirely — protect a vocal or instrument's body while still suppressing rumble below it and hiss above it, or replicate a classic single-cutoff "only touch the highs" approach by leaving one edge at 0 Hz |
+
+**Noise Profile Capture:** Press Capture during a hiss-only passage
+(about 2 seconds) to measure the actual noise character directly, rather
+than relying on continuous adaptive tracking. Recommended for the Dehiss
+preset, since hiss character is normally consistent across an entire
+recording. Reset returns to adaptive tracking.
+
+**Use case:** Removes stationary broadband noise — tape hiss, vinyl
+surface noise, room tone, or codec artefacts from phone and field
+recordings — from lower-quality source material. For electrical hum
+specifically, use the Mains Hum Notch above instead; it targets the
+tonal, harmonic structure of hum directly rather than treating it as
+broadband noise.
 
 ### Speaker Impulse Response Alignment
 
