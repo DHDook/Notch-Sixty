@@ -483,6 +483,25 @@ struct EQCurveView: View {
                 totalDB += 10.0 * log10(max(1e-30, magSq))
             }
 
+            // --- Mains hum notch cascade (if enabled) ---
+            if snapshot.mainsNotchEnabled {
+                for h in 1...max(1, snapshot.mainsNotchHarmonicCount) {
+                    let freq = snapshot.mainsNotchFundamentalHz * Double(h)
+                    let depth = h - 1 < snapshot.mainsNotchDepthsDB.count
+                        ? snapshot.mainsNotchDepthsDB[h - 1] : -6.0
+                    let c = BiquadMath.peakingEQ(
+                        sampleRate: sr, frequency: freq,
+                        q: Double(snapshot.mainsNotchQ), gain: Double(depth)
+                    )
+                    let nRe = c.b0 + c.b1*cosW  + c.b2*cos2W
+                    let nIm = -(c.b1*sinW) - c.b2*sin2W
+                    let dRe = 1.0  + c.a1*cosW  + c.a2*cos2W
+                    let dIm = -(c.a1*sinW) - c.a2*sin2W
+                    let magSq = (nRe*nRe + nIm*nIm) / max(1e-30, dRe*dRe + dIm*dIm)
+                    totalDB += 10.0 * log10(max(1e-30, magSq))
+                }
+            }
+
             return totalDB
         }
     }
@@ -521,6 +540,13 @@ struct CurveSnapshot {
     /// Current contour treble gain (dB) for the magnitude overlay.
     let contourTrebleGainDB: Double
 
+    // Mains Hum Notch fields
+    let mainsNotchEnabled:       Bool
+    let mainsNotchHarmonicCount: Int
+    let mainsNotchDepthsDB:      [Float]
+    let mainsNotchQ:             Float
+    let mainsNotchFundamentalHz: Double
+
     @MainActor
     init(store: EqualiserStore) {
         let cfg = store.eqConfiguration
@@ -531,6 +557,11 @@ struct CurveSnapshot {
         self.contourEnabled  = store.dynamicsConfig.advanced.loudnessContourEnabled
         self.deharshEnabled  = store.dynamicsConfig.advanced.deharshFilterEnabled
         self.deharshTiltDB   = Double(store.dynamicsConfig.advanced.deharshTiltAmountDB)
+        self.mainsNotchEnabled       = store.dynamicsConfig.advanced.mainsNotch.enabled
+        self.mainsNotchHarmonicCount = store.dynamicsConfig.advanced.mainsNotch.harmonicCount
+        self.mainsNotchDepthsDB      = store.dynamicsConfig.advanced.mainsNotch.harmonicDepthsDB
+        self.mainsNotchQ             = store.dynamicsConfig.advanced.mainsNotch.q
+        self.mainsNotchFundamentalHz = store.mainsNotchCurrentHz
 
         // ── Phase and group delay frequency grid ──────────────────────────
         let N = 256
@@ -632,6 +663,11 @@ struct CurveSnapshot {
         }
         h = h &* 31 &+ (contourEnabled ? 1 : 0)
         h = h &* 31 &+ (deharshEnabled ? 1 : 0)
+        h = h &* 31 &+ (mainsNotchEnabled ? 1 : 0)
+        h = h &* 31 &+ mainsNotchHarmonicCount
+        h = h &* 31 &+ Int(mainsNotchQ * 100)
+        h = h &* 31 &+ Int(mainsNotchFundamentalHz * 100)
+        h = h &* 31 &+ mainsNotchDepthsDB.reduce(0) { $0 &+ Int($1 * 100) }
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         h = h &* 31 &+ chGD.values.flatMap { $0 }.reduce(0) { $0 &+ Int($1 * 100) }
         self.changeToken = h
@@ -648,7 +684,12 @@ struct CurveSnapshot {
         deharshEnabled: Bool,
         deharshTiltDB: Double,
         contourBassGainDB: Double,
-        contourTrebleGainDB: Double
+        contourTrebleGainDB: Double,
+        mainsNotchEnabled: Bool = false,
+        mainsNotchHarmonicCount: Int = 8,
+        mainsNotchDepthsDB: [Float] = [],
+        mainsNotchQ: Float = 20.0,
+        mainsNotchFundamentalHz: Double = 60.0
     ) {
         self.bands              = bands
         self.activeBandCount    = activeBandCount
@@ -659,6 +700,11 @@ struct CurveSnapshot {
         self.deharshTiltDB      = deharshTiltDB
         self.contourBassGainDB  = contourBassGainDB
         self.contourTrebleGainDB = contourTrebleGainDB
+        self.mainsNotchEnabled       = mainsNotchEnabled
+        self.mainsNotchHarmonicCount = mainsNotchHarmonicCount
+        self.mainsNotchDepthsDB      = mainsNotchDepthsDB
+        self.mainsNotchQ             = mainsNotchQ
+        self.mainsNotchFundamentalHz = mainsNotchFundamentalHz
         self.channelGroupDelayMs = [:]
         self.phaseFrequencies   = (0..<256).map { i in
             pow(10.0, log10(20.0) + Double(i) / 255.0 * (log10(20_000.0) - log10(20.0)))
@@ -721,6 +767,11 @@ struct CurveSnapshot {
         }
         h = h &* 31 &+ (contourEnabled ? 1 : 0)
         h = h &* 31 &+ (deharshEnabled ? 1 : 0)
+        h = h &* 31 &+ (mainsNotchEnabled ? 1 : 0)
+        h = h &* 31 &+ mainsNotchHarmonicCount
+        h = h &* 31 &+ Int(mainsNotchQ * 100)
+        h = h &* 31 &+ Int(mainsNotchFundamentalHz * 100)
+        h = h &* 31 &+ mainsNotchDepthsDB.reduce(0) { $0 &+ Int($1 * 100) }
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         self.changeToken = h
     }

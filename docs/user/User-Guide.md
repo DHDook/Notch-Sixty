@@ -175,6 +175,12 @@ The dynamics processing consists of 10 stages applied in sequence. Each can be i
 
 ```
 Input Signal
+  → Infrasonic Filter (runs first, always — see note below)
+  → Mains Hum Notch (optional — Part 8)
+  → Linear Denoising Engine (optional — Part 8)
+  → Dynamic EQ (optional — see note below)
+  → Dialogue-Relative Leveler (optional — see note below)
+  → FIR Impulse Response (optional — see note below)
   → [1] Stereo Fold-Down / Mode (optional)
   → [2] DC Offset Filter (optional)
   → [3] Stereo Widener (optional)
@@ -185,14 +191,19 @@ Input Signal
   → [8] Wideband Compressor
   → [9] Expander
   → [10] Soft Clipper
-  → [De-Harsh Filter] (optional)
+  → [De-Harsh Filter] (optional — Part 7)
   → [Brickwall Limiter]
-  → [L/R Balance + Time Delay]
-  → [Pause Gate]
+  → [Speaker IR Alignment] (optional — Part 8)
+  → [Symmetry Balance + L/R Time Delay] (optional — Part 7 & Part 8)
+  → [Panning Gain Matrix / Crossfeed] (optional — Part 8)
+  → [Crosstalk Cancellation] (optional — Part 8)
+  → [Pause Gate] (optional — Part 7)
   → [TPDF Dither]
-  → [LTI Processing Suite]
+  → [Bass Management / Crossover] (optional — see note below)
   → Output Signal
 ```
+
+**Note:** six items above (Infrasonic Filter, Dynamic EQ, Dialogue-Relative Leveler, FIR Impulse Response, and Bass Management/Crossover) don't yet have a write-up anywhere in this guide — not just missing from this diagram. They're real, confirmed stages in the actual chain, but writing them up accurately needs each one's actual implementation checked first (parameters, ranges, behavior), the same way Mains Notch and the Denoiser were — not something to guess at from the name alone. Worth a dedicated follow-up.
 
 ### Stage-by-Stage Reference
 
@@ -431,6 +442,15 @@ Attack is instantaneous for true brickwall behavior.
 | True-Peak Guard | ON / OFF | **Always ON** — engages 4x polyphase oversampling to catch inter-sample peaks and prevent hidden analogue overshoots from clipping the DAC output buffer. |
 
 **Why −0.5 dBFS?** Standard digital limiters operate on discrete sample values. When the DAC performs digital-to-analogue reconstruction, the continuous analogue waveform can peak higher between samples (an inter-sample peak). A −0.5 dBFS ceiling combined with True-Peak Guard provides a mathematically guaranteed safety margin so the analogue signal entering the preamplifier's input never exceeds 0 dBV.
+
+#### Speaker IR Alignment, Panning Gain Matrix, Crosstalk Cancellation
+
+Three more stages run here, between the Limiter and the Pause Gate — see
+Part 8 for full detail on each: **Speaker IR Alignment** (fractional-sample
+delay compensation for multi-driver speakers), **Symmetry Balance** (L/R
+level correction for listening-position asymmetry, together with L/R Time
+Delay from Part 7), **Panning Gain Matrix** (crossfeed simulation), and
+**Crosstalk Cancellation** (binaural inversion filtering).
 
 ---
 
