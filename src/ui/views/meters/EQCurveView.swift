@@ -502,6 +502,67 @@ struct EQCurveView: View {
                 }
             }
 
+            // --- Infrasonic high-pass filter (if enabled and affecting main output) ---
+            if snapshot.infrasonicAffectsMainCurve {
+                let mappedSlope: FilterSlope = {
+                    switch snapshot.infrasonicSlope {
+                    case .db24: return .db24
+                    case .db48: return .db48
+                    case .db96: return .db96
+                    }
+                }()
+                let sections = BiquadMath.calculateSections(
+                    type: .highPass, sampleRate: sr,
+                    frequency: Double(snapshot.infrasonicCutoffHz),
+                    q: 0.7071, gain: 0.0, slope: mappedSlope
+                )
+                for c in sections {
+                    let nRe = c.b0 + c.b1*cosW  + c.b2*cos2W
+                    let nIm = -(c.b1*sinW) - c.b2*sin2W
+                    let dRe = 1.0  + c.a1*cosW  + c.a2*cos2W
+                    let dIm = -(c.a1*sinW) - c.a2*sin2W
+                    let magSq = (nRe*nRe + nIm*nIm) / max(1e-30, dRe*dRe + dIm*dIm)
+                    totalDB += 10.0 * log10(max(1e-30, magSq))
+                }
+            }
+
+            // --- Bass management crossover (main-output high-pass side only) ---
+            if snapshot.bassManagementEnabled {
+                let crossover = BassManagementCrossover(
+                    crossoverHz: snapshot.bassManagementCrossoverHz,
+                    slope: snapshot.bassManagementSlope,
+                    sampleRate: sr,
+                    crossoverType: snapshot.bassManagementType,
+                    coefficientDecouplingEnabled: snapshot.coefficientDecouplingEnabled
+                )
+                let sections: [(b0: Float, b1: Float, b2: Float, na1: Float, na2: Float)]
+                if snapshot.asymmetricCrossoverEnabled {
+                    let hpCrossover = BassManagementCrossover(
+                        crossoverHz: snapshot.mainsHighPassHz,
+                        slope: snapshot.bassManagementSlope,
+                        sampleRate: sr,
+                        crossoverType: snapshot.bassManagementType,
+                        coefficientDecouplingEnabled: snapshot.coefficientDecouplingEnabled
+                    )
+                    sections = hpCrossover.highPassSections
+                } else {
+                    sections = crossover.highPassSections
+                }
+                for c in sections {
+                    // Sections here are already (b0,b1,b2,na1,na2) — na1/na2
+                    // are the NEGATED form (processBiquad's convention).
+                    // Flip back to standard a1/a2 for the magnitude formula.
+                    let a1 = -Double(c.na1)
+                    let a2 = -Double(c.na2)
+                    let nRe = Double(c.b0) + Double(c.b1)*cosW + Double(c.b2)*cos2W
+                    let nIm = -(Double(c.b1)*sinW) - Double(c.b2)*sin2W
+                    let dRe = 1.0 + a1*cosW + a2*cos2W
+                    let dIm = -(a1*sinW) - a2*sin2W
+                    let magSq = (nRe*nRe + nIm*nIm) / max(1e-30, dRe*dRe + dIm*dIm)
+                    totalDB += 10.0 * log10(max(1e-30, magSq))
+                }
+            }
+
             return totalDB
         }
     }
@@ -540,12 +601,41 @@ struct CurveSnapshot {
     /// Current contour treble gain (dB) for the magnitude overlay.
     let contourTrebleGainDB: Double
 
+    /// Group delay in milliseconds of the EQ band cascade at `phaseFrequencies`.
+    let eqGroupDelayMs:     [Double]
+
+    /// Per-output-channel group delay in milliseconds (keyed by channel index).
+    /// Includes crossover, per-channel delays, and all-pass corrections.
+    let channelGroupDelayMs: [Int: [Double]]
+
+    /// Shared frequency grid used for phase and group delay arrays.
+    let phaseFrequencies:   [Double]   // log-spaced 20 Hz – 20 kHz, 256 points
+
     // Mains Hum Notch fields
     let mainsNotchEnabled:       Bool
     let mainsNotchHarmonicCount: Int
     let mainsNotchDepthsDB:      [Float]
     let mainsNotchQ:             Float
     let mainsNotchFundamentalHz: Double
+
+    // Infrasonic Filter fields
+    let infrasonicEnabled:  Bool
+    let infrasonicCutoffHz: Float
+    let infrasonicSlope:    InfrasonicFilterConfig.InfrasonicSlope
+    let infrasonicTarget:   InfrasonicFilterConfig.ApplicationTarget
+
+    var infrasonicAffectsMainCurve: Bool {
+        infrasonicEnabled && infrasonicTarget != .subOutputOnly
+    }
+
+    // Bass Management fields
+    let bassManagementEnabled:     Bool
+    let bassManagementCrossoverHz: Float
+    let bassManagementSlope:       BassCrossoverSlope
+    let bassManagementType:        CrossoverType
+    let asymmetricCrossoverEnabled: Bool
+    let mainsHighPassHz:            Float
+    let coefficientDecouplingEnabled: Bool
 
     @MainActor
     init(store: EqualiserStore) {
@@ -562,6 +652,17 @@ struct CurveSnapshot {
         self.mainsNotchDepthsDB      = store.dynamicsConfig.advanced.mainsNotch.harmonicDepthsDB
         self.mainsNotchQ             = store.dynamicsConfig.advanced.mainsNotch.q
         self.mainsNotchFundamentalHz = store.mainsNotchCurrentHz
+        self.infrasonicEnabled  = store.dynamicsConfig.advanced.infrasonicFilter.isEnabled
+        self.infrasonicCutoffHz = store.dynamicsConfig.advanced.infrasonicFilter.cutoffHz
+        self.infrasonicSlope    = store.dynamicsConfig.advanced.infrasonicFilter.slope
+        self.infrasonicTarget   = store.dynamicsConfig.advanced.infrasonicFilter.target
+        self.bassManagementEnabled       = store.dynamicsConfig.advanced.bassManagement.enabled
+        self.bassManagementCrossoverHz   = store.dynamicsConfig.advanced.bassManagement.crossoverHz
+        self.bassManagementSlope         = store.dynamicsConfig.advanced.bassManagement.slope
+        self.bassManagementType          = store.dynamicsConfig.advanced.bassManagement.crossoverType
+        self.asymmetricCrossoverEnabled  = store.dynamicsConfig.advanced.bassManagement.asymmetricCrossoverEnabled
+        self.mainsHighPassHz             = store.dynamicsConfig.advanced.bassManagement.mainsHighPassHz
+        self.coefficientDecouplingEnabled = store.dynamicsConfig.advanced.coefficientDecouplingEnabled
 
         // ── Phase and group delay frequency grid ──────────────────────────
         let N = 256
@@ -668,6 +769,17 @@ struct CurveSnapshot {
         h = h &* 31 &+ Int(mainsNotchQ * 100)
         h = h &* 31 &+ Int(mainsNotchFundamentalHz * 100)
         h = h &* 31 &+ mainsNotchDepthsDB.reduce(0) { $0 &+ Int($1 * 100) }
+        h = h &* 31 &+ (infrasonicEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(infrasonicCutoffHz * 100)
+        h = h &* 31 &+ infrasonicSlope.rawValue
+        h = h &* 31 &+ infrasonicTarget.rawValue
+        h = h &* 31 &+ (bassManagementEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(bassManagementCrossoverHz * 100)
+        h = h &* 31 &+ bassManagementSlope.rawValue
+        h = h &* 31 &+ bassManagementType.rawValue
+        h = h &* 31 &+ (asymmetricCrossoverEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(mainsHighPassHz * 100)
+        h = h &* 31 &+ (coefficientDecouplingEnabled ? 1 : 0)
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         h = h &* 31 &+ chGD.values.flatMap { $0 }.reduce(0) { $0 &+ Int($1 * 100) }
         self.changeToken = h
@@ -689,7 +801,18 @@ struct CurveSnapshot {
         mainsNotchHarmonicCount: Int = 8,
         mainsNotchDepthsDB: [Float] = [],
         mainsNotchQ: Float = 20.0,
-        mainsNotchFundamentalHz: Double = 60.0
+        mainsNotchFundamentalHz: Double = 60.0,
+        infrasonicEnabled: Bool = false,
+        infrasonicCutoffHz: Float = 18.0,
+        infrasonicSlope: InfrasonicFilterConfig.InfrasonicSlope = .db48,
+        infrasonicTarget: InfrasonicFilterConfig.ApplicationTarget = .mainChain,
+        bassManagementEnabled: Bool = false,
+        bassManagementCrossoverHz: Float = 80.0,
+        bassManagementSlope: BassCrossoverSlope = .lr4,
+        bassManagementType: CrossoverType = .linkwitzRiley,
+        asymmetricCrossoverEnabled: Bool = false,
+        mainsHighPassHz: Float = 80.0,
+        coefficientDecouplingEnabled: Bool = true
     ) {
         self.bands              = bands
         self.activeBandCount    = activeBandCount
@@ -705,6 +828,17 @@ struct CurveSnapshot {
         self.mainsNotchDepthsDB      = mainsNotchDepthsDB
         self.mainsNotchQ             = mainsNotchQ
         self.mainsNotchFundamentalHz = mainsNotchFundamentalHz
+        self.infrasonicEnabled  = infrasonicEnabled
+        self.infrasonicCutoffHz = infrasonicCutoffHz
+        self.infrasonicSlope    = infrasonicSlope
+        self.infrasonicTarget   = infrasonicTarget
+        self.bassManagementEnabled       = bassManagementEnabled
+        self.bassManagementCrossoverHz   = bassManagementCrossoverHz
+        self.bassManagementSlope         = bassManagementSlope
+        self.bassManagementType          = bassManagementType
+        self.asymmetricCrossoverEnabled  = asymmetricCrossoverEnabled
+        self.mainsHighPassHz             = mainsHighPassHz
+        self.coefficientDecouplingEnabled = coefficientDecouplingEnabled
         self.channelGroupDelayMs = [:]
         self.phaseFrequencies   = (0..<256).map { i in
             pow(10.0, log10(20.0) + Double(i) / 255.0 * (log10(20_000.0) - log10(20.0)))
@@ -772,6 +906,17 @@ struct CurveSnapshot {
         h = h &* 31 &+ Int(mainsNotchQ * 100)
         h = h &* 31 &+ Int(mainsNotchFundamentalHz * 100)
         h = h &* 31 &+ mainsNotchDepthsDB.reduce(0) { $0 &+ Int($1 * 100) }
+        h = h &* 31 &+ (infrasonicEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(infrasonicCutoffHz * 100)
+        h = h &* 31 &+ infrasonicSlope.rawValue
+        h = h &* 31 &+ infrasonicTarget.rawValue
+        h = h &* 31 &+ (bassManagementEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(bassManagementCrossoverHz * 100)
+        h = h &* 31 &+ bassManagementSlope.rawValue
+        h = h &* 31 &+ bassManagementType.rawValue
+        h = h &* 31 &+ (asymmetricCrossoverEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(mainsHighPassHz * 100)
+        h = h &* 31 &+ (coefficientDecouplingEnabled ? 1 : 0)
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         self.changeToken = h
     }
