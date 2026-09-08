@@ -68,7 +68,7 @@ struct OutputChannelMatrixView: View {
                 Text("Active Crossover")
             }
 
-            if store.outputChannelMatrix.isEnabled {
+            Group {
                 // TASK B: Active Crossover section
                 // (mode picker, lower/upper frequency, slope, type, LR vs Butterworth note)
                 Section {
@@ -156,6 +156,7 @@ struct OutputChannelMatrixView: View {
                     Text("Device Status")
                 }
             }
+            .disabled(!store.outputChannelMatrix.isEnabled)
         }
         .formStyle(.grouped)
         .padding()
