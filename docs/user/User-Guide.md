@@ -544,7 +544,7 @@ Synchronises the internal processing buffer to the selected latency mode. When e
 
 ## Part 8 — LTI Processing Suite
 
-The LTI (Linear Time-Invariant) processing suite contains eleven advanced signal processing algorithms. All eleven have master bypass toggles in both the Dynamics Inline panel and the Dynamics configuration panel.
+The LTI (Linear Time-Invariant) processing suite contains ten advanced signal processing algorithms. All ten have master bypass toggles in both the Dynamics Inline panel and the Dynamics configuration panel.
 
 ### Symmetry Balance
 
@@ -712,23 +712,6 @@ C = (HᵀH + λI)⁻¹Hᵀ
 Where λ is a regularization parameter. The recursive implementation updates the cancellation coefficients iteratively to adapt to room acoustics.
 
 **Use case:** Widens the perceived stereo image at the listening position beyond what the speakers' physical placement provides. Effective at typical room listening distances of 2–3 metres.
-
-### Room Boundary Early Reflection Cancellation
-
-**What it does:** An FIR comb filter tuned to the arrival time of first-order room boundary reflections (floor, ceiling, front wall). The Room Size control sets the estimated first-reflection arrival time in milliseconds.
-
-**Mathematical Model:**
-Comb filter with notches at reflection frequencies:
-```
-H(z) = 1 - α × z⁻ᴰ
-```
-Where D is the delay in samples corresponding to the reflection arrival time, and α controls the cancellation depth. The notch frequencies are at:
-```
-f_notch = n × fs / D  for n = 0, 1, 2, ...
-```
-The filter creates destructive interference at frequencies where the reflection arrives 180° out of phase with the direct sound. Multiple reflections can be addressed by cascading comb filters with different delays.
-
-**Estimating Room Size:** Measure the distance from the listener's head to the nearest reflective surface (typically the floor). Divide by the speed of sound (343 m/s) to get the one-way travel time. Multiply by 2 for the round trip. Example: 1.2 m floor distance → 2.4 m round trip → ~7 ms. Set Room Size to 7 ms.
 
 ### HPF Phase Linearisation
 

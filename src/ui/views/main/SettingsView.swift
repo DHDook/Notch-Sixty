@@ -862,6 +862,24 @@ struct RoomCalibrationTab: View {
                 Text("Microphone Calibration")
             }
 
+            // ── Reflection-Free Analysis ───────────────────────────────────────
+            Section {
+                Toggle("Reflection-Free Analysis", isOn: $store.useReflectionFreeWindow)
+
+                if store.useReflectionFreeWindow {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Analysis window: \(Int(store.reflectionFreeWindowMs)) ms")
+                            .font(.caption)
+                        Slider(value: $store.reflectionFreeWindowMs, in: 20...200, step: 5)
+                        Text("ⓘ Excludes room reflections after this point when computing the correction curve. Shorter windows exclude more reflection but resolve low frequencies less precisely (currently ~\(String(format: "%.1f", 1000.0 / store.reflectionFreeWindowMs)) Hz resolution) — room modes below a few hundred Hz need the longer capture regardless, so this mainly affects accuracy above that range.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Reflection-Free Analysis")
+            }
+
             // ── Excess-Phase Correction (Part 5) ───────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1372,7 +1390,7 @@ final class UserGuideSettingsViewController: NSViewController {
 
         h2("1.2 Signal Path at a Glance")
         body("The full processing order, in the sequence audio actually passes through it is:")
-        code("System audio (virtual driver capture)\n  → Stereo Fold-Down (Stereo / Wide Mono / True Mono)\n  → DC Offset Filter\n  → Infrasonic High-Pass Filter\n  → Stereo Widener (3-band M/S)\n  → LUFS Loudness Match\n  → Loudness Contour (equal-loudness compensation)\n  → De-Esser\n  → Multiband Compressor (Linkwitz-Riley split)\n  → Wideband Compressor\n  → Expander\n  → Soft Clipper\n  → De-Harsh Tilt Filter\n  → Brickwall Limiter (look-ahead, True-Peak Guard)\n  → Auto-Headroom Gain Rider (feeds back into Soft Clipper/Limiter drive)\n  → User Parametric EQ  (layer 0)\n  → Room Correction EQ  (layer 1, IIR or FIR)\n  → Bass Management / Active Crossover (band split for sub or multi-amp output)\n  → Symmetry Balance, Panning/Crossfeed Matrix, Crosstalk Cancellation, Speaker\n    IR Alignment, Sub-Bass Phase Alignment, Linear Denoiser  (LTI suite)\n  → Inter-Channel Time Delay\n  → Pause Gate\n  → Dither\n  → Output device(s)")
+        code("System audio (virtual driver capture)\n  → Stereo Fold-Down (Stereo / Wide Mono / True Mono)\n  → DC Offset Filter\n  → Infrasonic High-Pass Filter\n  → Stereo Widener (3-band M/S)\n  → LUFS Loudness Match\n  → Loudness Contour (equal-loudness compensation)\n  → De-Esser\n  → Multiband Compressor (Linkwitz-Riley split)\n  → Wideband Compressor\n  → Expander\n  → Soft Clipper\n  → De-Harsh Tilt Filter\n  → Brickwall Limiter (look-ahead, True-Peak Guard)\n  → Auto-Headroom Gain Rider (feeds back into Soft Clipper/Limiter drive)\n  → User Parametric EQ  (layer 0)\n  → Room Correction EQ  (layer 1, IIR or FIR)\n  → Bass Management / Active Crossover (band split for sub or multi-amp output)\n  → Symmetry Balance, Panning/Crossfeed Matrix, Crosstalk Cancellation, Speaker\n    IR Alignment, Sub-Bass Phase Alignment, Mains Hum Notch, Linear Denoiser  (LTI suite)\n  → Inter-Channel Time Delay\n  → Pause Gate\n  → Dither\n  → Output device(s)")
         body("Two details are easy to miss and important for troubleshooting:")
         body("• The EQ engine sits after the dynamics chain, not before it. Boosting a band with the EQ does not change what triggers the compressor or de-esser — those stages react to the un-equalised signal.")
         body("• Room correction is a second, independent EQ layer stacked on top of your manual bands, not a modification of them. You can bypass one without touching the other.")
@@ -1537,29 +1555,34 @@ final class UserGuideSettingsViewController: NSViewController {
         code("[L']   [1−α    α ] [L]\n[R'] = [ α    1−α] [R]           α = crossfeed amount, default 0.3")
         body("Primarily useful on headphones, where the crossfeed doesn't naturally occur, to reduce the exaggerated hard-panned image and fatigue that can come with headphone listening.")
 
-        h2("4.3 Linear Denoising Engine")
-        body("Spectral-subtraction noise reduction with two additional refinements aimed at eliminating musical-noise artefacts: a decision-directed a priori SNR estimate (Ephraim & Malah, 1984) replaces naive instantaneous-SNR gain computation, and a light frequency-domain smoothing pass removes isolated per-bin gain spikes before the existing temporal attack/release smoother is applied. Four named presets bundle a matched noise-floor safety threshold and maximum-suppression ceiling: Natural (−72 dB / 0.05, minimal processing), Standard (−60 dB / 0.01, balanced default), Aggressive (−48 dB / 0.002, maximum suppression), and Dehiss (−58 dB / 0.004, tuned for stationary hiss/static on poor-quality recordings). The noise floor can be estimated adaptively (default) or measured directly: use \"Capture\" during a noise-only passage (~2 seconds) to lock the estimate to a real measurement, which is recommended for the Dehiss preset since hiss character is normally consistent across an entire recording; \"Reset\" returns to adaptive tracking. Independent attack/release envelope times (defaults 11 ms / 21 ms) control how quickly the gain reduction responds — faster attack reacts to new noise sooner at the risk of pumping on transients, slower release smooths sustained material. An optional protected frequency band (off by default) is skipped entirely, with a smooth transition at each edge — set the low edge to 0 Hz to replicate the classic \"hiss lives in the highs\" approach (protect the bass, process everything above the high edge), or set both edges to an interior range to leave a vocal or instrument's body untouched while rumble below it and hiss above it are still suppressed.")
-        code("λ_N[k] = bias · min over window( |X(f)|²[k] )        (minimum-statistics noise floor, per bin)\nγ[k] = |X(f)|²[k] / λ_N[k]                              (a posteriori SNR)\nξ[k] = α·(G_prev[k]²·|X_prev(f)|²[k] / λ_N[k]) + (1−α)·max(γ[k]−1, 0)   (decision-directed a priori SNR)\nG[k] = max(floor[k], ξ[k] / (ξ[k] + 1))                 (Wiener gain, per-bin floor)\nG_smooth[k] = (G[k−1] + 2·G[k] + G[k+1]) / 4            (frequency-domain smoothing, 3-tap)")
+        h2("4.3 Mains Hum Notch")
+        body("A cascade of narrow cuts at the mains electrical frequency (50 or 60 Hz) and its harmonics, removing hum and buzz picked up from ground loops, transformers, dimmer switches, or nearby mains-powered equipment. Runs before the Denoising Engine (§4.4) in the signal chain, so a strong hum tone can't skew that engine's noise-floor estimate. Region (50/60 Hz) works immediately with no measurement — real-world mains frequency deviates only slightly from nominal. \"Detect\" measures the actual fundamental for sources that have drifted from nominal (tape or turntable speed variation); \"Continuous Tracking\" keeps re-measuring to follow further drift over the course of playback. Up to 16 harmonics, each with an independently adjustable reduction depth — defaults taper from −24 dB at the fundamental toward −6 dB at higher harmonics, since hum energy typically falls off with harmonic order, but any harmonic can be overridden individually for sources with an atypical harmonic profile (switching power supplies and LED dimmers in particular can have unusually strong energy at specific higher harmonics rather than a smooth decay).")
+        code("notch_k(f) = peaking_filter(frequency = f₀ × k, Q, gain_dB = depth_k)   for k = 1...harmonic_count")
+        body("Frequency changes — from a new Detect measurement or continuous tracking — are slewed smoothly to the new value rather than applied instantly, avoiding an audible sweep through nearby content.")
 
-        h2("4.4 Speaker Impulse-Response (Driver) Alignment")
+        h2("4.4 Linear Denoising Engine")
+        body("Adaptive spectral noise reduction using a per-frequency Wiener filter. Rather than a single broadband threshold, the engine tracks a separate noise-floor estimate for every frequency, using the quietest recent measurement at that frequency (minimum-statistics tracking, corrected for a small, well-known statistical bias). Suppression gain is computed using a decision-directed SNR estimate — the standard method for avoiding the robotic, \"underwater\" artefacts common to older-generation noise reduction — and is additionally smoothed across neighbouring frequencies before being applied, since real noise has a naturally smooth spectral shape and isolated per-frequency spikes in the estimate are themselves a source of artefacts, not signal. Four named presets bundle a matched safety threshold and maximum suppression depth: Natural (minimal processing), Standard (balanced default), Aggressive (maximum suppression), and Dehiss (tuned specifically for stationary hiss/static on poor-quality recordings). An optional protected frequency band (off by default) is skipped entirely, with a smooth transition at each edge — set the low edge to 0 Hz to replicate the classic \"hiss lives in the highs\" approach (protect the bass, process everything above the high edge), or set both edges to an interior range to leave a vocal or instrument's body untouched while rumble below it and hiss above it are still suppressed.")
+        code("λ[k] = bias × min over recent frames( |X(f)|²[k] )                 (per-bin noise floor estimate)\nγ[k] = |X(f)|²[k] / λ[k]                                            (instantaneous SNR)\nξ[k] = α·(G_prev[k]² × |X_prev(f)|²[k] / λ[k]) + (1-α)·max(γ[k]-1, 0)   (decision-directed SNR estimate)\nG[k] = max(floor[k], ξ[k] / (ξ[k] + 1))                             (suppression gain, per frequency)")
+
+        h2("4.5 Speaker Impulse-Response (Driver) Alignment")
         body("Applies a fine, fractional-sample delay to time-align the acoustic centres of a multi-driver speaker (woofer and tweeter are almost never physically coincident). Adjustable 0–5 ms. Measure each driver's arrival time independently with an external acoustic measurement tool and enter the difference here to improve phase coherence through the crossover region.")
 
-        h2("4.5 Crosstalk Cancellation Matrix")
+        h2("4.6 Crosstalk Cancellation Matrix")
         body("Reduces the acoustic crosstalk between stereo speakers and the opposite ear — the fundamental phenomenon that separates speaker listening from headphone listening and narrows the achievable stereo image. Models the acoustic path as a 2×2 matrix and applies a regularised inverse to cancel the cross terms, with an adjustable cancellation depth (0.0–1.0, default 0.5) and a head-shadow frequency parameter (default 700 Hz, corresponding to a roughly 60° speaker spread; use ≈500 Hz for 45° or ≈350 Hz for 30° placements) that models where the head's acoustic shadowing naturally begins to reduce crosstalk on its own.")
 
-        h2("4.6 Multi-Seat Complex Averaging")
+        h2("4.7 Multi-Seat Complex Averaging")
         body("When more than one listening position matters (a sofa seating two or three people), this feature combines multiple positional measurements into a single composite correction rather than optimising for one chair at the expense of the others. Configurable for 1–8 positions; see Part 6 for the room-correction measurement workflow this feeds into.")
 
-        h2("4.7 Sub-Bass Phase Alignment")
+        h2("4.8 Sub-Bass Phase Alignment")
         body("An all-pass filter network that rotates the phase of the sub-bass region to align with the main speakers at the crossover point, so the two sum constructively (+6 dB for a coherent doubling, rather than a phase-cancelling dip). Adjustable crossover target (40–120 Hz, default 80 Hz) and Q (default 0.7, roughly critically damped — increase for a steeper phase rotation if your subwoofer's inherent phase behaviour needs stronger correction).")
 
-        h2("4.8 Inter-Channel Time Delay")
+        h2("4.9 Inter-Channel Time Delay")
         body("A signed delay (±20 ms, corresponding to roughly ±6.8 m of path-length difference at the speed of sound) applied between channels, for correcting timing mismatches between speakers or drivers at different physical distances from the listening position.")
 
-        h2("4.9 Bass Management")
+        h2("4.10 Bass Management")
         body("The unified subwoofer-integration module: a configurable crossover (default 80 Hz, 40–200 Hz range) built from Linkwitz-Riley, Butterworth, or Bessel alignment, with independent sub trim gain (±12 dB), polarity inversion, fractional-sample sub delay, an optional low-shelf for room-gain compensation, per-speaker/subwoofer distance entry for time-alignment calculations, and up to 8 dedicated parametric EQ bands that apply only to the low-band (subwoofer) signal — useful for taming room modes in the sub's bandwidth without touching the mains' EQ.")
 
-        h2("4.10 Stereo Mode Fold-Down")
+        h2("4.11 Stereo Mode Fold-Down")
         body("The very first stage in the chain (§1.2): Stereo (default, unmodified), Wide Mono (mid-only signal sent to both channels, useful for checking mono compatibility), or True Mono (L+R summed and halved, identical output on both channels).")
 
         h2("Part 5 — Metering and Analysis")

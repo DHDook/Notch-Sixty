@@ -176,6 +176,8 @@ final class EqualiserStore: ObservableObject {
     ) async -> SingleSweepMeasurement? {
         guard let pipeline = routingCoordinator.pipelineManager.renderPipeline else { return nil }
         let sampleRate = pipeline.sampleRate
+        let useReflectionFreeWindow = self.useReflectionFreeWindow
+        let reflectionFreeWindowMs = self.reflectionFreeWindowMs
 
         let analyser = SweepAnalyser(
             sampleRate: sampleRate,
@@ -206,11 +208,17 @@ final class EqualiserStore: ObservableObject {
                         ([Float], [ComplexResponsePoint], [TargetCurvePoint], Double) =
                         await Task(priority: .userInitiated) {
                             let computedIR = analyser.computeImpulseResponse(referenceSweep: sweep)
+                            let windowedIR = self.useReflectionFreeWindow
+                                ? RoomCorrectionEngine.applyTimeWindowToIR(
+                                    ir: computedIR, sampleRate: sampleRate,
+                                    durationMs: self.reflectionFreeWindowMs
+                                )
+                                : computedIR
                             // Call the complex version once and derive magnitude-dB from it locally,
                             // rather than calling computeFrequencyResponse separately — that method
                             // is just a thin wrapper around computeComplexFrequencyResponse internally,
                             // so calling both would run the FFT twice for the same IR.
-                            let computedComplex = analyser.computeComplexFrequencyResponse(ir: computedIR, micCalibration: self.micCalibration)
+                            let computedComplex = analyser.computeComplexFrequencyResponse(ir: windowedIR, micCalibration: self.micCalibration)
                             let complexPoints = computedComplex.map { ComplexResponsePoint(frequency: $0.frequency, real: $0.real, imag: $0.imag) }
                             let computedResponse = computedComplex.map { point -> TargetCurvePoint in
                                 let magnitude = sqrt(point.real * point.real + point.imag * point.imag)
@@ -777,9 +785,17 @@ final class EqualiserStore: ObservableObject {
         // Compute on background thread
         measurementState = .computing
         let calibration = micCalibration  // Capture before Task
+        let useReflectionFreeWindow = self.useReflectionFreeWindow
+        let reflectionFreeWindowMs = self.reflectionFreeWindowMs
         let result: CombinedMeasurementResult? = await Task(priority: .userInitiated) {
             let ir       = analyser.computeImpulseResponse(referenceSweep: sweep)
-            let response = analyser.computeFrequencyResponse(ir: ir, micCalibration: calibration)
+            let windowedIR = useReflectionFreeWindow
+                ? RoomCorrectionEngine.applyTimeWindowToIR(
+                    ir: ir, sampleRate: analyser.sampleRate,
+                    durationMs: reflectionFreeWindowMs
+                )
+                : ir
+            let response = analyser.computeFrequencyResponse(ir: windowedIR, micCalibration: calibration)
             return CombinedMeasurementResult(
                 impulseResponse: ir,
                 magnitudeResponseDB: response.map { TargetCurvePoint(frequency: $0.frequency, gainDB: $0.gainDB) },
@@ -817,6 +833,8 @@ final class EqualiserStore: ObservableObject {
     @Published var micCalibration: MicCalibration? = nil
     @Published var micCalibrationLoadError: String? = nil
     @Published var excessPhaseConfig: ExcessPhaseConfig = ExcessPhaseConfig()
+    @Published var useReflectionFreeWindow: Bool = false
+    @Published var reflectionFreeWindowMs: Double = 80.0
     @Published var staticPreampDB: Float = 0.0
 
     // MARK: - Snapshot Comparison (Part 9.1)
@@ -1797,10 +1815,18 @@ final class EqualiserStore: ObservableObject {
                 guard let analyser = self.sweepAnalyser else { return }
                 let capturedSweep = sweep
                 let calibration = self.micCalibration
+                let useReflectionFreeWindow = self.useReflectionFreeWindow
+                let reflectionFreeWindowMs = self.reflectionFreeWindowMs
 
                 let (ir, response): ([Float], [(frequency: Double, gainDB: Double)]) = await Task(priority: .userInitiated) {
                     let computedIR = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
-                    let computedResponse = analyser.computeFrequencyResponse(ir: computedIR, micCalibration: calibration)
+                    let windowedIR = useReflectionFreeWindow
+                        ? RoomCorrectionEngine.applyTimeWindowToIR(
+                            ir: computedIR, sampleRate: analyser.sampleRate,
+                            durationMs: reflectionFreeWindowMs
+                        )
+                        : computedIR
+                    let computedResponse = analyser.computeFrequencyResponse(ir: windowedIR, micCalibration: calibration)
                     return (computedIR, computedResponse)
                 }.value
 
@@ -2128,11 +2154,17 @@ final class EqualiserStore: ObservableObject {
         sweepAnalyser?.stopRecording()
         guard let analyser = sweepAnalyser else { return }
         let ir = analyser.computeImpulseResponse(referenceSweep: analyser.sweepSignal)
+        let windowedIR = useReflectionFreeWindow
+            ? RoomCorrectionEngine.applyTimeWindowToIR(
+                ir: ir, sampleRate: analyser.sampleRate,
+                durationMs: reflectionFreeWindowMs
+            )
+            : ir
 
         // Store the raw impulse response for visualization views
         lastMeasuredImpulseResponse = ir
 
-        let curve = analyser.computeFrequencyResponse(ir: ir, micCalibration: micCalibration)
+        let curve = analyser.computeFrequencyResponse(ir: windowedIR, micCalibration: micCalibration)
 
         // Build complex response from magnitude curve.
         // Zero phase is used here since SweepAnalyser currently produces magnitude-only data.
