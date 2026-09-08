@@ -176,8 +176,7 @@ final class EqualiserStore: ObservableObject {
     ) async -> SingleSweepMeasurement? {
         guard let pipeline = routingCoordinator.pipelineManager.renderPipeline else { return nil }
         let sampleRate = pipeline.sampleRate
-        let useReflectionFreeWindow = self.useReflectionFreeWindow
-        let reflectionFreeWindowMs = self.reflectionFreeWindowMs
+        let sr = sampleRate
 
         let analyser = SweepAnalyser(
             sampleRate: sampleRate,
@@ -787,11 +786,12 @@ final class EqualiserStore: ObservableObject {
         let calibration = micCalibration  // Capture before Task
         let useReflectionFreeWindow = self.useReflectionFreeWindow
         let reflectionFreeWindowMs = self.reflectionFreeWindowMs
+        let sampleRate = sr
         let result: CombinedMeasurementResult? = await Task(priority: .userInitiated) {
             let ir       = analyser.computeImpulseResponse(referenceSweep: sweep)
             let windowedIR = useReflectionFreeWindow
                 ? RoomCorrectionEngine.applyTimeWindowToIR(
-                    ir: ir, sampleRate: analyser.sampleRate,
+                    ir: ir, sampleRate: sampleRate,
                     durationMs: reflectionFreeWindowMs
                 )
                 : ir
@@ -1779,6 +1779,7 @@ final class EqualiserStore: ObservableObject {
 
         // Generate 10-second log-swept sine from 20 Hz to 20 kHz
         let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
+        let sr = sampleRate
         let analyser = SweepAnalyser(sampleRate: sampleRate, duration: 10.0, startFrequency: 20.0, endFrequency: 20000.0)
         sweepAnalyser = analyser
         analyser.startRecording()
@@ -1817,12 +1818,13 @@ final class EqualiserStore: ObservableObject {
                 let calibration = self.micCalibration
                 let useReflectionFreeWindow = self.useReflectionFreeWindow
                 let reflectionFreeWindowMs = self.reflectionFreeWindowMs
+                let sampleRate = sr
 
                 let (ir, response): ([Float], [(frequency: Double, gainDB: Double)]) = await Task(priority: .userInitiated) {
                     let computedIR = analyser.computeImpulseResponse(referenceSweep: capturedSweep)
                     let windowedIR = useReflectionFreeWindow
                         ? RoomCorrectionEngine.applyTimeWindowToIR(
-                            ir: computedIR, sampleRate: analyser.sampleRate,
+                            ir: computedIR, sampleRate: sampleRate,
                             durationMs: reflectionFreeWindowMs
                         )
                         : computedIR
@@ -2153,10 +2155,11 @@ final class EqualiserStore: ObservableObject {
         routingCoordinator.pipelineManager.renderPipeline?.stopSweepPlayback()
         sweepAnalyser?.stopRecording()
         guard let analyser = sweepAnalyser else { return }
+        let sampleRate = routingCoordinator.pipelineManager.renderPipeline?.sampleRate ?? 48_000
         let ir = analyser.computeImpulseResponse(referenceSweep: analyser.sweepSignal)
         let windowedIR = useReflectionFreeWindow
             ? RoomCorrectionEngine.applyTimeWindowToIR(
-                ir: ir, sampleRate: analyser.sampleRate,
+                ir: ir, sampleRate: sampleRate,
                 durationMs: reflectionFreeWindowMs
             )
             : ir
