@@ -1176,6 +1176,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     }
 
     deinit {
+        mainsNotchTickTimer?.invalidate()
+
         for p in lookAheadBufs {
             p.deinitialize(count: Self.maxLookAheadSamples)
             p.deallocate()

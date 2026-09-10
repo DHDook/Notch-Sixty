@@ -8,6 +8,7 @@
 import Foundation
 import Accelerate
 import Atomics
+import Darwin
 
 /// Uniformly-partitioned FFT convolution engine for FIR impulse response processing.
 final class ConvolutionEngine {
@@ -61,10 +62,25 @@ final class ConvolutionEngine {
     nonisolated(unsafe) private var timeDomainBuf: [Float]
     
     // MARK: - Pending IR swap (main-thread → audio-thread)
+    //
+    // updateIR() (main thread) stages a new IR into the pending* fields;
+    // swapPendingIR() (audio thread, via process()) consumes them. Both
+    // sides touch the same three fields, so access is guarded by
+    // _pendingIRLock — without it, calling updateIR() again before the
+    // audio thread has consumed the previous pending batch silently
+    // overwrites (and permanently leaks) that batch's raw pointers.
+    //
+    // The audio thread only ever *trylocks* (real-time safe: if the main
+    // thread is mid-updateIR, the swap is simply retried on the next
+    // callback — a delay of a few ms is inaudible). The main thread
+    // blocks, which is fine off the audio thread. Same division of
+    // responsibility as _processLock in SpectralDenoiser.swift.
     private let _pendingIRSwap: ManagedAtomic<Bool>
     nonisolated(unsafe) private var pendingLeftIRSpectra: [DSPSplitComplex] = []
     nonisolated(unsafe) private var pendingRightIRSpectra: [DSPSplitComplex] = []
     nonisolated(unsafe) private var pendingPartitionCount: Int = 0
+    /// Allocated on the heap so its address is stable (required by os_unfair_lock).
+    private let _pendingIRLock: UnsafeMutablePointer<os_unfair_lock>
     
     // MARK: - Enable flag
     private let _enabled: ManagedAtomic<Int32>
@@ -89,11 +105,15 @@ final class ConvolutionEngine {
         timeDomainBuf = [Float](repeating: 0, count: Self.fftSize)
         
         _pendingIRSwap = ManagedAtomic(false)
+        _pendingIRLock = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
+        _pendingIRLock.initialize(to: os_unfair_lock_s())
         _enabled = ManagedAtomic(0)
     }
     
     deinit {
         vDSP_destroy_fftsetup(fftSetup)
+        _pendingIRLock.deinitialize(count: 1)
+        _pendingIRLock.deallocate()
         
         // Deallocate split-complex storage
         for sc in leftIRSpectra {
@@ -159,10 +179,21 @@ final class ConvolutionEngine {
             _loadedIRDelaySamples = 0.0
         }
 
-        // Store pending spectra
-        pendingLeftIRSpectra = pendingLeft
+        // Install the new pending batch, freeing any previous batch the
+        // audio thread hasn't consumed yet. Without this, calling
+        // updateIR() again before the next swapPendingIR() orphans the
+        // earlier batch's raw pointers permanently — this was the
+        // convolution-engine memory leak.
+        os_unfair_lock_lock(_pendingIRLock)
+        let staleLeft  = pendingLeftIRSpectra
+        let staleRight = pendingRightIRSpectra
+        pendingLeftIRSpectra  = pendingLeft
         pendingRightIRSpectra = pendingRight
         pendingPartitionCount = P
+        os_unfair_lock_unlock(_pendingIRLock)
+        
+        for sc in staleLeft  { sc.realp.deallocate(); sc.imagp.deallocate() }
+        for sc in staleRight { sc.realp.deallocate(); sc.imagp.deallocate() }
         
         // Signal audio thread to swap
         _pendingIRSwap.store(true, ordering: .releasing)
@@ -210,10 +241,14 @@ final class ConvolutionEngine {
         guard _enabled.load(ordering: .relaxed) != 0 else { return }
         guard partitionCount > 0 else { return }
         
-        // Check for pending IR swap
+        // Check for pending IR swap. swapPendingIR() only actually swaps
+        // (and returns true) if it wins the trylock — if the main thread
+        // is mid-updateIR, this is retried next callback instead of
+        // blocking the audio thread.
         if _pendingIRSwap.load(ordering: .acquiring) {
-            swapPendingIR()
-            reset()
+            if swapPendingIR() {
+                reset()
+            }
         }
         
         var srcPos = 0
@@ -286,7 +321,22 @@ final class ConvolutionEngine {
         }
     }
     
-    private func swapPendingIR() {
+    /// Attempts to consume a pending IR update staged by updateIR().
+    /// Real-time safe: uses a non-blocking trylock, so the audio thread
+    /// never waits on the main thread. Returns false (without changing
+    /// any state) if the lock is currently held by updateIR() — the
+    /// caller should simply try again on the next callback.
+    @discardableResult
+    private func swapPendingIR() -> Bool {
+        guard os_unfair_lock_trylock(_pendingIRLock) else { return false }
+        let newLeft  = pendingLeftIRSpectra
+        let newRight = pendingRightIRSpectra
+        let newCount = pendingPartitionCount
+        pendingLeftIRSpectra  = []
+        pendingRightIRSpectra = []
+        pendingPartitionCount = 0
+        os_unfair_lock_unlock(_pendingIRLock)
+        
         // Deallocate old spectra
         for sc in leftIRSpectra {
             sc.realp.deallocate()
@@ -298,7 +348,7 @@ final class ConvolutionEngine {
         }
         
         // Allocate new input history if partition count changed
-        if partitionCount != pendingPartitionCount {
+        if partitionCount != newCount {
             for sc in leftInputHistory {
                 sc.realp.deallocate()
                 sc.imagp.deallocate()
@@ -310,23 +360,19 @@ final class ConvolutionEngine {
             
             leftInputHistory = []
             rightInputHistory = []
-            for _ in 0..<pendingPartitionCount {
+            for _ in 0..<newCount {
                 leftInputHistory.append(allocateSplitComplex())
                 rightInputHistory.append(allocateSplitComplex())
             }
         }
         
         // Swap spectra
-        leftIRSpectra = pendingLeftIRSpectra
-        rightIRSpectra = pendingRightIRSpectra
-        partitionCount = pendingPartitionCount
-        
-        // Clear pending
-        pendingLeftIRSpectra = []
-        pendingRightIRSpectra = []
-        pendingPartitionCount = 0
+        leftIRSpectra = newLeft
+        rightIRSpectra = newRight
+        partitionCount = newCount
         
         _pendingIRSwap.store(false, ordering: .relaxed)
+        return true
     }
     
     private func processPartition(bufR: UnsafeMutablePointer<Float>?) {

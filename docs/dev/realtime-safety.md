@@ -34,6 +34,29 @@ if hasPendingUpdate.exchange(false, .acquiringAndReleasing) {
 - `.acquiringAndReleasing` on read ensures audio thread sees latest values
 - No locks, no allocation, safe for real-time
 
+### Pending Slots That Own Allocated Memory
+
+The pattern above is safe as-is only when the staged value is a plain value type (a coefficient,
+a small POD struct) — overwriting a stale pending value before the audio thread reads it just
+means the audio thread picks up the newer value instead, which is fine.
+
+It is **not** safe as-is when the pending slot owns manually-allocated memory (raw pointers,
+`UnsafeMutablePointer`-backed buffers). Simply reassigning `pendingX = newX` in that case does
+not free whatever `pendingX` pointed to before — if the audio thread hasn't consumed it yet,
+that memory is orphaned permanently. This was the cause of a real leak in
+`ConvolutionEngine.updateIR()`: two calls before an intervening `swapPendingIR()` silently
+dropped the first batch's raw pointers.
+
+For this case, guard the pending slot with a lock rather than a bare atomic flag:
+- **Main thread** (producer): `os_unfair_lock_lock()` — blocking is fine off the audio thread.
+- **Audio thread** (consumer): `os_unfair_lock_trylock()` — never blocks; if contended, retry
+  next callback (a few ms delay is inaudible).
+- Free the old pending batch, if any, *after* releasing the lock — deallocation shouldn't
+  happen while it's held.
+
+See `ConvolutionEngine.swift` (`_pendingIRLock`) and `SpectralDenoiser.swift` (`_processLock`)
+for the pattern in practice.
+
 ### AudioRingBuffer for Cross-Thread Communication
 
 Used in HAL input mode where producer (input callback) and consumer (output callback) run on different threads:
