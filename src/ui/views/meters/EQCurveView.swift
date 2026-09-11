@@ -526,7 +526,7 @@ struct EQCurveView: View {
                 }
             }
 
-            // --- Bass management crossover (main-output high-pass side only) ---
+            // --- Bass management crossover (full recombined response: HP + LP branches, parallel-summed) ---
             if snapshot.bassManagementEnabled {
                 let crossover = BassManagementCrossover(
                     crossoverHz: snapshot.bassManagementCrossoverHz,
@@ -535,7 +535,39 @@ struct EQCurveView: View {
                     crossoverType: snapshot.bassManagementType,
                     coefficientDecouplingEnabled: snapshot.coefficientDecouplingEnabled
                 )
-                let sections: [(b0: Float, b1: Float, b2: Float, na1: Float, na2: Float)]
+
+                // Complex response of one biquad section (standard, non-negated a1/a2 form).
+                @inline(__always)
+                func sectionResponse(b0: Double, b1: Double, b2: Double, a1: Double, a2: Double) -> (re: Double, im: Double) {
+                    let nRe = b0 + b1*cosW + b2*cos2W
+                    let nIm = -(b1*sinW) - b2*sin2W
+                    let dRe = 1.0 + a1*cosW + a2*cos2W
+                    let dIm = -(a1*sinW) - a2*sin2W
+                    let dMagSq = max(1e-30, dRe*dRe + dIm*dIm)
+                    // Complex division n/d.
+                    return ((nRe*dRe + nIm*dIm) / dMagSq, (nIm*dRe - nRe*dIm) / dMagSq)
+                }
+
+                // Complex product of a cascade of sections (na1/na2 stored negated — flip back).
+                @inline(__always)
+                func cascadeResponse(_ sections: [(b0: Float, b1: Float, b2: Float, na1: Float, na2: Float)]) -> (re: Double, im: Double) {
+                    var re = 1.0, im = 0.0
+                    for c in sections {
+                        let s = sectionResponse(b0: Double(c.b0), b1: Double(c.b1), b2: Double(c.b2),
+                                                 a1: -Double(c.na1), a2: -Double(c.na2))
+                        // Complex multiply (re,im) *= s
+                        let newRe = re*s.re - im*s.im
+                        let newIm = re*s.im + im*s.re
+                        re = newRe; im = newIm
+                    }
+                    return (re, im)
+                }
+
+                // High-pass branch: asymmetric mode uses a separate crossover instance for the
+                // main-speaker high-pass point; the low-pass branch always uses the main crossover
+                // regardless of asymmetric mode (confirmed in processBassManagement: bmMonoLow is
+                // always derived from bassManagementCrossover, only bmHigh switches instances).
+                let highResponse: (re: Double, im: Double)
                 if snapshot.asymmetricCrossoverEnabled {
                     let hpCrossover = BassManagementCrossover(
                         crossoverHz: snapshot.mainsHighPassHz,
@@ -544,23 +576,37 @@ struct EQCurveView: View {
                         crossoverType: snapshot.bassManagementType,
                         coefficientDecouplingEnabled: snapshot.coefficientDecouplingEnabled
                     )
-                    sections = hpCrossover.highPassSections
+                    highResponse = cascadeResponse(hpCrossover.highPassSections)
                 } else {
-                    sections = crossover.highPassSections
+                    highResponse = cascadeResponse(crossover.highPassSections)
                 }
-                for c in sections {
-                    // Sections here are already (b0,b1,b2,na1,na2) — na1/na2
-                    // are the NEGATED form (processBiquad's convention).
-                    // Flip back to standard a1/a2 for the magnitude formula.
-                    let a1 = -Double(c.na1)
-                    let a2 = -Double(c.na2)
-                    let nRe = Double(c.b0) + Double(c.b1)*cosW + Double(c.b2)*cos2W
-                    let nIm = -(Double(c.b1)*sinW) - Double(c.b2)*sin2W
-                    let dRe = 1.0 + a1*cosW + a2*cos2W
-                    let dIm = -(a1*sinW) - a2*sin2W
-                    let magSq = (nRe*nRe + nIm*nIm) / max(1e-30, dRe*dRe + dIm*dIm)
-                    totalDB += 10.0 * log10(max(1e-30, magSq))
+
+                // Low-pass branch, then the sub-chain's gain/polarity/delay — mirroring the exact
+                // order applied in processBassManagement's Part 2 chain (shelf/subEQ deliberately
+                // omitted here, see file header).
+                var lowResponse = cascadeResponse(crossover.lowPassSections)
+
+                let combinedGain = Double(snapshot.bassManagementSubGainDB == 0 ? 1.0 : pow(10.0, Double(snapshot.bassManagementSubGainDB) / 20.0))
+                    * (snapshot.bassManagementSubPolarityInverted ? -1.0 : 1.0)
+                lowResponse.re *= combinedGain
+                lowResponse.im *= combinedGain
+
+                if snapshot.bassManagementSubDelaySamples > 0 {
+                    // Fractional delay as a pure phase term, e^{-jωD} — same e^{-jω} convention
+                    // (z⁻¹ ↔ e^{-jω}) already used by every biquad response above.
+                    let delayAngle = 2.0 * .pi * f * Double(snapshot.bassManagementSubDelaySamples) / sr
+                    let dRe = cos(delayAngle)
+                    let dIm = -sin(delayAngle)
+                    let newRe = lowResponse.re*dRe - lowResponse.im*dIm
+                    let newIm = lowResponse.re*dIm + lowResponse.im*dRe
+                    lowResponse.re = newRe; lowResponse.im = newIm
                 }
+
+                // Parallel sum — the actual fix. Not a dB addition; complex addition, then magnitude.
+                let totalRe = highResponse.re + lowResponse.re
+                let totalIm = highResponse.im + lowResponse.im
+                let magSq = max(1e-30, totalRe*totalRe + totalIm*totalIm)
+                totalDB += 10.0 * log10(magSq)
             }
 
             return totalDB
@@ -626,6 +672,9 @@ struct CurveSnapshot {
     let asymmetricCrossoverEnabled: Bool
     let mainsHighPassHz:            Float
     let coefficientDecouplingEnabled: Bool
+    let bassManagementSubGainDB: Float
+    let bassManagementSubPolarityInverted: Bool
+    let bassManagementSubDelaySamples: Float
 
     @MainActor
     init(store: EqualiserStore) {
@@ -653,6 +702,9 @@ struct CurveSnapshot {
         self.asymmetricCrossoverEnabled  = store.dynamicsConfig.advanced.bassManagement.asymmetricCrossoverEnabled
         self.mainsHighPassHz             = store.dynamicsConfig.advanced.bassManagement.mainsHighPassHz
         self.coefficientDecouplingEnabled = store.dynamicsConfig.advanced.coefficientDecouplingEnabled
+        self.bassManagementSubGainDB = store.dynamicsConfig.advanced.bassManagement.lowBandGainDB
+        self.bassManagementSubPolarityInverted = store.dynamicsConfig.advanced.bassManagement.lowBandPolarityInverted
+        self.bassManagementSubDelaySamples = store.dynamicsConfig.advanced.bassManagement.lowBandDelaySamples
 
         // ── Phase and group delay frequency grid ──────────────────────────
         let N = 256
@@ -770,6 +822,9 @@ struct CurveSnapshot {
         h = h &* 31 &+ (asymmetricCrossoverEnabled ? 1 : 0)
         h = h &* 31 &+ Int(mainsHighPassHz * 100)
         h = h &* 31 &+ (coefficientDecouplingEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(bassManagementSubGainDB * 100)
+        h = h &* 31 &+ (bassManagementSubPolarityInverted ? 1 : 0)
+        h = h &* 31 &+ Int(bassManagementSubDelaySamples * 100)
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         h = h &* 31 &+ chGD.values.flatMap { $0 }.reduce(0) { $0 &+ Int($1 * 100) }
         self.changeToken = h
@@ -802,7 +857,10 @@ struct CurveSnapshot {
         bassManagementType: CrossoverType = .linkwitzRiley,
         asymmetricCrossoverEnabled: Bool = false,
         mainsHighPassHz: Float = 80.0,
-        coefficientDecouplingEnabled: Bool = true
+        coefficientDecouplingEnabled: Bool = true,
+        bassManagementSubGainDB: Float = 0.0,
+        bassManagementSubPolarityInverted: Bool = false,
+        bassManagementSubDelaySamples: Float = 0.0
     ) {
         self.bands              = bands
         self.activeBandCount    = activeBandCount
@@ -829,6 +887,9 @@ struct CurveSnapshot {
         self.asymmetricCrossoverEnabled  = asymmetricCrossoverEnabled
         self.mainsHighPassHz             = mainsHighPassHz
         self.coefficientDecouplingEnabled = coefficientDecouplingEnabled
+        self.bassManagementSubGainDB = bassManagementSubGainDB
+        self.bassManagementSubPolarityInverted = bassManagementSubPolarityInverted
+        self.bassManagementSubDelaySamples = bassManagementSubDelaySamples
         self.channelGroupDelayMs = [:]
         self.phaseFrequencies   = (0..<256).map { i in
             pow(10.0, log10(20.0) + Double(i) / 255.0 * (log10(20_000.0) - log10(20.0)))
@@ -907,6 +968,9 @@ struct CurveSnapshot {
         h = h &* 31 &+ (asymmetricCrossoverEnabled ? 1 : 0)
         h = h &* 31 &+ Int(mainsHighPassHz * 100)
         h = h &* 31 &+ (coefficientDecouplingEnabled ? 1 : 0)
+        h = h &* 31 &+ Int(bassManagementSubGainDB * 100)
+        h = h &* 31 &+ (bassManagementSubPolarityInverted ? 1 : 0)
+        h = h &* 31 &+ Int(bassManagementSubDelaySamples * 100)
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         self.changeToken = h
     }
