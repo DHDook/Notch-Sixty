@@ -1581,6 +1581,7 @@ final class UserGuideSettingsViewController: NSViewController {
 
         h2("4.10 Bass Management")
         body("The unified subwoofer-integration module: a configurable crossover (default 80 Hz, 40–200 Hz range) built from Linkwitz-Riley, Butterworth, or Bessel alignment, with independent sub trim gain (±12 dB), polarity inversion, fractional-sample sub delay, an optional low-shelf for room-gain compensation, per-speaker/subwoofer distance entry for time-alignment calculations, and up to 8 dedicated parametric EQ bands that apply only to the low-band (subwoofer) signal — useful for taming room modes in the sub's bandwidth without touching the mains' EQ.")
+        body("\"Separate Sub Output\" (off by default) controls where the mono-summed low band ends up. Off: it recombines into the main output — mono bass through the existing speakers, no secondary output required. On: it's excluded from the main output entirely and reaches the signal only through a dedicated Sub channel in the Output Channel Matrix (§7) — standard AVR-style bass management, where bass is redirected away from speakers too small to reproduce it cleanly rather than duplicated across both. Enabling this without assigning a Sub channel silently drops the bass; assigning a Sub channel without enabling this plays bass through both the mains and the sub simultaneously — the Coordination Warnings in the Crossover settings tab flag both cases.")
 
         h2("4.11 Stereo Mode Fold-Down")
         body("The very first stage in the chain (§1.2): Stereo (default, unmodified), Wide Mono (mid-only signal sent to both channels, useful for checking mono compatibility), or True Mono (L+R summed and halved, identical output on both channels).")
@@ -1718,10 +1719,18 @@ final class UserGuideSettingsViewController: NSViewController {
         code("Aggregate Device   CoreAudio's built-in aggregate-device mechanism handles synchronisation.\n                    Adds roughly 12–24 ms of sample-rate-conversion latency on slave devices.\n                    The most broadly compatible option.\nSoftware PLL        A software phase-locked loop measures drift between each secondary\n                    device's clock and the primary device's clock directly, and applies a\n                    continuous fractional sample-rate correction — no aggregate device, no\n                    added SRC latency, but higher CPU use and it requires the PLL to be\n                    correctly tuned for your specific device pair.")
         body("The software PLL is a proportional-integral loop filter with configurable bandwidth (default 0.5 Hz — lower is more stable but locks more slowly) and damping (default 0.707, critically damped), a maximum correction range of ±200 ppm, and a lock-in period of 20 callback cycles before engaging, to avoid a false lock on the very first few, potentially noisy, timestamp measurements.")
 
-        h2("7.13 Band-Level SPL Calibration")
+        h2("7.13 Output Channel Matrix — Channel Types")
+        body("The Output Channel Matrix assigns each physical output channel to a signal source:")
+        code("Main L / Main R   Full processed stereo output (default)\nLow / Mid / High   Active crossover bands (see §7.1–7.4)\nSub (.subMono)    Mono-summed low band from Bass Management (§4.10)")
+        body("A channel assigned to Sub (.subMono) receives the mono-summed low band from Bass Management (§4.10) — but only when Bass Management's own \"Separate Sub Output\" toggle is also enabled. Without it, Bass Management's low band recombines into the main output instead, and a Sub channel here would duplicate that content rather than replace it.")
+
+        h2("7.14 Band-Level SPL Calibration")
         body("Once output channels are assigned, each channel's relative level can be calibrated using a pink-noise test signal and an external SPL meter, entering the measured level per channel (plus, optionally, a microphone calibration offset) so the crossover's per-channel trim brings every driver to the same acoustic output level at the listening position — correcting for differences in driver sensitivity, amplifier gain, and distance that a purely electrical measurement would miss.")
 
-        h2("7.14 Speaker System Presets")
+        h2("7.14 Band-Level SPL Calibration")
+        body("Once output channels are assigned, each channel's relative level can be calibrated using a pink-noise test signal and an external SPL meter, entering the measured level per channel (plus, optionally, a microphone calibration offset) so the crossover's per-channel trim brings every driver to the same acoustic output level at the listening position — correcting for differences in driver sensitivity, amplifier gain, and distance that a purely electrical measurement would miss.")
+
+        h2("7.15 Speaker System Presets")
         body("A complete output-channel-matrix configuration — crossover topology, frequencies, slopes, per-channel EQ, delays, and level trims — can be saved, recalled, and deleted as a named preset, letting you switch between, for example, a tri-amped main system and a stereo headphone configuration without reconfiguring each output channel by hand.")
 
         h2("Appendix A — Parameter Quick Reference")

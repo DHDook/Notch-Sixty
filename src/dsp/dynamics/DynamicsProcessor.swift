@@ -274,6 +274,8 @@ final class DynamicsProcessor: @unchecked Sendable {
     private var previousSubEQSampleRate: Double = 0.0
     /// Bass Management enabled flag (atomic).
     private let _bassManagementEnabled: ManagedAtomic<Int32>
+    /// Separate Sub Output enabled flag (atomic).
+    private let _separateSubOutputEnabled: ManagedAtomic<Int32>
     /// Asymmetric crossover enabled flag (atomic).
     private let _asymmetricCrossoverEnabled: ManagedAtomic<Int32>
     /// Dynamic EQ enabled flag (atomic).
@@ -1081,6 +1083,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Bass Management atomics
         _bassManagementEnabled = ManagedAtomic(0)
+        _separateSubOutputEnabled = ManagedAtomic(0)
         _asymmetricCrossoverEnabled = ManagedAtomic(0)
         _dynamicEQEnabled = ManagedAtomic(0)
         _dialogueLevelerEnabled = ManagedAtomic(0)
@@ -1885,6 +1888,9 @@ final class DynamicsProcessor: @unchecked Sendable {
     func setLowBandPolarityInverted(_ v: Bool) {
         _lowBandPolarityInverted.store(v ? 1 : 0, ordering: .relaxed)
     }
+    func setSeparateSubOutputEnabled(_ v: Bool) {
+        _separateSubOutputEnabled.store(v ? 1 : 0, ordering: .relaxed)
+    }
     func setLowBandLowShelfEnabled(_ v: Bool) {
         if v { for i in 0..<lowBandLowShelfState.count { lowBandLowShelfState[i] = 0 } }
         _lowBandLowShelfEnabled.store(v ? 1 : 0, ordering: .relaxed)
@@ -2110,6 +2116,7 @@ final class DynamicsProcessor: @unchecked Sendable {
         setBassManagementSlope(adv.bassManagement.slope)
         setLowBandGainDB(adv.bassManagement.lowBandGainDB)
         setLowBandPolarityInverted(adv.bassManagement.lowBandPolarityInverted)
+        setSeparateSubOutputEnabled(adv.bassManagement.separateSubOutputEnabled)
         setLowBandLowShelfEnabled(adv.bassManagement.lowBandLowShelfEnabled)
         setLowBandLowShelfFreqHz(adv.bassManagement.lowBandLowShelfFreqHz)
         setLowBandLowShelfGainDB(adv.bassManagement.lowBandLowShelfGainDB)
@@ -3788,6 +3795,7 @@ final class DynamicsProcessor: @unchecked Sendable {
 
         // Check if asymmetric crossover mode is enabled
         let asymmetricEnabled = _asymmetricCrossoverEnabled.load(ordering: .relaxed) != 0
+        let separateSubOutputOn = _separateSubOutputEnabled.load(ordering: .relaxed) != 0
 
         // Apply pending sub EQ update if available
         if hasSubEQUpdate.exchange(false, ordering: .acquiringAndReleasing) {
@@ -4010,10 +4018,20 @@ final class DynamicsProcessor: @unchecked Sendable {
             lowBandDelayWriteIdx = writeIdx
         }
 
-        // Recombine: high band + mono low
-        for i in 0..<count {
-            bufL[i] = bmHighL[i] + bmMonoLow[i]
-            bufR[i] = bmHighR[i] + bmMonoLow[i]
+        // Recombine: high band + mono low, UNLESS routed exclusively to a
+        // separate sub output — in which case the main output only ever
+        // gets the high-passed content, and bmMonoLow reaches the signal
+        // solely via copyMonoLowSignal()'s feed to a .subMono channel.
+        if separateSubOutputOn {
+            for i in 0..<count {
+                bufL[i] = bmHighL[i]
+                bufR[i] = bmHighR[i]
+            }
+        } else {
+            for i in 0..<count {
+                bufL[i] = bmHighL[i] + bmMonoLow[i]
+                bufR[i] = bmHighR[i] + bmMonoLow[i]
+            }
         }
     }
 
@@ -4036,6 +4054,12 @@ final class DynamicsProcessor: @unchecked Sendable {
     func copyMonoLowSignal(to dest: UnsafeMutablePointer<Float>, frameCount: Int) {
         guard _bassManagementEnabled.load(ordering: .relaxed) != 0 else {
             // If bass management is disabled, zero the output
+            dest.initialize(repeating: 0, count: frameCount)
+            return
+        }
+        let separateSubOutputOn = _separateSubOutputEnabled.load(ordering: .relaxed) != 0
+        guard separateSubOutputOn else {
+            // If separate sub output is disabled, zero the output (bass is in main output already)
             dest.initialize(repeating: 0, count: frameCount)
             return
         }

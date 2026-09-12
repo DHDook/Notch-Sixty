@@ -1521,6 +1521,7 @@ struct DynamicsInlineView: View {
                     adv.bassManagement.asymmetricCrossoverEnabled = d.asymmetricCrossoverEnabled
                     adv.bassManagement.mainsHighPassHz = d.mainsHighPassHz
                     adv.bassManagement.lowBandDelaySamples = d.lowBandDelaySamples
+                    adv.bassManagement.separateSubOutputEnabled = d.separateSubOutputEnabled
                     store.updateAdvancedProcessing(adv)
                 }
             ) {
@@ -1610,6 +1611,17 @@ struct DynamicsInlineView: View {
                     step: 1.0,
                     formatValue: { String(format: "%.0f samples", $0) }
                 )
+                Toggle("Separate Sub Output", isOn: Binding(
+                    get: { store.dynamicsConfig.advanced.bassManagement.separateSubOutputEnabled },
+                    set: { v in
+                        var adv = store.dynamicsConfig.advanced
+                        adv.bassManagement.separateSubOutputEnabled = v
+                        store.updateAdvancedProcessing(adv)
+                    }
+                ))
+                Text("Off (default): bass sums to mono and plays through the main output — no secondary output needed. On: bass is excluded from the main output and only reaches a dedicated Sub channel in the Output Channel Matrix (Settings → Crossover) — assign one there when enabling this.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
 
                 Toggle("Low-Band Shelf", isOn: Binding(
                     get: { store.dynamicsConfig.advanced.bassManagement.lowBandLowShelfEnabled },

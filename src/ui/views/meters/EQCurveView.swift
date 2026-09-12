@@ -584,28 +584,37 @@ struct EQCurveView: View {
                 // Low-pass branch, then the sub-chain's gain/polarity/delay — mirroring the exact
                 // order applied in processBassManagement's Part 2 chain (shelf/subEQ deliberately
                 // omitted here, see file header).
-                var lowResponse = cascadeResponse(crossover.lowPassSections)
+                let magSq: Double
+                if snapshot.bassManagementSeparateSubOutput {
+                    // Bass routed away from main output entirely — only the
+                    // high-pass branch reaches this signal.
+                    magSq = max(1e-30, highResponse.re*highResponse.re + highResponse.im*highResponse.im)
+                } else {
+                    // Low band recombines into main output — full parallel
+                    // sum, per §2 of the previous spec.
+                    var lowResponse = cascadeResponse(crossover.lowPassSections)
 
-                let combinedGain = Double(snapshot.bassManagementSubGainDB == 0 ? 1.0 : pow(10.0, Double(snapshot.bassManagementSubGainDB) / 20.0))
-                    * (snapshot.bassManagementSubPolarityInverted ? -1.0 : 1.0)
-                lowResponse.re *= combinedGain
-                lowResponse.im *= combinedGain
+                    let combinedGain = Double(snapshot.bassManagementSubGainDB == 0 ? 1.0 : pow(10.0, Double(snapshot.bassManagementSubGainDB) / 20.0))
+                        * (snapshot.bassManagementSubPolarityInverted ? -1.0 : 1.0)
+                    lowResponse.re *= combinedGain
+                    lowResponse.im *= combinedGain
 
-                if snapshot.bassManagementSubDelaySamples > 0 {
-                    // Fractional delay as a pure phase term, e^{-jωD} — same e^{-jω} convention
-                    // (z⁻¹ ↔ e^{-jω}) already used by every biquad response above.
-                    let delayAngle = 2.0 * .pi * f * Double(snapshot.bassManagementSubDelaySamples) / sr
-                    let dRe = cos(delayAngle)
-                    let dIm = -sin(delayAngle)
-                    let newRe = lowResponse.re*dRe - lowResponse.im*dIm
-                    let newIm = lowResponse.re*dIm + lowResponse.im*dRe
-                    lowResponse.re = newRe; lowResponse.im = newIm
+                    if snapshot.bassManagementSubDelaySamples > 0 {
+                        // Fractional delay as a pure phase term, e^{-jωD} — same e^{-jω} convention
+                        // (z⁻¹ ↔ e^{-jω}) already used by every biquad response above.
+                        let delayAngle = 2.0 * .pi * f * Double(snapshot.bassManagementSubDelaySamples) / sr
+                        let dRe = cos(delayAngle)
+                        let dIm = -sin(delayAngle)
+                        let newRe = lowResponse.re*dRe - lowResponse.im*dIm
+                        let newIm = lowResponse.re*dIm + lowResponse.im*dRe
+                        lowResponse.re = newRe; lowResponse.im = newIm
+                    }
+
+                    // Parallel sum — the actual fix. Not a dB addition; complex addition, then magnitude.
+                    let totalRe = highResponse.re + lowResponse.re
+                    let totalIm = highResponse.im + lowResponse.im
+                    magSq = max(1e-30, totalRe*totalRe + totalIm*totalIm)
                 }
-
-                // Parallel sum — the actual fix. Not a dB addition; complex addition, then magnitude.
-                let totalRe = highResponse.re + lowResponse.re
-                let totalIm = highResponse.im + lowResponse.im
-                let magSq = max(1e-30, totalRe*totalRe + totalIm*totalIm)
                 totalDB += 10.0 * log10(magSq)
             }
 
@@ -675,6 +684,7 @@ struct CurveSnapshot {
     let bassManagementSubGainDB: Float
     let bassManagementSubPolarityInverted: Bool
     let bassManagementSubDelaySamples: Float
+    let bassManagementSeparateSubOutput: Bool
 
     @MainActor
     init(store: EqualiserStore) {
@@ -705,6 +715,7 @@ struct CurveSnapshot {
         self.bassManagementSubGainDB = store.dynamicsConfig.advanced.bassManagement.lowBandGainDB
         self.bassManagementSubPolarityInverted = store.dynamicsConfig.advanced.bassManagement.lowBandPolarityInverted
         self.bassManagementSubDelaySamples = store.dynamicsConfig.advanced.bassManagement.lowBandDelaySamples
+        self.bassManagementSeparateSubOutput = store.dynamicsConfig.advanced.bassManagement.separateSubOutputEnabled
 
         // ── Phase and group delay frequency grid ──────────────────────────
         let N = 256
@@ -825,6 +836,7 @@ struct CurveSnapshot {
         h = h &* 31 &+ Int(bassManagementSubGainDB * 100)
         h = h &* 31 &+ (bassManagementSubPolarityInverted ? 1 : 0)
         h = h &* 31 &+ Int(bassManagementSubDelaySamples * 100)
+        h = h &* 31 &+ (bassManagementSeparateSubOutput ? 1 : 0)
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         h = h &* 31 &+ chGD.values.flatMap { $0 }.reduce(0) { $0 &+ Int($1 * 100) }
         self.changeToken = h
@@ -860,7 +872,8 @@ struct CurveSnapshot {
         coefficientDecouplingEnabled: Bool = true,
         bassManagementSubGainDB: Float = 0.0,
         bassManagementSubPolarityInverted: Bool = false,
-        bassManagementSubDelaySamples: Float = 0.0
+        bassManagementSubDelaySamples: Float = 0.0,
+        bassManagementSeparateSubOutput: Bool = false
     ) {
         self.bands              = bands
         self.activeBandCount    = activeBandCount
@@ -890,6 +903,7 @@ struct CurveSnapshot {
         self.bassManagementSubGainDB = bassManagementSubGainDB
         self.bassManagementSubPolarityInverted = bassManagementSubPolarityInverted
         self.bassManagementSubDelaySamples = bassManagementSubDelaySamples
+        self.bassManagementSeparateSubOutput = bassManagementSeparateSubOutput
         self.channelGroupDelayMs = [:]
         self.phaseFrequencies   = (0..<256).map { i in
             pow(10.0, log10(20.0) + Double(i) / 255.0 * (log10(20_000.0) - log10(20.0)))
@@ -971,6 +985,7 @@ struct CurveSnapshot {
         h = h &* 31 &+ Int(bassManagementSubGainDB * 100)
         h = h &* 31 &+ (bassManagementSubPolarityInverted ? 1 : 0)
         h = h &* 31 &+ Int(bassManagementSubDelaySamples * 100)
+        h = h &* 31 &+ (bassManagementSeparateSubOutput ? 1 : 0)
         h = h &* 31 &+ (isBypassed ? 1 : 0)
         self.changeToken = h
     }

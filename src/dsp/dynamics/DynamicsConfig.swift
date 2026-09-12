@@ -828,6 +828,14 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
     var lowBandGainDB: Float = 0.0  // Sub trim — range ±12 dB
     var lowBandPolarityInverted: Bool = false
     var lowBandDelaySamples: Float = 0.0  // Fractional sample delay for subwoofer alignment
+    // When true, the mono-summed low band is excluded from the main L/R
+    // output entirely and only reaches the signal chain via a dedicated
+    // .subMono Output Channel Matrix channel — standard AVR-style bass
+    // management semantics (bass redirected away from mains, not
+    // duplicated). When false (default), current behavior is preserved:
+    // the low band recombines into the main output, giving mono bass
+    // through the existing speakers with no secondary output required.
+    var separateSubOutputEnabled: Bool = false
     var lowBandLowShelfEnabled: Bool = false  // Room-gain compensation shelf
     var lowBandLowShelfFreqHz: Float = 30.0  // Room-gain shelf frequency
     var lowBandLowShelfGainDB: Float = 0.0  // Room-gain shelf gain
@@ -845,7 +853,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case enabled, crossoverHz, slope, crossoverType, asymmetricCrossoverEnabled, mainsHighPassHz, lowBandGainDB, lowBandPolarityInverted
-        case lowBandDelaySamples, lowBandLowShelfEnabled, lowBandLowShelfFreqHz, lowBandLowShelfGainDB
+        case lowBandDelaySamples, lowBandLowShelfEnabled, lowBandLowShelfFreqHz, lowBandLowShelfGainDB, separateSubOutputEnabled
         case leftSpeakerDistanceM, rightSpeakerDistanceM, subwooferDistanceM, delayMode
         case subEQBands
     }
@@ -860,6 +868,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
         lowBandGainDB: Float = 0.0,
         lowBandPolarityInverted: Bool = false,
         lowBandDelaySamples: Float = 0.0,
+        separateSubOutputEnabled: Bool = false,
         lowBandLowShelfEnabled: Bool = false,
         lowBandLowShelfFreqHz: Float = 30.0,
         lowBandLowShelfGainDB: Float = 0.0,
@@ -878,6 +887,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
         self.lowBandGainDB = lowBandGainDB
         self.lowBandPolarityInverted = lowBandPolarityInverted
         self.lowBandDelaySamples = lowBandDelaySamples
+        self.separateSubOutputEnabled = separateSubOutputEnabled
         self.lowBandLowShelfEnabled = lowBandLowShelfEnabled
         self.lowBandLowShelfFreqHz = lowBandLowShelfFreqHz
         self.lowBandLowShelfGainDB = lowBandLowShelfGainDB
@@ -899,6 +909,7 @@ struct BassManagementConfig: Codable, Equatable, Sendable {
         lowBandGainDB = try c.decodeIfPresent(Float.self, forKey: .lowBandGainDB) ?? 0.0
         lowBandPolarityInverted = try c.decodeIfPresent(Bool.self, forKey: .lowBandPolarityInverted) ?? false
         lowBandDelaySamples = try c.decodeIfPresent(Float.self, forKey: .lowBandDelaySamples) ?? 0.0
+        separateSubOutputEnabled = try c.decodeIfPresent(Bool.self, forKey: .separateSubOutputEnabled) ?? false
         lowBandLowShelfEnabled = try c.decodeIfPresent(Bool.self, forKey: .lowBandLowShelfEnabled) ?? false
         lowBandLowShelfFreqHz = try c.decodeIfPresent(Float.self, forKey: .lowBandLowShelfFreqHz) ?? 30.0
         lowBandLowShelfGainDB = try c.decodeIfPresent(Float.self, forKey: .lowBandLowShelfGainDB) ?? 0.0

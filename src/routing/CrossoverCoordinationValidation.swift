@@ -15,6 +15,8 @@ struct CrossoverCoordinationWarning: Equatable, Sendable {
         case wooferFrequencyOverlap(crossoverHz: Float, bassManagementHz: Float)
         /// Bass management is enabled but no subMono output channel is defined.
         case bassManagementEnabledButNoSubOutput
+        /// Sub output channel exists but separate sub output is disabled (double bass).
+        case subOutputButSeparateDisabled
     }
     var type: WarningType
     var suggestion: String
@@ -45,13 +47,24 @@ func validateCrossoverCoordination(
         }
     }
 
-    // Rule 2: Check if bass management is enabled but no sub output channel
-    if bassManagement.enabled {
+    // Rule 2: Check if separate sub output is enabled but no sub output channel
+    if bassManagement.separateSubOutputEnabled {
         let hasSubOutput = outputChannelMatrix.channels.contains { $0.source == .subMono }
         if !hasSubOutput {
             warnings.append(CrossoverCoordinationWarning(
                 type: .bassManagementEnabledButNoSubOutput,
-                suggestion: "Bass management is enabled but no output channel is assigned to the subwoofer signal. Add a Sub output channel."
+                suggestion: "Separate Sub Output is enabled but no output channel is assigned to the subwoofer signal — bass will be silently missing from the main output until a Sub channel is added."
+            ))
+        }
+    }
+
+    // Rule 3: Check if sub output channel exists but separate sub output is disabled
+    if bassManagement.enabled && !bassManagement.separateSubOutputEnabled {
+        let hasSubOutput = outputChannelMatrix.channels.contains { $0.source == .subMono }
+        if hasSubOutput {
+            warnings.append(CrossoverCoordinationWarning(
+                type: .subOutputButSeparateDisabled,
+                suggestion: "A Sub output channel is configured, but Separate Sub Output isn't enabled in Bass Management — bass will play through both the main speakers and the sub simultaneously."
             ))
         }
     }
