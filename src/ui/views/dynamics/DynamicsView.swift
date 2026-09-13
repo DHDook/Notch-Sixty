@@ -217,7 +217,7 @@ struct DynamicsInlineView: View {
                         Divider()
                         definitionEntry(title: "Expander", body: "Downward dynamic-range expander. Widens perceived dynamics by attenuating signals below threshold.")
                         Divider()
-                        definitionEntry(title: "Bass Management", body: "Unified subwoofer integration: crossover frequency, slope, and type; independent sub-channel gain, polarity, and delay; room-gain compensation shelf; and per-speaker distance compensation for time alignment.")
+                        definitionEntry(title: "Bass Management", body: "Unified subwoofer integration: crossover frequency, slope, and type split the signal into high and low bands. By default the low band sums to mono and recombines into the main output, so mono bass reaches your existing speakers with no secondary output required. Enable Separate Sub Output to instead exclude the low band from the main output entirely and route it only through a dedicated Sub channel in the Output Channel Matrix (Settings → Crossover) — standard AVR-style bass management, where bass is redirected away from speakers too small to reproduce it cleanly rather than duplicated across both. Also: independent sub-channel gain, polarity, and delay; room-gain compensation shelf; up to 8 parametric EQ bands for sub-specific correction; and per-speaker distance compensation for time alignment.")
                         Divider()
                         definitionEntry(title: "Dynamic Gain Rider", body: "Slowly reduces the signal feeding the clipper/limiter to keep sustained limiter gain reduction near a target level, trading a small amount of loudness for fewer audible limiting artefacts on hot mixes.")
                         Divider()
@@ -1619,6 +1619,8 @@ struct DynamicsInlineView: View {
                         store.updateAdvancedProcessing(adv)
                     }
                 ))
+                .toggleStyle(.switch)
+                .controlSize(.small)
                 Text("Off (default): bass sums to mono and plays through the main output — no secondary output needed. On: bass is excluded from the main output and only reaches a dedicated Sub channel in the Output Channel Matrix (Settings → Crossover) — assign one there when enabling this.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -1655,97 +1657,85 @@ struct DynamicsInlineView: View {
 
                 // Sub EQ Bands
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Sub EQ Bands")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text("Sub EQ Bands")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(store.dynamicsConfig.advanced.bassManagement.subEQBands.count)/\(BassManagementConfig.maxSubEQBands)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
 
-                    let bands = store.dynamicsConfig.advanced.bassManagement.subEQBands
-                    if bands.count > 0 {
-                        HStack(spacing: 8) {
-                            Text("Band 1")
+                    ForEach(store.dynamicsConfig.advanced.bassManagement.subEQBands.indices, id: \.self) { i in
+                        HStack(spacing: 6) {
+                            Toggle("", isOn: Binding(
+                                get: { !store.dynamicsConfig.advanced.bassManagement.subEQBands[i].bypass },
+                                set: { v in
+                                    var adv = store.dynamicsConfig.advanced
+                                    adv.bassManagement.subEQBands[i].bypass = !v
+                                    store.updateAdvancedProcessing(adv)
+                                }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .labelsHidden()
+
+                            Text("\(Int(store.dynamicsConfig.advanced.bassManagement.subEQBands[i].frequency)) Hz")
                                 .font(.caption2)
-                                .frame(width: 50, alignment: .leading)
+                                .frame(width: 44, alignment: .leading)
                             Slider(
                                 value: Binding(
-                                    get: { Double(bands[0].frequency) },
-                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[0].frequency = Float(v); store.updateAdvancedProcessing(adv) }
+                                    get: { Double(store.dynamicsConfig.advanced.bassManagement.subEQBands[i].frequency) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[i].frequency = Float(v); store.updateAdvancedProcessing(adv) }
                                 ),
-                                in: 20.0...200.0
+                                in: 20.0...500.0
                             )
-                            .frame(width: 100)
-                            Text("\(Int(bands[0].frequency)) Hz")
+                            .frame(width: 70)
+
+                            Text("Q \(String(format: "%.1f", store.dynamicsConfig.advanced.bassManagement.subEQBands[i].q))")
                                 .font(.caption2)
-                                .frame(width: 50)
+                                .frame(width: 36, alignment: .leading)
                             Slider(
                                 value: Binding(
-                                    get: { Double(bands[0].gain) },
-                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[0].gain = Float(v); store.updateAdvancedProcessing(adv) }
+                                    get: { Double(store.dynamicsConfig.advanced.bassManagement.subEQBands[i].q) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[i].q = Float(v); store.updateAdvancedProcessing(adv) }
                                 ),
-                                in: -12.0...12.0
+                                in: 0.4...8.0
                             )
-                            .frame(width: 100)
-                            Text("\(String(format: "%.1f", bands[0].gain)) dB")
+                            .frame(width: 60)
+
+                            Text("\(String(format: "%.1f", store.dynamicsConfig.advanced.bassManagement.subEQBands[i].gain)) dB")
                                 .font(.caption2)
-                                .frame(width: 50)
+                                .frame(width: 44, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(store.dynamicsConfig.advanced.bassManagement.subEQBands[i].gain) },
+                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[i].gain = Float(v); store.updateAdvancedProcessing(adv) }
+                                ),
+                                in: -18.0...6.0
+                            )
+                            .frame(width: 70)
+
+                            Button {
+                                var adv = store.dynamicsConfig.advanced
+                                adv.bassManagement.subEQBands.remove(at: i)
+                                store.updateAdvancedProcessing(adv)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    if bands.count > 1 {
-                        HStack(spacing: 8) {
-                            Text("Band 2")
-                                .font(.caption2)
-                                .frame(width: 50, alignment: .leading)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(bands[1].frequency) },
-                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[1].frequency = Float(v); store.updateAdvancedProcessing(adv) }
-                                ),
-                                in: 20.0...200.0
-                            )
-                            .frame(width: 100)
-                            Text("\(Int(bands[1].frequency)) Hz")
-                                .font(.caption2)
-                                .frame(width: 50)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(bands[1].gain) },
-                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[1].gain = Float(v); store.updateAdvancedProcessing(adv) }
-                                ),
-                                in: -12.0...12.0
-                            )
-                            .frame(width: 100)
-                            Text("\(String(format: "%.1f", bands[1].gain)) dB")
-                                .font(.caption2)
-                                .frame(width: 50)
+
+                    if store.dynamicsConfig.advanced.bassManagement.subEQBands.count < BassManagementConfig.maxSubEQBands {
+                        Button("+ Add Band") {
+                            var adv = store.dynamicsConfig.advanced
+                            adv.bassManagement.subEQBands.append(SubEQBand(frequency: 60.0, q: 1.0, gain: 0.0))
+                            store.updateAdvancedProcessing(adv)
                         }
-                    }
-                    if bands.count > 2 {
-                        HStack(spacing: 8) {
-                            Text("Band 3")
-                                .font(.caption2)
-                                .frame(width: 50, alignment: .leading)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(bands[2].frequency) },
-                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[2].frequency = Float(v); store.updateAdvancedProcessing(adv) }
-                                ),
-                                in: 20.0...200.0
-                            )
-                            .frame(width: 100)
-                            Text("\(Int(bands[2].frequency)) Hz")
-                                .font(.caption2)
-                                .frame(width: 50)
-                            Slider(
-                                value: Binding(
-                                    get: { Double(bands[2].gain) },
-                                    set: { v in var adv = store.dynamicsConfig.advanced; adv.bassManagement.subEQBands[2].gain = Float(v); store.updateAdvancedProcessing(adv) }
-                                ),
-                                in: -12.0...12.0
-                            )
-                            .frame(width: 100)
-                            Text("\(String(format: "%.1f", bands[2].gain)) dB")
-                                .font(.caption2)
-                                .frame(width: 50)
-                        }
+                        .font(.caption2)
                     }
                 }
 
