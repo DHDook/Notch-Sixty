@@ -798,11 +798,41 @@ enum TargetCurveType: Int, Codable, Equatable, Sendable {
 // MARK: - Subwoofer EQ Band
 
 /// Single parametric EQ band for the subwoofer low-band signal.
-struct SubEQBand: Codable, Equatable, Sendable {
+struct SubEQBand: Codable, Equatable, Sendable, Identifiable {
+    var id: UUID
     var frequency: Float   // Hz, 20–500
     var q: Float           // 0.4–8.0
     var gain: Float        // dB, –18…+6
-    var bypass: Bool = false
+    var bypass: Bool
+
+    init(id: UUID = UUID(), frequency: Float, q: Float, gain: Float, bypass: Bool = false) {
+        self.id = id
+        self.frequency = frequency
+        self.q = q
+        self.gain = gain
+        self.bypass = bypass
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, frequency, q, gain, bypass
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Any band saved before this fix predates `id` — default to a
+        // freshly generated one rather than failing to decode. The band's
+        // actual settings (frequency/q/gain/bypass) are preserved either
+        // way; only its internal identity, which never existed before,
+        // is newly assigned. This matters concretely right now: if you
+        // already added a band while testing the previous version, it's
+        // sitting in your current saved config without an id key, and
+        // this is what keeps it from being lost when this fix lands.
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        frequency = try c.decode(Float.self, forKey: .frequency)
+        q = try c.decode(Float.self, forKey: .q)
+        gain = try c.decode(Float.self, forKey: .gain)
+        bypass = try c.decode(Bool.self, forKey: .bypass)
+    }
 }
 
 // MARK: - Bass Management Delay Mode
