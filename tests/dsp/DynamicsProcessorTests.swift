@@ -8,6 +8,21 @@ import AudioToolbox
 
 final class DynamicsProcessorTests: XCTestCase {
 
+    func testApplyConfigReconfiguresDenoiserWithoutExclusivityConflict() {
+        let processor = DynamicsProcessor(channelCount: 2, sampleRate: 48000.0)
+        var config = DynamicsConfig()
+
+        config.advanced.denoiserMode = .quality
+        processor.applyConfig(config, sampleRate: 48000.0)
+
+        config.advanced.denoiserMode = .ultra
+        processor.applyConfig(config, sampleRate: 96000.0)
+
+        // Reaching this assertion verifies that setMode() can reset its buffers
+        // without triggering Swift's runtime exclusivity enforcement.
+        XCTAssertTrue(true)
+    }
+
     func testDynamicEQConfigMemoryLeak() {
         // Regression test: setDynamicEQConfig used to leak vDSP_biquad_Setup handles
         // on every call because it overwrote the existing setup without destroying it.

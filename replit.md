@@ -8,7 +8,7 @@ Equaliser is a macOS menu bar application that captures system audio via a custo
 
 ## Tech Stack
 
-- **Language:** Swift 6 (strict concurrency)
+- **Language:** Swift 6.2 (strict concurrency)
 - **UI Framework:** SwiftUI
 - **Audio:** CoreAudio / HAL, AVFoundation, vDSP / Accelerate
 - **Build System:** Swift Package Manager (SPM)
@@ -17,7 +17,7 @@ Equaliser is a macOS menu bar application that captures system audio via a custo
 
 ## Requirements
 
-- macOS 15 (Sequoia) or later
+- macOS 27 or later
 - Apple Silicon Mac (aarch64-darwin)
 - Xcode with Swift 6 toolchain
 

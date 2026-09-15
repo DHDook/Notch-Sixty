@@ -344,12 +344,15 @@ final class SpectralDenoiser: @unchecked Sendable {
 
     /// Updates the sample rate and rebuilds the masking bias curve.
     func updateSampleRate(_ newSampleRate: Double) {
+        os_unfair_lock_lock(_processLock)
+        defer { os_unfair_lock_unlock(_processLock) }
+
         sampleRate = newSampleRate
         rebuildMaskingBias()
         // Use stored ms values directly — no reverse-derivation that would drift on repeated calls.
         setGainSmoothingMs(attackMs: gainAttackMs, releaseMs: gainReleaseMs, sampleRate: newSampleRate)
         // Per-bin noise floor estimates are in the old frequency scale; discard them.
-        reset()
+        resetProcessingState()
     }
 
     // MARK: - Main Thread API
@@ -507,7 +510,7 @@ final class SpectralDenoiser: @unchecked Sendable {
         _profileLockActive.store(0, ordering: .relaxed)
 
         // Reset all processing state.
-        reset()
+        resetProcessingState()
     }
 
     /// Main-thread only. Updates the protected frequency band and rebuilds
@@ -542,16 +545,26 @@ final class SpectralDenoiser: @unchecked Sendable {
     }
 
     func reset() {
+        os_unfair_lock_lock(_processLock)
+        defer { os_unfair_lock_unlock(_processLock) }
+        resetProcessingState()
+    }
+
+    /// Clears processing buffers while the caller holds `_processLock`.
+    /// Keeping this separate prevents `setMode()` and `updateSampleRate()` from
+    /// recursively acquiring the non-recursive unfair lock.
+    private func resetProcessingState() {
         let N   = fftSize
         let hop = hopSize
+        let ringCount = outRing.count
         workReal.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
         workImag.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
         history.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N - hop)) }
         inputAccum.withUnsafeMutableBufferPointer    { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(hop)) }
         outputOverlap.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(N)) }
-        outRing.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(outRing.count)) }
+        outRing.withUnsafeMutableBufferPointer       { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(ringCount)) }
         outWritePos = 0
-        outReadPos  = outRing.count - hop
+        outReadPos  = ringCount - hop
         accumPos    = 0
         // Reset smoothed gains to 1.0 so the denoiser opens transparently after a reset.
         for i in 0..<prevGain.count { prevGain[i] = 1.0 }

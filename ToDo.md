@@ -3,7 +3,7 @@
 A sequential plan so we can ship the menu-bar equalizer step by step.
 
 ## 1. Bootstrap the Project (Completed)
-- [x] Create a new SwiftUI macOS app targeting macOS 15+ on Apple Silicon.
+- [x] Create a SwiftUI app targeting macOS 27+ on Apple Silicon.
 - [x] Configure signing, hardened runtime, and microphone/audio entitlements.
 - [x] Add basic README notes on installing BlackHole 2ch for loopback use.
 
