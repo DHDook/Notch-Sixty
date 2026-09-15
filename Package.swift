@@ -1,10 +1,10 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
     name: "Equaliser",
     platforms: [
-        .macOS(.v15)
+        .macOS("27.0")
     ],
     dependencies: [
         // Swift Atomics for thread-safe atomic operations in real-time audio
