@@ -93,7 +93,7 @@ These files are small and harmless — remove them if you do not plan to reinsta
 
 ## Requirements
 
-* macOS 15 (Sequoia) or later
+* macOS 27 or later
 * Apple Silicon Mac
 
 ## Privacy & Permissions

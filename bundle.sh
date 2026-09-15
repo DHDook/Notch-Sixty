@@ -57,7 +57,7 @@ generate_icon() {
   xcrun actool \
     --compile "$ACTOOL_OUT" \
     --platform macosx \
-    --minimum-deployment-target 15.0 \
+    --minimum-deployment-target 27.0 \
     --app-icon AppIcon \
     --output-partial-info-plist "$ROOT_DIR/.build/actool-partial.plist" \
     "$ROOT_DIR/resources/AppIcon.xcassets"
@@ -191,4 +191,3 @@ case "${1:-}" in
     exit 1
     ;;
 esac
-

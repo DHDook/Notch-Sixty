@@ -14,26 +14,25 @@ struct MenuBarContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerSection
-            
-            Divider()
-                .padding(.vertical, 12)
-            
-            controlGroupSection
-            
-            Divider()
-                .padding(.vertical, 12)
-            
-            actionButtonsSection
+        GlassEffectContainer(spacing: 12) {
+            VStack(spacing: 12) {
+                headerSection
+
+                controlGroupSection
+                    .padding(LiquidGlassStyle.contentPadding)
+                    .liquidGlassPanel()
+
+                actionButtonsSection
+            }
         }
-        .padding(16)
+        .padding(14)
+        .frame(width: 330)
     }
 
     // MARK: - Header
 
     private var headerSection: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(nsImage: {
                 let img = NSImage(named: "TrayIcon")
                     ?? NSImage(systemSymbolName: "slider.vertical.3",
@@ -41,17 +40,22 @@ struct MenuBarContentView: View {
                 img.isTemplate = true
                 return img
             }())
-            .frame(width: 18, height: 18)
-            Text("Notch Sixty")
-                .font(.headline)
+            .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Notch Sixty")
+                    .font(.headline)
+                Text("System audio equaliser")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
         }
     }
 
-    // MARK: - Control Groups (Option 27 style: each control in own row)
+    // MARK: - Control Groups
 
     private var controlGroupSection: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             statusRow
 
             // Show device pickers in manual mode
@@ -96,33 +100,26 @@ struct MenuBarContentView: View {
     // MARK: - Action Buttons (each in own section like mockup)
 
     private var actionButtonsSection: some View {
-        VStack(spacing: 0) {
-            // Open Notch Sixty button - full width
+        HStack(spacing: 10) {
             Button {
                 windowActivation.prepareToShowWindow()
                 openWindow(id: "equaliser")
                 NSApp.activate(ignoringOtherApps: true)
                 dismiss()
             } label: {
-                Text("Open Notch Sixty")
+                Label("Open Notch Sixty", systemImage: "slider.vertical.3")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(Color.accentColor)
-                    .foregroundColor(.white)
-                    .cornerRadius(6)
             }
-            .buttonStyle(.plain)
-            
-            // Quit button - aligned right
-            HStack {
-                Spacer()
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+            .buttonStyle(.glassProminent)
+
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+                    .accessibilityLabel("Quit")
             }
-            .padding(.top, 8)
+            .buttonStyle(.glass)
+            .help("Quit Notch Sixty")
         }
     }
 }

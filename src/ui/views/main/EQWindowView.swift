@@ -230,8 +230,9 @@ struct EQWindowView: View {
                 Divider()
                 vuAndCurveColumn
             }
-
-            Divider()
+            .padding(LiquidGlassStyle.contentPadding)
+            .liquidGlassPanel()
+            .padding(.bottom, 10)
 
             // Preset and band controls toolbar
             HStack(alignment: .top) {
@@ -467,12 +468,15 @@ struct EQWindowView: View {
 
                 Spacer()
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal, LiquidGlassStyle.contentPadding)
+            .padding(.vertical, 8)
+            .liquidGlassPanel(cornerRadius: LiquidGlassStyle.compactRadius)
+            .padding(.bottom, 10)
 
             EQBandGridView()
         }
         .padding(.horizontal, 12)
-        .padding(.top, 6)
+        .padding(.top, 10)
         .padding(.bottom, 12)
         .frame(width: 1300, height: 580)
         .toolbar {
