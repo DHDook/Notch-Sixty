@@ -2477,9 +2477,7 @@ struct DynamicsInlineView: View {
             Picker("", selection: selection, content: content)
                 .pickerStyle(.segmented)
                 .controlSize(.mini)
-                .font(.system(size: 9))
                 .labelsHidden()
-                .frame(maxWidth: .infinity)
         }
     }
 

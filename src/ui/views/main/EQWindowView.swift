@@ -230,13 +230,13 @@ struct EQWindowView: View {
                 Divider()
                 vuAndCurveColumn
             }
-            .frame(width: LiquidGlassStyle.panelContentWidth)
+            .frame(maxWidth: .infinity)
             .padding(LiquidGlassStyle.contentPadding)
             .liquidGlassPanel()
             .padding(.bottom, LiquidGlassStyle.panelGap)
 
             // Preset and band controls toolbar
-            HStack(alignment: .top, spacing: 16) {
+            HStack(alignment: .top) {
                 PresetToolbar()
                     .frame(minWidth: 280, maxWidth: 280, alignment: .leading)
 
@@ -321,7 +321,8 @@ struct EQWindowView: View {
                     }
                 }
 
-                Spacer(minLength: 16)
+                Spacer()
+                    .frame(width: 128)
 
                 VStack(spacing: 4) {
                     Text("Bands")
@@ -330,9 +331,10 @@ struct EQWindowView: View {
                     BandCountControl()
                 }
 
-                Spacer(minLength: 16)
+                Spacer()
+                    .frame(width: 128)
 
-                HStack(spacing: 20) {
+                HStack(spacing: 12) {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Channel")
@@ -403,6 +405,9 @@ struct EQWindowView: View {
                         }
                     }
 
+                    Spacer()
+
+                    HStack(spacing: 20) {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Mode")
@@ -461,21 +466,27 @@ struct EQWindowView: View {
                         .controlSize(.small)
                         .help("Reset all gains to 0 dB while keeping current band configuration")
                     }
+                    }
                 }
+
+                Spacer()
             }
-            .frame(width: LiquidGlassStyle.panelContentWidth)
-            .padding(LiquidGlassStyle.contentPadding)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, LiquidGlassStyle.contentPadding)
+            .padding(.vertical, 8)
             .liquidGlassPanel(cornerRadius: LiquidGlassStyle.compactRadius)
             .padding(.bottom, LiquidGlassStyle.panelGap)
 
             EQBandGridView()
                 .frame(height: LiquidGlassStyle.bandGridHeight)
-                .frame(width: LiquidGlassStyle.panelContentWidth)
+                .frame(maxWidth: .infinity)
                 .padding(LiquidGlassStyle.contentPadding)
                 .liquidGlassPanel()
         }
-        .padding(LiquidGlassStyle.windowPadding)
-        .frame(width: LiquidGlassStyle.windowWidth, height: LiquidGlassStyle.windowHeight)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .frame(width: 1300, height: 680)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
