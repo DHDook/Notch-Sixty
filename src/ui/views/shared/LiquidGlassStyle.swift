@@ -6,9 +6,12 @@ import SwiftUI
 /// other information-dense content keep their opaque backgrounds so that live
 /// audio data remains legible in every appearance.
 enum LiquidGlassStyle {
+    static let windowWidth: CGFloat = 1300
+    static let windowHeight: CGFloat = 650
+    static let windowPadding: CGFloat = 10
     static let panelRadius: CGFloat = 18
     static let compactRadius: CGFloat = 12
-    static let contentPadding: CGFloat = 10
+    static let contentPadding: CGFloat = 8
     /// Vertical gap between stacked glass panels. Deliberately smaller than
     /// contentPadding: this is empty space between two separate panels, not the
     /// margin between content and its own panel's glass edge, so it can be tighter
@@ -20,7 +23,12 @@ enum LiquidGlassStyle {
     /// inheriting whatever space happens to be left over. Estimated from
     /// EQBandSliderView's fixed 175pt fader track plus its header/readout rows —
     /// confirm against an actual build and adjust if bands look cramped or floaty.
-    static let bandGridHeight: CGFloat = 280
+    static let bandGridHeight: CGFloat = 250
+
+    /// Keeps every panel on the same horizontal bounds, even when a panel's
+    /// controls have a larger intrinsic width than the window can accommodate.
+    static let panelWidth = windowWidth - (windowPadding * 2)
+    static let panelContentWidth = panelWidth - (contentPadding * 2)
 }
 
 extension View {
