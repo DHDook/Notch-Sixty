@@ -230,7 +230,7 @@ struct EQWindowView: View {
                 Divider()
                 vuAndCurveColumn
             }
-            .frame(maxWidth: .infinity)
+            .frame(width: LiquidGlassStyle.panelContentWidth)
             .padding(LiquidGlassStyle.contentPadding)
             .liquidGlassPanel()
             .padding(.bottom, LiquidGlassStyle.panelGap)
@@ -322,7 +322,7 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
-                    .frame(width: 128)
+                    .frame(width: 32)
 
                 VStack(spacing: 4) {
                     Text("Bands")
@@ -332,7 +332,7 @@ struct EQWindowView: View {
                 }
 
                 Spacer()
-                    .frame(width: 128)
+                    .frame(width: 32)
 
                 HStack(spacing: 12) {
                     VStack(spacing: 4) {
@@ -471,7 +471,7 @@ struct EQWindowView: View {
 
                 Spacer()
             }
-            .frame(maxWidth: .infinity)
+            .frame(width: LiquidGlassStyle.panelContentWidth)
             .padding(.horizontal, LiquidGlassStyle.contentPadding)
             .padding(.vertical, 8)
             .liquidGlassPanel(cornerRadius: LiquidGlassStyle.compactRadius)
@@ -479,14 +479,14 @@ struct EQWindowView: View {
 
             EQBandGridView()
                 .frame(height: LiquidGlassStyle.bandGridHeight)
-                .frame(maxWidth: .infinity)
+                .frame(width: LiquidGlassStyle.panelContentWidth)
                 .padding(LiquidGlassStyle.contentPadding)
                 .liquidGlassPanel()
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1300, height: 680)
+        .frame(width: 1300, height: 660)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {

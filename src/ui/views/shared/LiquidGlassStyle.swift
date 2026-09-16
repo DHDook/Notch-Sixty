@@ -14,13 +14,23 @@ enum LiquidGlassStyle {
     /// margin between content and its own panel's glass edge, so it can be tighter
     /// without crowding the glass material itself.
     static let panelGap: CGFloat = 6
+    /// Exact width every panel's inner content is pinned to (window width 1300,
+    /// minus 12pt outer horizontal padding each side, minus 10pt contentPadding
+    /// each side = 1256). All three panels use this exact value rather than
+    /// maxWidth: .infinity — the middle panel's row depends on flexible Spacers to
+    /// create breathing room around its controls, and maxWidth: .infinity doesn't
+    /// reliably guarantee three independently-laid-out rows converge on the same
+    /// resolved width. An exact, shared width removes that ambiguity outright.
+    static let panelContentWidth: CGFloat = 1256
     /// Fixed height for the EQ band grid's glass panel. EQBandGridView contains a
     /// GeometryReader (for width-based centering), which has no intrinsic height of
     /// its own, so this section needs an explicit height from its parent rather than
-    /// inheriting whatever space happens to be left over. Estimated from
-    /// EQBandSliderView's fixed 175pt fader track plus its header/readout rows —
-    /// confirm against an actual build and adjust if bands look cramped or floaty.
-    static let bandGridHeight: CGFloat = 280
+    /// inheriting whatever space happens to be left over. Tightened from 280 — 260
+    /// sits closer to the sliders' actual content height (175pt track plus
+    /// header/readout rows). NOTE: this value is summed into the window's locked
+    /// height in EQWindowView.swift and EqualiserApp.swift (Tasks 7–8) — if this
+    /// number changes again later, those two need to change by the same amount.
+    static let bandGridHeight: CGFloat = 260
 }
 
 extension View {
