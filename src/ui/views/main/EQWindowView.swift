@@ -230,9 +230,10 @@ struct EQWindowView: View {
                 Divider()
                 vuAndCurveColumn
             }
+            .frame(maxWidth: .infinity)
             .padding(LiquidGlassStyle.contentPadding)
             .liquidGlassPanel()
-            .padding(.bottom, 10)
+            .padding(.bottom, LiquidGlassStyle.panelGap)
 
             // Preset and band controls toolbar
             HStack(alignment: .top) {
@@ -406,6 +407,7 @@ struct EQWindowView: View {
 
                     Spacer()
 
+                    HStack(spacing: 20) {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Mode")
@@ -458,30 +460,33 @@ struct EQWindowView: View {
                             store.flattenBands()
                         } label: {
                             Text("Flatten")
-                                .frame(width: 40, height: 16)
+                                .frame(width: 56, height: 20)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .help("Reset all gains to 0 dB while keeping current band configuration")
                     }
+                    }
                 }
 
                 Spacer()
             }
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, LiquidGlassStyle.contentPadding)
             .padding(.vertical, 8)
             .liquidGlassPanel(cornerRadius: LiquidGlassStyle.compactRadius)
-            .padding(.bottom, 10)
+            .padding(.bottom, LiquidGlassStyle.panelGap)
 
             EQBandGridView()
                 .frame(height: LiquidGlassStyle.bandGridHeight)
+                .frame(maxWidth: .infinity)
                 .padding(LiquidGlassStyle.contentPadding)
                 .liquidGlassPanel()
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1300)
+        .frame(width: 1300, height: 680)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {

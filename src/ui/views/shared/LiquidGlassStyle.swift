@@ -8,7 +8,12 @@ import SwiftUI
 enum LiquidGlassStyle {
     static let panelRadius: CGFloat = 18
     static let compactRadius: CGFloat = 12
-    static let contentPadding: CGFloat = 12
+    static let contentPadding: CGFloat = 10
+    /// Vertical gap between stacked glass panels. Deliberately smaller than
+    /// contentPadding: this is empty space between two separate panels, not the
+    /// margin between content and its own panel's glass edge, so it can be tighter
+    /// without crowding the glass material itself.
+    static let panelGap: CGFloat = 6
     /// Fixed height for the EQ band grid's glass panel. EQBandGridView contains a
     /// GeometryReader (for width-based centering), which has no intrinsic height of
     /// its own, so this section needs an explicit height from its parent rather than

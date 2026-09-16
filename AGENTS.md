@@ -8,7 +8,7 @@ A macOS menu bar equaliser application built with Swift 6 and SwiftUI.
 
 | Aspect       | Details                                           |
 |--------------|---------------------------------------------------|
-| Language     | Swift 6.2 (strict concurrency)                    |
+| Language     | Swift 6.4 (strict concurrency)                    |
 | Framework    | SwiftUI + AVFoundation + Core Audio               |
 | Platform     | macOS 27+, Apple Silicon only                     |
 | Build System | Swift Package Manager                             |
