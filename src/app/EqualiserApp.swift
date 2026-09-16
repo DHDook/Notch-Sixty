@@ -57,7 +57,7 @@ struct EqualiserMain: App {
                 }
         }
         .defaultPosition(.center)
-        .defaultSize(width: 1450, height: 480)
+        .defaultSize(width: 1300, height: 700) // height is a starting estimate — .contentSize below will settle it; re-measure once built and update this
         .windowResizability(.contentSize)
         .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {

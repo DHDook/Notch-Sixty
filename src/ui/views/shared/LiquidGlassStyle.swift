@@ -9,6 +9,13 @@ enum LiquidGlassStyle {
     static let panelRadius: CGFloat = 18
     static let compactRadius: CGFloat = 12
     static let contentPadding: CGFloat = 12
+    /// Fixed height for the EQ band grid's glass panel. EQBandGridView contains a
+    /// GeometryReader (for width-based centering), which has no intrinsic height of
+    /// its own, so this section needs an explicit height from its parent rather than
+    /// inheriting whatever space happens to be left over. Estimated from
+    /// EQBandSliderView's fixed 175pt fader track plus its header/readout rows —
+    /// confirm against an actual build and adjust if bands look cramped or floaty.
+    static let bandGridHeight: CGFloat = 280
 }
 
 extension View {

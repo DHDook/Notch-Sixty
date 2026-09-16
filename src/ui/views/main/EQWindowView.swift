@@ -474,11 +474,14 @@ struct EQWindowView: View {
             .padding(.bottom, 10)
 
             EQBandGridView()
+                .frame(height: LiquidGlassStyle.bandGridHeight)
+                .padding(LiquidGlassStyle.contentPadding)
+                .liquidGlassPanel()
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1300, height: 580)
+        .frame(width: 1300)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
