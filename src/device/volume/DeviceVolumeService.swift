@@ -256,6 +256,11 @@ final class DeviceVolumeService: VolumeControlling {
     // MARK: - Volume Observation
     
     func observeDeviceVolumeChanges(deviceID: AudioDeviceID, handler: @escaping (Float) -> Void) {
+        // Reconfiguration can ask us to observe the same device more than once.
+        // Core Audio retains registered blocks, so remove the previous registration
+        // before replacing the dictionary entry that is needed to unregister it.
+        stopObservingDeviceVolumeChanges(deviceID: deviceID)
+
         // Try VolumeScalar first (works for most devices)
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
@@ -367,6 +372,11 @@ final class DeviceVolumeService: VolumeControlling {
     // MARK: - Mute Observation
 
     func observeMuteChanges(on deviceID: AudioDeviceID, handler: @escaping (Bool) -> Void) {
+        // Both mute selectors retain their blocks in Core Audio. Always make this
+        // operation replace the existing pair rather than accumulating listeners
+        // whenever the audio route is rebuilt with the same device.
+        stopObservingMuteChanges(on: deviceID)
+
         // Primary listener: kAudioHardwareServiceDeviceProperty_VirtualMasterMute.
         // Works for most hardware output devices (speakers, headphones, AirPods).
         var primaryAddress = AudioObjectPropertyAddress(

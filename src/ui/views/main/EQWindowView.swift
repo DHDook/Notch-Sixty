@@ -20,6 +20,7 @@ struct EQWindowView: View {
     @State private var showStateResetAlert = false
     @State private var infoPopoverWindowId: String? = nil
     @State private var vuRowHeight: CGFloat = 0
+    @State private var windowObservers: [NSObjectProtocol] = []
 
     private struct MeterDefinition {
         let title: String
@@ -534,8 +535,10 @@ struct EQWindowView: View {
         }
         .background(
             WindowAccessor { window in
+                NotificationCenter.default.removeObservers(windowObservers)
+                windowObservers.removeAll()
                 guard let window = window else { return }
-                NotificationCenter.default.addObserver(
+                let miniaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didMiniaturizeNotification,
                     object: window,
                     queue: .main
@@ -544,7 +547,7 @@ struct EQWindowView: View {
                         store.meterStore.meterWindowBecameHidden(id: "equaliser")
                     }
                 }
-                NotificationCenter.default.addObserver(
+                let deminiaturizeToken = NotificationCenter.default.addObserver(
                     forName: NSWindow.didDeminiaturizeNotification,
                     object: window,
                     queue: .main
@@ -553,6 +556,7 @@ struct EQWindowView: View {
                         store.meterStore.meterWindowBecameVisible(id: "equaliser")
                     }
                 }
+                windowObservers = [miniaturizeToken, deminiaturizeToken]
             }
         )
         .onAppear {
@@ -572,6 +576,8 @@ struct EQWindowView: View {
         }
         .onDisappear {
             store.meterStore.meterWindowBecameHidden(id: "equaliser")
+            NotificationCenter.default.removeObservers(windowObservers)
+            windowObservers.removeAll()
         }
         .sheet(isPresented: $showDriverSheet) {
             DriverInstallationView(

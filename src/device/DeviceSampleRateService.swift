@@ -92,6 +92,11 @@ final class DeviceSampleRateService: SampleRateObserving {
     // MARK: - Sample Rate Observation
     
     func observeSampleRateChanges(on deviceID: AudioDeviceID, handler: @escaping (Float64) -> Void) {
+        // Core Audio retains every registered listener block. Re-registering for the
+        // same device without removing the old block loses our only reference to it,
+        // so it can never be unregistered and continues to retain its handler.
+        stopObservingSampleRateChanges(on: deviceID)
+
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyNominalSampleRate,
             mScope: kAudioObjectPropertyScopeGlobal,
