@@ -9,6 +9,7 @@ import Atomics
 @MainActor
 protocol RenderPipelineProtocol: AnyObject {
     func currentOutputChannelMeters() -> [Int: OutputChannelMeterData]
+    func setMetersEnabled(_ enabled: Bool)
 }
 
 struct LevelMeterSnapshot {

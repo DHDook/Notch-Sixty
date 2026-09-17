@@ -317,6 +317,7 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     @inline(__always)
     func updatePreEQPeak(frameCount: UInt32) {
+        guard metersEnabledAtomic.load(ordering: .relaxed) != 0 else { return }
         var peak: Float = 0
         for ch in 0..<Int(channelCount) {
             let buf = processingBuffers[ch]
@@ -333,6 +334,7 @@ final class RenderCallbackContext: @unchecked Sendable {
 
     @inline(__always)
     func updatePostEQPeak(frameCount: UInt32) {
+        guard metersEnabledAtomic.load(ordering: .relaxed) != 0 else { return }
         var peak: Float = 0
         for ch in 0..<Int(channelCount) {
             let buf = processingBuffers[ch]
@@ -1784,6 +1786,7 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// Call from the audio render thread immediately after `provideFrames()`.
     @inline(__always)
     func writeRTAInput(frameCount: Int) {
+        guard metersEnabledAtomic.load(ordering: .relaxed) != 0 else { return }
         guard let buf = rtaInputBuffer, frameCount > 0, channelCount >= 1 else { return }
         buf.writeStereoSamples(
             leftChannel:  processingBuffers[0],
@@ -1796,6 +1799,7 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// Call from the audio render thread alongside `writeRTAInput()`.
     @inline(__always)
     func writeGoniometer(frameCount: Int) {
+        guard metersEnabledAtomic.load(ordering: .relaxed) != 0 else { return }
         guard let eng = goniometerEngine, frameCount > 0, channelCount >= 1 else { return }
         eng.writeStereoInterleaved(
             left:   processingBuffers[0],
@@ -1808,6 +1812,7 @@ final class RenderCallbackContext: @unchecked Sendable {
     /// Call from the audio render thread immediately after `processDynamics()`.
     @inline(__always)
     func writeRTAOutput(from bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: Int) {
+        guard metersEnabledAtomic.load(ordering: .relaxed) != 0 else { return }
         guard let buf = rtaOutputBuffer, frameCount > 0 else { return }
         let abl = UnsafeMutableAudioBufferListPointer(bufferList)
         guard !abl.isEmpty,
