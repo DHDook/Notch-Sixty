@@ -407,7 +407,7 @@ struct EQWindowView: View {
 
                     Spacer()
 
-                    HStack(spacing: 20) {
+                    HStack(spacing: 24) {
                     VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Mode")
@@ -486,7 +486,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1300, height: 660)
+        .frame(width: 1400, height: 660)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
