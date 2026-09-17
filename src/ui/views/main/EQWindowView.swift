@@ -407,7 +407,6 @@ struct EQWindowView: View {
                     }
 
                     Spacer()
-                        .frame(width: 32)
 
                     HStack(spacing: 24) {
                     VStack(spacing: 4) {
