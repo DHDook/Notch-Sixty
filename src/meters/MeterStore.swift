@@ -34,10 +34,8 @@ final class MeterStore: ObservableObject {
 
                 // Reset all observers to silent state
                 notifyAllObserversSilent()
-                stopMeterUpdates()
-            } else {
-                startMeterUpdates()
             }
+            reconcileMeterUpdates()
         }
     }
 
@@ -48,6 +46,7 @@ final class MeterStore: ObservableObject {
             if rtaEnabled && !metersEnabled {
                 rtaEnabled = false
             }
+            reconcileMeterUpdates()
         }
     }
     @Published var remainingMetersEnabled: Bool = false {
@@ -55,6 +54,7 @@ final class MeterStore: ObservableObject {
             if remainingMetersEnabled && !metersEnabled {
                 remainingMetersEnabled = false
             }
+            reconcileMeterUpdates()
         }
     }
     @Published var levelMetersEnabled: Bool = false {
@@ -62,6 +62,7 @@ final class MeterStore: ObservableObject {
             if levelMetersEnabled && !metersEnabled {
                 levelMetersEnabled = false
             }
+            reconcileMeterUpdates()
         }
     }
     @Published var vuMetersEnabled: Bool = true {
@@ -69,6 +70,7 @@ final class MeterStore: ObservableObject {
             if vuMetersEnabled && !metersEnabled {
                 vuMetersEnabled = false
             }
+            reconcileMeterUpdates()
         }
     }
     @Published var vuMeterSource: VUSource = .output
@@ -173,29 +175,43 @@ final class MeterStore: ObservableObject {
     // MARK: - Lifecycle
     
     func setRenderPipeline(_ pipeline: (any RenderPipelineProtocol)?) {
+        renderPipeline?.setMetersEnabled(false)
         self.renderPipeline = pipeline
-        // Propagate initial meters enabled state to the pipeline
-        if let pipeline = pipeline as? RenderPipeline {
-            pipeline.setMetersEnabled(metersEnabled)
-        }
+        // A master switch alone must not turn on real-time analysis. Metering is
+        // only useful while an enabled group is actually on screen.
+        reconcileMeterUpdates()
     }
     
     func meterWindowBecameVisible(id: String) {
         visibleMeterWindowIDs.insert(id)
-        guard metersEnabled else { return }
-        startMeterUpdates()
+        reconcileMeterUpdates()
     }
 
     func meterWindowBecameHidden(id: String) {
         visibleMeterWindowIDs.remove(id)
-        if visibleMeterWindowIDs.isEmpty {
+        reconcileMeterUpdates()
+    }
+
+    /// True only when the master switch and at least one group switch are on.
+    /// Keeping this policy here prevents the UI timer and the render-thread
+    /// sample scans from running merely because the master switch is enabled.
+    private var hasEnabledMeterGroup: Bool {
+        metersEnabled && (rtaEnabled || remainingMetersEnabled || levelMetersEnabled || vuMetersEnabled)
+    }
+
+    private func reconcileMeterUpdates() {
+        let shouldRun = hasEnabledMeterGroup && !visibleMeterWindowIDs.isEmpty
+        renderPipeline?.setMetersEnabled(shouldRun)
+        if shouldRun {
+            startMeterUpdates()
+        } else {
             stopMeterUpdates()
         }
     }
     
     func startMeterUpdates() {
         guard meterTimer == nil else { return }
-        guard metersEnabled else { return }
+        guard hasEnabledMeterGroup, !visibleMeterWindowIDs.isEmpty else { return }
 
         meterTimer = Timer.publish(every: Self.meterInterval, on: .main, in: .common)
             .autoconnect()
@@ -204,9 +220,7 @@ final class MeterStore: ObservableObject {
             }
 
         // Enable audio thread meter calculations
-        if let pipeline = renderPipeline as? RenderPipeline {
-            pipeline.setMetersEnabled(true)
-        }
+        renderPipeline?.setMetersEnabled(true)
     }
 
     func stopMeterUpdates() {
@@ -216,15 +230,13 @@ final class MeterStore: ObservableObject {
         notifyAllObserversSilent()
 
         // Disable audio thread meter calculations
-        if let pipeline = renderPipeline as? RenderPipeline {
-            pipeline.setMetersEnabled(false)
-        }
+        renderPipeline?.setMetersEnabled(false)
     }
     
     // MARK: - Update Cycle
 
     func refreshMeterSnapshot() {
-        guard metersEnabled else {
+        guard hasEnabledMeterGroup else {
             notifyAllObserversSilent()
             return
         }

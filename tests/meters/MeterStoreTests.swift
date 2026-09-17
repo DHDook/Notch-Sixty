@@ -4,6 +4,13 @@ import XCTest
 @MainActor
 final class MeterStoreTests: XCTestCase {
 
+    private final class TestPipeline: RenderPipelineProtocol {
+        var enabledStates: [Bool] = []
+
+        func currentOutputChannelMeters() -> [Int: OutputChannelMeterData] { [:] }
+        func setMetersEnabled(_ enabled: Bool) { enabledStates.append(enabled) }
+    }
+
     // MARK: - Test Observer
 
     private final class TestObserver: MeterObserver {
@@ -105,9 +112,45 @@ final class MeterStoreTests: XCTestCase {
     func testStartMeterUpdates_withoutPipeline_noCrash() {
         let store = MeterStore()
 
+        store.meterWindowBecameVisible(id: "equaliser")
         store.startMeterUpdates()
 
         XCTAssertTrue(true)
+    }
+
+    func testMasterToggleDoesNotEnablePipelineWhenAllGroupsAreDisabled() {
+        let store = MeterStore(
+            metersEnabled: true,
+            rtaEnabled: false,
+            remainingMetersEnabled: false,
+            levelMetersEnabled: false,
+            vuMetersEnabled: false
+        )
+        let pipeline = TestPipeline()
+        store.setRenderPipeline(pipeline)
+
+        store.meterWindowBecameVisible(id: "equaliser")
+
+        XCTAssertEqual(pipeline.enabledStates.last, false)
+    }
+
+    func testGroupToggleControlsPipelineWhileMasterIsEnabledAndWindowIsVisible() {
+        let store = MeterStore(
+            metersEnabled: true,
+            rtaEnabled: false,
+            remainingMetersEnabled: false,
+            levelMetersEnabled: false,
+            vuMetersEnabled: false
+        )
+        let pipeline = TestPipeline()
+        store.setRenderPipeline(pipeline)
+        store.meterWindowBecameVisible(id: "equaliser")
+
+        store.levelMetersEnabled = true
+        XCTAssertEqual(pipeline.enabledStates.last, true)
+
+        store.levelMetersEnabled = false
+        XCTAssertEqual(pipeline.enabledStates.last, false)
     }
 
     // MARK: - Multiple Meter Types

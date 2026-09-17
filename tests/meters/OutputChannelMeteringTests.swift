@@ -166,6 +166,8 @@ final class OutputChannelMeteringTests: XCTestCase {
 class MockRenderPipeline: RenderPipelineProtocol {
     var outputChannelMeters: [Int: OutputChannelMeterData] = [:]
 
+    func setMetersEnabled(_ enabled: Bool) {}
+
     func currentOutputChannelMeters() -> [Int: OutputChannelMeterData] {
         return outputChannelMeters
     }
