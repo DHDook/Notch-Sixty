@@ -406,8 +406,14 @@ struct EQWindowView: View {
                         }
                     }
 
-                    Spacer()
-                        .frame(width: 32)
+                    // Fixed gap before the Mode/Flatten group. Deliberately NOT
+                    // `Spacer().frame(width:)` — wrapping a Spacer in a fixed-width
+                    // frame strips its stack-axis context and makes it greedy in the
+                    // cross axis, so it expands to the full proposed height and drags
+                    // the whole row (and the window) taller. Color.clear at an explicit
+                    // size is inert in both axes.
+                    Color.clear
+                        .frame(width: 32, height: 1)
 
                     HStack(spacing: 24) {
                     VStack(spacing: 4) {
