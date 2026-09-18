@@ -206,7 +206,7 @@ struct EQWindowView: View {
                     }
                     .padding(12)
                 }
-                .frame(maxWidth: 280, maxHeight: 320)
+                .frame(maxWidth: 280, maxHeight: 300)
             }
         }
     }
@@ -428,7 +428,7 @@ struct EQWindowView: View {
                     Spacer()
 
                     HStack(spacing: 24) {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 8) {
                         HStack(spacing: 4) {
                             Text("Mode")
                                 .font(.caption)
@@ -471,7 +471,7 @@ struct EQWindowView: View {
                         .frame(width: 225)
                     }
 
-                    VStack(spacing: 4) {
+                    VStack(spacing: 8) {
                         Text("Flatten")
                             .font(.caption)
                             .foregroundStyle(.secondary)
