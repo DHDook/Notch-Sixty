@@ -4,10 +4,30 @@ import SwiftUI
 /// VUControlsRow, composed alongside the window launchers in EQWindowView).
 struct VUMeterPairView: View {
     @ObservedObject var meterStore: MeterStore
+    /// Target combined width for both gauges plus the gap between them.
+    /// Defaults to the original hardcoded size so any other call site that
+    /// doesn't pass this keeps its current appearance.
+    var totalWidth: CGFloat = 312
     @State private var sourceKey: UUID = UUID()
 
+    private static let baseMeterWidth: CGFloat = 150
+    private static let baseMeterHeight: CGFloat = 62
+    private static let interMeterGap: CGFloat = 12
+
+    /// Each meter's width, derived from totalWidth. Floors at the original
+    /// 150 so meters never render smaller than the pre-migration size.
+    private var meterWidth: CGFloat {
+        max(Self.baseMeterWidth, (totalWidth - Self.interMeterGap) / 2)
+    }
+
+    /// Height scaled by the same factor as width, preserving the original
+    /// 150:62 aspect ratio exactly.
+    private var meterHeight: CGFloat {
+        meterWidth * (Self.baseMeterHeight / Self.baseMeterWidth)
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Self.interMeterGap) {
             leftMeter
             rightMeter
         }
@@ -23,7 +43,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVULeft : .outputVULeft,
             channelLabel: "L"
         )
-        .frame(width: 150, height: 62)
+        .frame(width: meterWidth, height: meterHeight)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)
@@ -44,7 +64,7 @@ struct VUMeterPairView: View {
             meterType: meterStore.vuMeterSource == .input ? .inputVURight : .outputVURight,
             channelLabel: "R"
         )
-        .frame(width: 150, height: 62)
+        .frame(width: meterWidth, height: meterHeight)
         .background(Color.black)
         .overlay(
             RoundedRectangle(cornerRadius: 3)

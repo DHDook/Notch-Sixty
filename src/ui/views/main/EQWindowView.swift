@@ -20,6 +20,7 @@ struct EQWindowView: View {
     @State private var showStateResetAlert = false
     @State private var infoPopoverWindowId: String? = nil
     @State private var vuRowHeight: CGFloat = 0
+    @State private var curveColumnWidth: CGFloat = 0
     @State private var windowObservers: [NSObjectProtocol] = []
 
     private struct MeterDefinition {
@@ -103,7 +104,7 @@ struct EQWindowView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    VUMeterPairView(meterStore: store.meterStore)
+                    VUMeterPairView(meterStore: store.meterStore, totalWidth: vuMeterPairWidth)
                         .opacity(metersEnabledUI ? 1.0 : 0.35)
                         .saturation(metersEnabledUI ? 1.0 : 0.0)
                         .animation(.easeInOut(duration: 0.25), value: metersEnabledUI)
@@ -122,9 +123,27 @@ struct EQWindowView: View {
 
             EQCurveView()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // .padding(.top, 4) — removed; scale canvas height provides sufficient separation
-                .padding(.bottom, 12)
+                .reportRowWidth()
+                .equalRowWidth($curveColumnWidth)
+                // No .padding(.bottom,) here — the panel's own contentPadding
+                // (applied outside this column) provides the bottom margin,
+                // matching the same contentPadding that provides the right-edge
+                // margin, so both sides read as equal.
         }
+    }
+
+    /// Target total width for the VU meter pair (both gauges + the 12pt gap
+    /// between them), scaled to reach the launcher button stack rather than a
+    /// hardcoded constant. Derived from EQCurveView's measured width — the
+    /// curve already fills this column's true available width via
+    /// maxWidth: .infinity, so its reported width is exactly this column's
+    /// real width, whatever the preamp and dynamics columns leave for it.
+    /// 175 = launcherStack (150, fixed) + Divider (~1) + 2 × 12pt HStack spacing.
+    /// Floors at 312 (the original hardcoded size) so meters never render
+    /// smaller than before, including on the first layout pass before
+    /// curveColumnWidth has a measured value.
+    private var vuMeterPairWidth: CGFloat {
+        max(312, curveColumnWidth - 175)
     }
 
     private var launcherStack: some View {
@@ -486,7 +505,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1400, height: 660)
+        .frame(width: 1400, height: 648)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
