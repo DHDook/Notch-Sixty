@@ -6,6 +6,7 @@ import SwiftUI
 /// other information-dense content keep their opaque backgrounds so that live
 /// audio data remains legible in every appearance.
 enum LiquidGlassStyle {
+    static let mainWindowHeight: CGFloat = 608
     static let panelRadius: CGFloat = 18
     static let compactRadius: CGFloat = 12
     static let contentPadding: CGFloat = 10
@@ -14,6 +15,9 @@ enum LiquidGlassStyle {
     /// margin between content and its own panel's glass edge, so it can be tighter
     /// without crowding the glass material itself.
     static let panelGap: CGFloat = 6
+    /// Keeps the meter controls visually separated from the EQ curve without
+    /// leaving a full control-row gap beneath the final launcher button.
+    static let meterCurveDividerPadding: CGFloat = 4
     /// Exact width every panel's inner content is pinned to (window width 1400,
     /// minus 12pt outer horizontal padding each side, minus 10pt contentPadding
     /// each side = 1356). All three panels use this exact value rather than

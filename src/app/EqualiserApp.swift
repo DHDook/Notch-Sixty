@@ -57,7 +57,7 @@ struct EqualiserMain: App {
                 }
         }
         .defaultPosition(.center)
-        .defaultSize(width: 1400, height: 648)
+        .defaultSize(width: 1400, height: LiquidGlassStyle.mainWindowHeight)
         .windowResizability(.automatic)
         .defaultLaunchBehavior(store.interfaceStyle == .dock ? .presented : .suppressed)
         .commands {

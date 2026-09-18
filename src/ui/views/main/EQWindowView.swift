@@ -111,15 +111,17 @@ struct EQWindowView: View {
 
                     VUControlsRow(meterStore: store.meterStore)
                 }
+                .reportRowHeight()
 
                 Divider()
 
                 launcherStack
+                    .reportRowHeight()
             }
             .equalRowHeight($vuRowHeight)
 
             Divider()
-                .padding(.vertical, 8)
+                .padding(.vertical, LiquidGlassStyle.meterCurveDividerPadding)
 
             EQCurveView()
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -505,7 +507,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1408, height: 648)
+        .frame(width: 1408, height: LiquidGlassStyle.mainWindowHeight)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
