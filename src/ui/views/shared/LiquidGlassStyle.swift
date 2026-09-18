@@ -6,10 +6,10 @@ import SwiftUI
 /// other information-dense content keep their opaque backgrounds so that live
 /// audio data remains legible in every appearance.
 enum LiquidGlassStyle {
-    static let mainWindowHeight: CGFloat = 608
     static let panelRadius: CGFloat = 18
     static let compactRadius: CGFloat = 12
     static let contentPadding: CGFloat = 10
+    static let windowContentPadding: CGFloat = 12
     /// Vertical gap between stacked glass panels. Deliberately smaller than
     /// contentPadding: this is empty space between two separate panels, not the
     /// margin between content and its own panel's glass edge, so it can be tighter
@@ -28,11 +28,13 @@ enum LiquidGlassStyle {
     /// Widened from 1256 — the top panel's DynamicsInlineView has no width ceiling
     /// on its column4 Dither picker (Off/TPDF/Shape/5th, wider than its Stereo/
     /// Latency Mode siblings in the same column), so 1256 wasn't enough room for
-    /// that picker plus the preamp column without visible crowding. NOTE: this
-    /// value is summed into the window's locked width in EQWindowView.swift and
-    /// EqualiserApp.swift — if this number changes again, those need to change by
-    /// the same amount (new window width = this value + 44).
+    /// that picker plus the preamp column without visible crowding.
     static let panelContentWidth: CGFloat = 1356
+    /// Derived from the panel and its two padding layers so the minimum window
+    /// cannot drift away from equal left and right insets during future tuning.
+    static let mainWindowWidth =
+        panelContentWidth + 2 * (contentPadding + windowContentPadding)
+    static let mainWindowHeight: CGFloat = 630
     /// Fixed height for the EQ band grid's glass panel. EQBandGridView contains a
     /// GeometryReader (for width-based centering), which has no intrinsic height of
     /// its own, so this section needs an explicit height from its parent rather than
