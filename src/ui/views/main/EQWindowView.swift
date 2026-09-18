@@ -505,7 +505,7 @@ struct EQWindowView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: 1400, height: 648)
+        .frame(width: 1408, height: 648)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {

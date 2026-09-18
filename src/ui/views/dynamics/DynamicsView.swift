@@ -2457,7 +2457,7 @@ struct DynamicsInlineView: View {
                 sampleRate: store.streamSampleRate
             )
         }
-        .frame(width: 160, alignment: .leading)
+        .frame(width: 168, alignment: .leading)
     }
 
     // MARK: - Inline Picker Helper
