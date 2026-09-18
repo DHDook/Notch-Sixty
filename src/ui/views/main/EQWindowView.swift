@@ -143,7 +143,7 @@ struct EQWindowView: View {
     /// smaller than before, including on the first layout pass before
     /// curveColumnWidth has a measured value.
     private var vuMeterPairWidth: CGFloat {
-        max(312, curveColumnWidth - 175)
+        max(300, curveColumnWidth - 175)
     }
 
     private var launcherStack: some View {
@@ -427,8 +427,8 @@ struct EQWindowView: View {
 
                     Spacer()
 
-                    HStack(spacing: 24) {
-                    VStack(spacing: 8) {
+                    HStack(spacing: 64) {
+                    VStack(spacing: 4) {
                         HStack(spacing: 4) {
                             Text("Mode")
                                 .font(.caption)
@@ -471,7 +471,7 @@ struct EQWindowView: View {
                         .frame(width: 225)
                     }
 
-                    VStack(spacing: 8) {
+                    VStack(spacing: 4) {
                         Text("Flatten")
                             .font(.caption)
                             .foregroundStyle(.secondary)
