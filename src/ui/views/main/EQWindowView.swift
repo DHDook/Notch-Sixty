@@ -504,10 +504,11 @@ struct EQWindowView: View {
                 .padding(LiquidGlassStyle.contentPadding)
                 .liquidGlassPanel()
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
-        .frame(width: 1408, height: LiquidGlassStyle.mainWindowHeight)
+        .padding(LiquidGlassStyle.windowContentPadding)
+        .frame(
+            width: LiquidGlassStyle.mainWindowWidth,
+            height: LiquidGlassStyle.mainWindowHeight
+        )
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 VStack(spacing: 2) {
