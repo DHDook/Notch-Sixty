@@ -6,7 +6,9 @@ import SwiftUI
 /// other information-dense content keep their opaque backgrounds so that live
 /// audio data remains legible in every appearance.
 enum LiquidGlassStyle {
-    static let mainWindowWidth: CGFloat = 1400
+    /// Derived from the panel and its two padding layers so the minimum window
+    /// cannot drift away from equal left and right insets during future tuning.
+    static let mainWindowWidth = panelContentWidth + 2 * (contentPadding + windowContentPadding)
     static let mainWindowHeight: CGFloat = 630
     static let windowContentPadding: CGFloat = 12
     static let panelRadius: CGFloat = 18
